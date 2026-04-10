@@ -1,0 +1,32 @@
+{
+  "name": "squadpitch-api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node --watch server.js",
+    "db:push": "npx prisma db push",
+    "db:generate": "npx prisma generate",
+    "db:migrate": "npx prisma migrate deploy"
+  },
+  "dependencies": {
+    "@fal-ai/client": "^1.2.0",
+    "@prisma/client": "^6.19.0",
+    "bullmq": "^5.73.0",
+    "cloudinary": "^2.9.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "express-oauth2-jwt-bearer": "^1.7.1",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.10.0",
+    "openai": "^4.77.0",
+    "pino-http": "^10.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.0.0",
+    "prisma": "^6.19.0"
+  }
+}

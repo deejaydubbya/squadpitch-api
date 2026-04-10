@@ -1,0 +1,365 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ──────────────────────────────────────────────────────────────
+
+enum UserRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+enum ClientStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum Channel {
+  INSTAGRAM
+  TIKTOK
+  X
+  LINKEDIN
+  FACEBOOK
+  YOUTUBE
+  BLOG
+}
+
+enum MediaMode {
+  BRAND_ASSETS_ONLY
+  BRAND_ASSETS_PLUS_AI
+  AI_CHARACTER
+}
+
+enum DraftKind {
+  POST
+  CAPTION
+  VIDEO_SCRIPT
+  CAROUSEL
+  HOOKS
+  CTA_VARIANTS
+  REPLY
+}
+
+enum DraftStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  REJECTED
+  FAILED
+}
+
+enum ConnectionStatus {
+  CONNECTED
+  EXPIRED
+  REVOKED
+  ERROR
+}
+
+enum MediaAssetSource {
+  UPLOAD
+  AI_GENERATED
+}
+
+enum MediaAssetStatus {
+  PENDING
+  GENERATING
+  READY
+  FAILED
+}
+
+// ── User ───────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  auth0Sub  String   @unique
+  email     String   @unique
+  name      String?
+  avatarUrl String?
+  role      UserRole @default(OWNER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// ── Client ─────────────────────────────────────────────────────────────
+
+model Client {
+  id        String       @id @default(cuid())
+  name      String
+  slug      String       @unique
+  status    ClientStatus @default(ACTIVE)
+  logoUrl   String?
+  createdBy String
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  brandProfile    BrandProfile?
+  voiceProfile    VoiceProfile?
+  mediaProfile    MediaProfile?
+  channelSettings ChannelSettings[]
+  drafts          Draft[]
+  moderationLogs  ModerationLog[]
+  connections     ChannelConnection[]
+  mediaAssets     MediaAsset[]
+  postMetrics     PostMetrics[]
+
+  @@index([status])
+  @@map("clients")
+}
+
+// ── Profiles ───────────────────────────────────────────────────────────
+
+model BrandProfile {
+  clientId     String   @id
+  description  String?  @db.Text
+  industry     String?
+  audience     String?  @db.Text
+  website      String?
+  socialsJson  Json?
+  offers       String?  @db.Text
+  competitors  String?  @db.Text
+  examplePosts Json?
+  updatedBy    String?
+  updatedAt    DateTime @updatedAt
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("brand_profiles")
+}
+
+model VoiceProfile {
+  clientId       String   @id
+  tone           String?
+  voiceRulesJson Json
+  bannedPhrases  String[]
+  ctaPreferences Json?
+  contentBuckets Json
+  version        Int      @default(1)
+  updatedBy      String?
+  updatedAt      DateTime @updatedAt
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("voice_profiles")
+}
+
+model MediaProfile {
+  clientId           String    @id
+  mode               MediaMode @default(BRAND_ASSETS_ONLY)
+  visualStyle        String?   @db.Text
+  assetLibraryJson   Json?
+  characterPrompt    String?   @db.Text
+  basePromptTemplate String?   @db.Text
+  loraModelUrl       String?
+  loraTriggerWord    String?
+  loraScale          Float?    @default(1.0)
+  updatedBy          String?
+  updatedAt          DateTime  @updatedAt
+  client             Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("media_profiles")
+}
+
+// ── Channel Settings ───────────────────────────────────────────────────
+
+model ChannelSettings {
+  id               String   @id @default(cuid())
+  clientId         String
+  channel          Channel
+  isEnabled        Boolean  @default(true)
+  maxChars         Int?
+  allowEmoji       Boolean  @default(true)
+  trailingHashtags String[]
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  client           Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, channel])
+  @@map("channel_settings")
+}
+
+// ── Draft ──────────────────────────────────────────────────────────────
+
+model Draft {
+  id                   String      @id @default(cuid())
+  clientId             String
+  kind                 DraftKind
+  status               DraftStatus @default(DRAFT)
+  channel              Channel
+  bucketKey            String?
+
+  generationGuidance   String      @db.Text
+  modelUsed            String?
+  promptVersion        Int         @default(1)
+
+  body                 String      @db.Text
+  hooks                String[]
+  hashtags             String[]
+  cta                  String?
+  variations           Json?
+  altText              String?     @db.Text
+  imageGuidance        String?     @db.Text
+  warnings             String[]
+
+  mediaUrl             String?
+  mediaType            String?
+  externalPostId       String?
+  externalPostUrl      String?
+  publishError         String?     @db.Text
+  publishAttempts      Int         @default(0)
+  lastPublishAttemptAt DateTime?
+  idempotencyKey       String?     @unique
+  publishSource        String?
+
+  createdBy            String
+  approvedBy           String?
+  approvedAt           DateTime?
+  rejectedReason       String?
+  scheduledFor         DateTime?
+  publishedAt          DateTime?
+
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  client               Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  moderationLogs       ModerationLog[]
+  mediaAssets          MediaAsset[]
+  metrics              PostMetrics?
+
+  @@index([clientId, status])
+  @@index([clientId, channel])
+  @@index([status, scheduledFor])
+  @@map("drafts")
+}
+
+// ── Channel Connection ─────────────────────────────────────────────────
+
+model ChannelConnection {
+  id                String           @id @default(cuid())
+  clientId          String
+  channel           Channel
+  externalAccountId String?
+  displayName       String?
+  accessToken       String           @db.Text
+  refreshToken      String?          @db.Text
+  tokenExpiresAt    DateTime?
+  scopes            String[]
+  status            ConnectionStatus @default(CONNECTED)
+  lastValidatedAt   DateTime?
+  lastError         String?          @db.Text
+  createdBy         String
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  client            Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, channel])
+  @@index([channel, status])
+  @@map("channel_connections")
+}
+
+// ── Moderation Log ─────────────────────────────────────────────────────
+
+model ModerationLog {
+  id         String      @id @default(cuid())
+  draftId    String
+  clientId   String
+  fromStatus DraftStatus
+  toStatus   DraftStatus
+  actorSub   String
+  reason     String?
+  createdAt  DateTime    @default(now())
+  draft      Draft       @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  client     Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([draftId])
+  @@map("moderation_logs")
+}
+
+// ── Media Asset ────────────────────────────────────────────────────────
+
+model MediaAsset {
+  id                String           @id @default(cuid())
+  clientId          String
+  source            MediaAssetSource
+  status            MediaAssetStatus @default(READY)
+  progressStage     String?
+
+  url               String?
+  publicId          String?
+  width             Int?
+  height            Int?
+  bytes             Int?
+  mimeType          String?
+  assetType         String           @default("image")
+  thumbnailUrl      String?
+  videoDurationSec  Int?
+
+  filename          String?
+  altText           String?          @db.Text
+  caption           String?
+
+  draftId           String?
+  draft             Draft?           @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  displayOrder      Int              @default(0)
+
+  falModelId        String?
+  renderedPrompt    String?          @db.Text
+  negativePrompt    String?          @db.Text
+  loraSnapshot      String?
+  loraScaleSnapshot Float?
+  seed              BigInt?
+  externalJobId     String?
+  durationMs        Int?
+  errorMessage      String?          @db.Text
+
+  createdBy         String
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  client            Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, status])
+  @@index([clientId, source])
+  @@index([draftId])
+  @@map("media_assets")
+}
+
+// ── Post Metrics ───────────────────────────────────────────────────────
+
+model PostMetrics {
+  id             String   @id @default(cuid())
+  draftId        String   @unique
+  clientId       String
+  channel        Channel
+
+  impressions    Int      @default(0)
+  reach          Int      @default(0)
+  engagement     Int      @default(0)
+  clicks         Int      @default(0)
+  saves          Int      @default(0)
+  shares         Int      @default(0)
+  comments       Int      @default(0)
+  likes          Int      @default(0)
+  engagementRate Float?
+
+  lastSyncedAt   DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  draft          Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, channel])
+  @@index([clientId, lastSyncedAt])
+  @@map("post_metrics")
+}
