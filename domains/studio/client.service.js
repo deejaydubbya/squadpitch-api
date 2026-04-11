@@ -8,9 +8,9 @@ import { prisma } from "../../prisma.js";
 
 // -- Clients -----------------------------------------------------------------
 
-export async function listClients() {
+export async function listClients(userId) {
   return prisma.client.findMany({
-    where: { status: { not: "ARCHIVED" } },
+    where: { createdBy: userId, status: { not: "ARCHIVED" } },
     orderBy: { createdAt: "desc" },
     include: {
       _count: {
@@ -20,8 +20,8 @@ export async function listClients() {
   });
 }
 
-export async function getClient(clientId) {
-  return prisma.client.findUnique({
+export async function getClient(clientId, userId) {
+  const client = await prisma.client.findUnique({
     where: { id: clientId },
     include: {
       brandProfile: true,
@@ -31,12 +31,23 @@ export async function getClient(clientId) {
       _count: { select: { drafts: true } },
     },
   });
+  if (client && userId && client.createdBy !== userId) {
+    throw forbidden();
+  }
+  return client;
 }
 
 function notFound() {
   return Object.assign(new Error("Client not found"), {
     status: 404,
     code: "CLIENT_NOT_FOUND",
+  });
+}
+
+function forbidden() {
+  return Object.assign(new Error("Forbidden"), {
+    status: 403,
+    code: "FORBIDDEN",
   });
 }
 
@@ -52,11 +63,12 @@ export async function createClient(data, createdBy) {
   });
 }
 
-export async function updateClient(clientId, patch) {
+export async function updateClient(clientId, patch, userId) {
   const existing = await prisma.client.findUnique({
     where: { id: clientId },
   });
   if (!existing) throw notFound();
+  if (userId && existing.createdBy !== userId) throw forbidden();
 
   return prisma.client.update({
     where: { id: clientId },
@@ -64,11 +76,12 @@ export async function updateClient(clientId, patch) {
   });
 }
 
-export async function archiveClient(clientId) {
+export async function archiveClient(clientId, userId) {
   const existing = await prisma.client.findUnique({
     where: { id: clientId },
   });
   if (!existing) throw notFound();
+  if (userId && existing.createdBy !== userId) throw forbidden();
 
   return prisma.client.update({
     where: { id: clientId },

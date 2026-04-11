@@ -143,6 +143,27 @@ export async function checkUsageNearing(userId, field) {
   return null;
 }
 
+/**
+ * Check if the user can create another client within their plan limit.
+ * Uses the Prisma user ID (Subscription.userId), NOT the Auth0 sub.
+ */
+export async function checkClientLimit(userId) {
+  const sub = await prisma.subscription.findUnique({ where: { userId } });
+  const tier = sub?.tier ?? "FREE";
+  const limit = getLimitsForTier(tier).clients;
+  if (limit === Infinity) return true;
+  // Client.createdBy stores auth0Sub, so look up the user's sub
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { auth0Sub: true },
+  });
+  if (!user) return false;
+  const count = await prisma.client.count({
+    where: { createdBy: user.auth0Sub, status: { not: "ARCHIVED" } },
+  });
+  return count < limit;
+}
+
 export async function checkUsageLimit(userId, field) {
   const { usage, limits } = await getUsage(userId);
   const current = usage[field] ?? 0;

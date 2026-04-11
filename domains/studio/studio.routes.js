@@ -4,6 +4,7 @@
 // guard in server.js covers /api/*, so this router doesn't add its own.
 
 import express from "express";
+import { prisma } from "../../prisma.js";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
 import * as service from "./studio.service.js";
@@ -29,18 +30,37 @@ import {
 } from "./studio.schemas.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
-import { checkUsageLimit, incrementUsage, checkUsageNearing } from "../billing/billing.service.js";
+import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } from "../billing/billing.service.js";
 import { enqueueNotification } from "../notifications/notification.service.js";
 
 export const studioRouter = express.Router();
 
 const BASE = "/api/v1";
 
+// Ownership middleware: verifies the client belongs to the authenticated user.
+async function requireClientOwner(req, res, next) {
+  try {
+    const clientId = req.params.id || req.params.clientId;
+    const client = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { createdBy: true },
+    });
+    if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
+    if (client.createdBy !== getAuth0Sub(req)) {
+      return sendError(res, 403, "FORBIDDEN", "Forbidden");
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ── Clients ─────────────────────────────────────────────────────────────
 
 studioRouter.get(`${BASE}/clients`, async (req, res, next) => {
   try {
-    const clients = await service.listClients();
+    const actorSub = getAuth0Sub(req);
+    const clients = await service.listClients(actorSub);
     res.json({ clients: clients.map(service.formatClient) });
   } catch (err) {
     next(err);
@@ -51,6 +71,12 @@ studioRouter.post(`${BASE}/clients`, async (req, res, next) => {
   try {
     const parsed = CreateClientSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const allowed = await checkClientLimit(req.user.id);
+    if (!allowed) {
+      return sendError(res, 403, "CLIENT_LIMIT_REACHED", "Upgrade your plan to create more clients");
+    }
+
     const actorSub = getAuth0Sub(req);
     const client = await service.createClient(parsed.data, actorSub);
     res.status(201).json(service.formatClient(client));
@@ -59,9 +85,10 @@ studioRouter.post(`${BASE}/clients`, async (req, res, next) => {
   }
 });
 
-studioRouter.get(`${BASE}/clients/:id`, async (req, res, next) => {
+studioRouter.get(`${BASE}/clients/:id`, requireClientOwner, async (req, res, next) => {
   try {
-    const client = await service.getClient(req.params.id);
+    const actorSub = getAuth0Sub(req);
+    const client = await service.getClient(req.params.id, actorSub);
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
     res.json(service.formatClient(client));
   } catch (err) {
@@ -69,20 +96,22 @@ studioRouter.get(`${BASE}/clients/:id`, async (req, res, next) => {
   }
 });
 
-studioRouter.patch(`${BASE}/clients/:id`, async (req, res, next) => {
+studioRouter.patch(`${BASE}/clients/:id`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpdateClientSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
-    const client = await service.updateClient(req.params.id, parsed.data);
+    const actorSub = getAuth0Sub(req);
+    const client = await service.updateClient(req.params.id, parsed.data, actorSub);
     res.json(service.formatClient(client));
   } catch (err) {
     next(err);
   }
 });
 
-studioRouter.delete(`${BASE}/clients/:id`, async (req, res, next) => {
+studioRouter.delete(`${BASE}/clients/:id`, requireClientOwner, async (req, res, next) => {
   try {
-    const client = await service.archiveClient(req.params.id);
+    const actorSub = getAuth0Sub(req);
+    const client = await service.archiveClient(req.params.id, actorSub);
     res.json(service.formatClient(client));
   } catch (err) {
     next(err);
@@ -91,7 +120,7 @@ studioRouter.delete(`${BASE}/clients/:id`, async (req, res, next) => {
 
 // ── Brand profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/brand`, async (req, res, next) => {
+studioRouter.get(`${BASE}/clients/:id/brand`, requireClientOwner, async (req, res, next) => {
   try {
     const brand = await service.getBrandProfile(req.params.id);
     res.json({ brand: service.formatBrandProfile(brand) });
@@ -100,7 +129,7 @@ studioRouter.get(`${BASE}/clients/:id/brand`, async (req, res, next) => {
   }
 });
 
-studioRouter.put(`${BASE}/clients/:id/brand`, async (req, res, next) => {
+studioRouter.put(`${BASE}/clients/:id/brand`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpsertBrandProfileSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -118,7 +147,7 @@ studioRouter.put(`${BASE}/clients/:id/brand`, async (req, res, next) => {
 
 // ── Voice profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/voice`, async (req, res, next) => {
+studioRouter.get(`${BASE}/clients/:id/voice`, requireClientOwner, async (req, res, next) => {
   try {
     const voice = await service.getVoiceProfile(req.params.id);
     res.json({ voice: service.formatVoiceProfile(voice) });
@@ -127,7 +156,7 @@ studioRouter.get(`${BASE}/clients/:id/voice`, async (req, res, next) => {
   }
 });
 
-studioRouter.put(`${BASE}/clients/:id/voice`, async (req, res, next) => {
+studioRouter.put(`${BASE}/clients/:id/voice`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpsertVoiceProfileSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -145,7 +174,7 @@ studioRouter.put(`${BASE}/clients/:id/voice`, async (req, res, next) => {
 
 // ── Media profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/media`, async (req, res, next) => {
+studioRouter.get(`${BASE}/clients/:id/media`, requireClientOwner, async (req, res, next) => {
   try {
     const media = await service.getMediaProfile(req.params.id);
     res.json({ media: service.formatMediaProfile(media) });
@@ -154,7 +183,7 @@ studioRouter.get(`${BASE}/clients/:id/media`, async (req, res, next) => {
   }
 });
 
-studioRouter.put(`${BASE}/clients/:id/media`, async (req, res, next) => {
+studioRouter.put(`${BASE}/clients/:id/media`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpsertMediaProfileSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -172,7 +201,7 @@ studioRouter.put(`${BASE}/clients/:id/media`, async (req, res, next) => {
 
 // ── Channel settings ────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/channels`, async (req, res, next) => {
+studioRouter.get(`${BASE}/clients/:id/channels`, requireClientOwner, async (req, res, next) => {
   try {
     const channels = await service.listChannelSettings(req.params.id);
     res.json({ channels: channels.map(service.formatChannelSettings) });
@@ -181,7 +210,7 @@ studioRouter.get(`${BASE}/clients/:id/channels`, async (req, res, next) => {
   }
 });
 
-studioRouter.put(`${BASE}/clients/:id/channels`, async (req, res, next) => {
+studioRouter.put(`${BASE}/clients/:id/channels`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpsertChannelSettingsSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -197,7 +226,7 @@ studioRouter.put(`${BASE}/clients/:id/channels`, async (req, res, next) => {
 
 // ── Analytics ───────────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/analytics`, async (req, res, next) => {
+studioRouter.get(`${BASE}/clients/:id/analytics`, requireClientOwner, async (req, res, next) => {
   try {
     const analytics = await service.getClientAnalytics(req.params.id);
     res.json(analytics);
@@ -244,7 +273,7 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
 // ── Content Ideas ──────────────────────────────────────────────────────
 
-studioRouter.post(`${BASE}/clients/:id/ideas`, async (req, res, next) => {
+studioRouter.post(`${BASE}/clients/:id/ideas`, requireClientOwner, async (req, res, next) => {
   try {
     const ideas = await service.generateContentIdeas(req.params.id);
     res.json({ ideas });
@@ -255,7 +284,7 @@ studioRouter.post(`${BASE}/clients/:id/ideas`, async (req, res, next) => {
 
 // ── Batch-complete notification ──────────────────────────────────────────
 
-studioRouter.post(`${BASE}/clients/:id/batch-complete`, async (req, res, next) => {
+studioRouter.post(`${BASE}/clients/:id/batch-complete`, requireClientOwner, async (req, res, next) => {
   try {
     const count = parseInt(req.body.count) || 0;
     if (count > 0) {
@@ -318,6 +347,7 @@ studioRouter.delete(`${BASE}/drafts/:id`, async (req, res, next) => {
 
 studioRouter.delete(
   `${BASE}/clients/:id/drafts`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const result = await service.deleteDraftsByClient(req.params.id);
@@ -381,7 +411,7 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
 });
 
 // Auto-schedule: distribute drafts across upcoming days
-studioRouter.post(`${BASE}/clients/:id/auto-schedule`, async (req, res, next) => {
+studioRouter.post(`${BASE}/clients/:id/auto-schedule`, requireClientOwner, async (req, res, next) => {
   try {
     const { draftIds } = req.body;
     if (!Array.isArray(draftIds) || draftIds.length === 0) {
@@ -452,6 +482,7 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
 
 studioRouter.get(
   `${BASE}/clients/:id/assets`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const parsed = ListAssetsQuerySchema.safeParse({
@@ -479,6 +510,7 @@ studioRouter.get(`${BASE}/assets/:assetId`, async (req, res, next) => {
 
 studioRouter.post(
   `${BASE}/clients/:id/assets/upload`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       let buffer;
@@ -658,6 +690,7 @@ studioRouter.get(
 
 studioRouter.get(
   `${BASE}/clients/:id/metrics`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const parsed = MetricsSummaryQuerySchema.safeParse(req.query);
@@ -689,6 +722,7 @@ studioRouter.post(
 
 studioRouter.post(
   `${BASE}/clients/:id/connections/:channel/validate`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const paramCheck = ChannelParamSchema.safeParse({
@@ -711,6 +745,7 @@ studioRouter.post(
 
 studioRouter.get(
   `${BASE}/clients/:id/connections`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const connections = await service.listConnections(req.params.id);
@@ -723,6 +758,7 @@ studioRouter.get(
 
 studioRouter.post(
   `${BASE}/clients/:id/connections/:channel/oauth/start`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const paramCheck = ChannelParamSchema.safeParse({
@@ -779,6 +815,7 @@ studioRouter.post(
 
 studioRouter.delete(
   `${BASE}/clients/:id/connections/:channel`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const paramCheck = ChannelParamSchema.safeParse({

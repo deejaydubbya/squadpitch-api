@@ -176,6 +176,10 @@ export async function validateConnection(clientId, channel) {
       url: "https://open.tiktokapis.com/v2/user/info/?fields=open_id",
       headers: { Authorization: `Bearer ${token}` },
     }),
+    YOUTUBE: (token) => ({
+      url: "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+      headers: { Authorization: `Bearer ${token}` },
+    }),
   };
 
   const endpointFactory = VALIDATION_ENDPOINTS[channel];
