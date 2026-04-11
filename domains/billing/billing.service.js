@@ -163,6 +163,10 @@ export async function handleWebhookEvent(event) {
       const s = requireStripe();
       const sub = await s.subscriptions.retrieve(subscriptionId);
 
+      // current_period_end moved to items in newer Stripe API versions
+      const periodEnd = sub.current_period_end
+        ?? sub.items?.data?.[0]?.current_period_end;
+
       await prisma.subscription.upsert({
         where: { userId },
         create: {
@@ -171,13 +175,13 @@ export async function handleWebhookEvent(event) {
           stripeSubscriptionId: subscriptionId,
           tier: tier || "STARTER",
           status: "ACTIVE",
-          currentPeriodEnd: new Date(sub.current_period_end * 1000),
+          ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
         },
         update: {
           stripeSubscriptionId: subscriptionId,
           tier: tier || "STARTER",
           status: "ACTIVE",
-          currentPeriodEnd: new Date(sub.current_period_end * 1000),
+          ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
         },
       });
       break;
@@ -195,11 +199,14 @@ export async function handleWebhookEvent(event) {
         : sub.status === "canceled" ? "CANCELED"
         : "ACTIVE";
 
+      const periodEnd = sub.current_period_end
+        ?? sub.items?.data?.[0]?.current_period_end;
+
       await prisma.subscription.update({
         where: { stripeSubscriptionId: sub.id },
         data: {
           status,
-          currentPeriodEnd: new Date(sub.current_period_end * 1000),
+          ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
           cancelAtPeriodEnd: sub.cancel_at_period_end,
         },
       });
