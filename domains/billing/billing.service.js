@@ -99,7 +99,8 @@ export async function getUsage(userId) {
   });
 
   const sub = await prisma.subscription.findUnique({ where: { userId } });
-  const limits = getLimitsForTier(sub?.tier ?? "STARTER");
+  const tier = sub?.tier ?? "FREE";
+  const limits = getLimitsForTier(tier);
 
   return {
     period: { start: periodStart, end: periodEnd },
@@ -109,7 +110,7 @@ export async function getUsage(userId) {
       videos: record?.videos ?? 0,
     },
     limits,
-    tier: sub?.tier ?? "STARTER",
+    tier,
   };
 }
 

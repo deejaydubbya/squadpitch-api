@@ -1,4 +1,14 @@
 export const PLAN_TIERS = {
+  FREE: {
+    label: "Free",
+    priceMonthly: 0,
+    limits: {
+      clients: 1,
+      posts: 10,
+      images: 5,
+      videos: 0,
+    },
+  },
   STARTER: {
     label: "Starter",
     priceMonthly: 2900, // cents
@@ -32,5 +42,5 @@ export const PLAN_TIERS = {
 };
 
 export function getLimitsForTier(tier) {
-  return PLAN_TIERS[tier]?.limits ?? PLAN_TIERS.STARTER.limits;
+  return PLAN_TIERS[tier]?.limits ?? PLAN_TIERS.FREE.limits;
 }
