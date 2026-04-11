@@ -9,8 +9,9 @@ import { env, bootEnvWarnings } from "./config/env.js";
 import { prisma } from "./prisma.js";
 import { getRedis } from "./redis.js";
 
-// Domain router
+// Domain routers
 import { studioRouter } from "./domains/studio/studio.routes.js";
+import { billingRouter } from "./domains/billing/billing.routes.js";
 
 import { sendError, validationError } from "./lib/apiErrors.js";
 import { requireAuth } from "./middleware/auth.js";
@@ -49,6 +50,12 @@ app.use(
     },
     crossOriginEmbedderPolicy: false,
   })
+);
+
+// Raw body for Stripe webhook (must come before JSON parsing)
+app.use(
+  "/api/v1/billing/webhook",
+  express.raw({ type: "application/json" })
 );
 
 // body parsing
@@ -102,6 +109,9 @@ app.use("/api", requireAuth, requireUser);
 
 // Studio domain
 app.use(studioRouter);
+
+// Billing domain
+app.use(billingRouter);
 
 // ===== Error handling =====
 app.use((req, res) => {

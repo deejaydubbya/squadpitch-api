@@ -28,7 +28,6 @@ enum Channel {
   LINKEDIN
   FACEBOOK
   YOUTUBE
-  BLOG
 }
 
 enum MediaMode {
@@ -332,6 +331,51 @@ model MediaAsset {
   @@index([clientId, source])
   @@index([draftId])
   @@map("media_assets")
+}
+
+// ── Subscription ──────────────────────────────────────────────────────
+
+enum PlanTier {
+  STARTER
+  GROWTH
+  PRO
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  stripeCustomerId     String             @unique
+  stripeSubscriptionId String?            @unique
+  tier                 PlanTier           @default(STARTER)
+  status               SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@map("subscriptions")
+}
+
+model UsageRecord {
+  id          String   @id @default(cuid())
+  userId      String
+  periodStart DateTime
+  periodEnd   DateTime
+  generations Int      @default(0)
+  publishes   Int      @default(0)
+  mediaGens   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, periodStart])
+  @@map("usage_records")
 }
 
 // ── Post Metrics ───────────────────────────────────────────────────────

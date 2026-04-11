@@ -47,6 +47,18 @@ export const env = {
   X_CLIENT_ID: process.env.X_CLIENT_ID,
   X_CLIENT_SECRET: process.env.X_CLIENT_SECRET,
   X_REDIRECT_URI: process.env.X_REDIRECT_URI,
+
+  // YouTube (Google)
+  YOUTUBE_CLIENT_ID: process.env.YOUTUBE_CLIENT_ID,
+  YOUTUBE_CLIENT_SECRET: process.env.YOUTUBE_CLIENT_SECRET,
+  YOUTUBE_REDIRECT_URI: process.env.YOUTUBE_REDIRECT_URI,
+
+  // Stripe billing
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
+  STRIPE_STARTER_PRICE_ID: process.env.STRIPE_STARTER_PRICE_ID,
+  STRIPE_GROWTH_PRICE_ID: process.env.STRIPE_GROWTH_PRICE_ID,
+  STRIPE_PRO_PRICE_ID: process.env.STRIPE_PRO_PRICE_ID,
 };
 
 export function bootEnvWarnings() {
@@ -76,5 +88,11 @@ export function bootEnvWarnings() {
   }
   if (!env.X_CLIENT_ID || !env.X_CLIENT_SECRET || !env.X_REDIRECT_URI) {
     console.warn("[BOOT] X OAuth credentials missing");
+  }
+  if (!env.YOUTUBE_CLIENT_ID || !env.YOUTUBE_CLIENT_SECRET || !env.YOUTUBE_REDIRECT_URI) {
+    console.warn("[BOOT] YouTube OAuth credentials missing");
+  }
+  if (!env.STRIPE_SECRET_KEY) {
+    console.warn("[BOOT] STRIPE_SECRET_KEY missing; billing features disabled");
   }
 }
