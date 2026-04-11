@@ -19,7 +19,7 @@ import {
 } from "../connection.service.js";
 import { formatDraft } from "../draft.service.js";
 import { getAdapterForChannel } from "./channelAdapters/index.js";
-import { sendNotification } from "../../notifications/notification.service.js";
+import { enqueueNotification } from "../../notifications/notification.service.js";
 
 // Narrow mediaProfile select: the Instagram adapter only needs
 // assetLibraryJson[0].url as a fallback media source, so avoid pulling the
@@ -37,6 +37,27 @@ async function loadDraftWithClient(draftId) {
     where: { id: draftId },
     include: DRAFT_WITH_CLIENT_INCLUDE,
   });
+}
+
+/**
+ * Resolve draft.createdBy (auth0Sub) → userId, then enqueue notification.
+ * Fire-and-forget — never throws.
+ */
+function notifyDraftOwner(draft, eventType, payload) {
+  prisma.user
+    .findUnique({ where: { auth0Sub: draft.createdBy }, select: { id: true } })
+    .then((user) => {
+      if (user) {
+        enqueueNotification({
+          userId: user.id,
+          eventType,
+          payload,
+          resourceType: "draft",
+          resourceId: draft.id,
+        }).catch(() => {});
+      }
+    })
+    .catch(() => {});
 }
 
 /**
@@ -143,14 +164,13 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
     });
 
     // Refresh lastValidatedAt on the connection — a successful publish is
-    // the strongest possible credential validation. Fire-and-forget: we
-    // don't want this to delay the response to the client.
+    // the strongest possible credential validation. Fire-and-forget.
     updateConnectionStatus(workingDraft.clientId, workingDraft.channel, {
       lastValidatedAt: new Date(),
       lastError: null,
     }).catch(() => {});
 
-    // Fire-and-forget notification
+    // Enqueue POST_PUBLISHED notification
     notifyDraftOwner(workingDraft, "POST_PUBLISHED", {
       channel: workingDraft.channel,
       body: workingDraft.body,
@@ -174,9 +194,7 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
       .catch(() => {});
 
     // Mark the connection as ERROR so the Channels tab shows the issue —
-    // but only for auth-ish failures. Meta returns `code: 190` for expired
-    // access tokens and `code: 102` for session problems; both come back as
-    // HTTP 400 from Graph, so we also peek at the wrapped metaError code.
+    // but only for auth-ish failures.
     const metaCode = err?.metaError?.code;
     const isAuthish =
       err?.status === 401 ||
@@ -192,9 +210,10 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
       ).catch(() => {});
     }
 
-    // Fire-and-forget failure notification
+    // Enqueue POST_FAILED notification
     notifyDraftOwner(workingDraft, "POST_FAILED", {
       channel: workingDraft.channel,
+      body: workingDraft.body,
       error: err?.message ?? "Unknown error",
       clientId: workingDraft.clientId,
     });
@@ -202,19 +221,4 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
     // Re-throw so the route handler returns a proper error response.
     throw err;
   }
-}
-
-/**
- * Resolve draft.createdBy (auth0Sub) to a userId and send notification.
- * Fire-and-forget — never throws.
- */
-function notifyDraftOwner(draft, eventType, payload) {
-  prisma.user
-    .findUnique({ where: { auth0Sub: draft.createdBy }, select: { id: true } })
-    .then((user) => {
-      if (user) {
-        sendNotification({ userId: user.id, eventType, payload }).catch(() => {});
-      }
-    })
-    .catch(() => {});
 }

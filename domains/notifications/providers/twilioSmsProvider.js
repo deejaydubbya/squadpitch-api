@@ -1,7 +1,7 @@
 // SMS provider using Twilio.
 // Falls back to console logging if Twilio credentials are not configured.
 
-import { env } from "../../config/env.js";
+import { env } from "../../../config/env.js";
 
 let twilioClient = null;
 

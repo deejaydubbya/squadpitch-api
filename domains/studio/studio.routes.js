@@ -6,7 +6,6 @@
 import express from "express";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
-import { prisma } from "../../prisma.js";
 import * as service from "./studio.service.js";
 import {
   CreateClientSchema,
@@ -31,7 +30,7 @@ import {
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
 import { checkUsageLimit, incrementUsage, checkUsageNearing } from "../billing/billing.service.js";
-import { sendNotification } from "../notifications/notification.service.js";
+import { enqueueNotification } from "../notifications/notification.service.js";
 
 export const studioRouter = express.Router();
 
@@ -226,22 +225,15 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
     await incrementUsage(req.user.id, "posts");
 
-    // Fire-and-forget usage nearing notification
+    // Fire-and-forget: check if usage is nearing limit
     checkUsageNearing(req.user.id, "posts").then((info) => {
-      if (info) sendNotification({ userId: req.user.id, eventType: "USAGE_LIMIT_NEARING", payload: info });
-    }).catch(() => {});
-
-    // Check if pending drafts accumulated → POST_NEEDS_APPROVAL
-    prisma.draft.count({
-      where: { clientId: parsed.data.clientId, status: { in: ["DRAFT", "PENDING_REVIEW"] } },
-    }).then((count) => {
-      if (count >= 3) {
-        sendNotification({
-          userId: req.user.id,
-          eventType: "POST_NEEDS_APPROVAL",
-          payload: { count, clientId: parsed.data.clientId },
-        }).catch(() => {});
-      }
+      if (info) enqueueNotification({
+        userId: req.user.id,
+        eventType: "USAGE_LIMIT_NEARING",
+        payload: info,
+        resourceType: "usage",
+        resourceId: `${req.user.id}:posts`,
+      });
     }).catch(() => {});
 
     res.status(201).json(draft);
@@ -267,10 +259,12 @@ studioRouter.post(`${BASE}/clients/:id/batch-complete`, async (req, res, next) =
   try {
     const count = parseInt(req.body.count) || 0;
     if (count > 0) {
-      sendNotification({
+      enqueueNotification({
         userId: req.user.id,
         eventType: "BATCH_COMPLETE",
         payload: { count, clientId: req.params.id },
+        resourceType: "client",
+        resourceId: req.params.id,
       }).catch(() => {});
     }
     res.json({ ok: true });
@@ -439,7 +433,13 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
     await incrementUsage(req.user.id, "posts");
 
     checkUsageNearing(req.user.id, "posts").then((info) => {
-      if (info) sendNotification({ userId: req.user.id, eventType: "USAGE_LIMIT_NEARING", payload: info });
+      if (info) enqueueNotification({
+        userId: req.user.id,
+        eventType: "USAGE_LIMIT_NEARING",
+        payload: info,
+        resourceType: "usage",
+        resourceId: `${req.user.id}:posts`,
+      });
     }).catch(() => {});
 
     res.json(draft);
@@ -561,7 +561,13 @@ studioRouter.post(
       await incrementUsage(req.user.id, "images");
 
       checkUsageNearing(req.user.id, "images").then((info) => {
-        if (info) sendNotification({ userId: req.user.id, eventType: "USAGE_LIMIT_NEARING", payload: info });
+        if (info) enqueueNotification({
+          userId: req.user.id,
+          eventType: "USAGE_LIMIT_NEARING",
+          payload: info,
+          resourceType: "usage",
+          resourceId: `${req.user.id}:images`,
+        });
       }).catch(() => {});
 
       res.status(201).json(service.formatAsset(asset));
@@ -591,7 +597,13 @@ studioRouter.post(
       await incrementUsage(req.user.id, "videos");
 
       checkUsageNearing(req.user.id, "videos").then((info) => {
-        if (info) sendNotification({ userId: req.user.id, eventType: "USAGE_LIMIT_NEARING", payload: info });
+        if (info) enqueueNotification({
+          userId: req.user.id,
+          eventType: "USAGE_LIMIT_NEARING",
+          payload: info,
+          resourceType: "usage",
+          resourceId: `${req.user.id}:videos`,
+        });
       }).catch(() => {});
 
       res.status(201).json(service.formatAsset(asset));

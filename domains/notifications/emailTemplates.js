@@ -1,4 +1,5 @@
-// Minimal HTML email templates for notification events.
+// HTML email templates for Squadpitch notification events.
+// Only the 5 supported event types have templates here.
 
 import { env } from "../../config/env.js";
 
@@ -26,35 +27,51 @@ function btn(label, href) {
   return `<a href="${href}" style="display:inline-block;background:#4ade80;color:#111;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px;margin-top:16px">${label}</a>`;
 }
 
+// ── Email templates ─────────────────────────────────────────────────────
+
 export const templates = {
-  POST_PUBLISHED({ channel, body, externalPostUrl }) {
+  POST_PUBLISHED({ channel, body, externalPostUrl, clientId }) {
     const preview = (body || "").slice(0, 200);
+    const publishTime = new Date().toLocaleString("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
     return {
-      subject: "Your post is live!",
+      subject: "Your post is live 🎉",
       html: wrap("Your post is live!", `
         <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0 0 8px">
           Your <strong style="color:#fff">${channel}</strong> post has been published successfully.
         </p>
+        <p style="color:#999;font-size:12px;margin:0 0 12px">Published at ${publishTime}</p>
         <div style="background:#111318;border-radius:8px;padding:16px;margin:16px 0;border-left:3px solid #4ade80">
           <p style="color:#aaa;font-size:13px;margin:0;line-height:1.5">${preview}${body?.length > 200 ? "..." : ""}</p>
         </div>
-        ${externalPostUrl ? btn("View Post", externalPostUrl) : btn("Open Dashboard", APP)}
+        ${externalPostUrl ? btn("View Post", externalPostUrl) : btn("Open Dashboard", `${APP}/clients/${clientId}`)}
       `),
     };
   },
 
-  POST_FAILED({ channel, error, clientId }) {
+  POST_FAILED({ channel, error, clientId, body }) {
+    const preview = (body || "").slice(0, 120);
     return {
       subject: "We couldn't publish your post",
       html: wrap("Publishing Failed", `
         <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0 0 8px">
           Your <strong style="color:#fff">${channel}</strong> post failed to publish.
         </p>
+        ${preview ? `
+        <div style="background:#111318;border-radius:8px;padding:12px;margin:12px 0;border-left:3px solid #666">
+          <p style="color:#999;font-size:12px;margin:0;line-height:1.4">${preview}${body?.length > 120 ? "..." : ""}</p>
+        </div>` : ""}
         <div style="background:#111318;border-radius:8px;padding:16px;margin:16px 0;border-left:3px solid #f87171">
-          <p style="color:#f87171;font-size:13px;margin:0">${error || "Unknown error"}</p>
+          <p style="color:#f87171;font-size:13px;margin:0"><strong>Reason:</strong> ${error || "Unknown error"}</p>
         </div>
         <p style="color:#999;font-size:13px;margin:8px 0 0">Check your channel connections and try again.</p>
-        ${btn("Go to Dashboard", `${APP}/clients/${clientId}`)}
+        <div style="margin-top:16px">
+          ${btn("Reconnect Account", `${APP}/clients/${clientId}/settings/channels`)}
+          <span style="display:inline-block;width:8px"></span>
+          ${btn("Go to Dashboard", `${APP}/clients/${clientId}`)}
+        </div>
       `),
     };
   },
@@ -62,14 +79,14 @@ export const templates = {
   USAGE_LIMIT_NEARING({ field, current, limit, tier }) {
     const pct = Math.round((current / limit) * 100);
     return {
-      subject: "You're close to your limit",
+      subject: "You're close to your Squadpitch limit",
       html: wrap("Usage Alert", `
         <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0 0 8px">
           You've used <strong style="color:#fff">${pct}%</strong> of your monthly <strong style="color:#fff">${field}</strong> on the <strong style="color:#fff">${tier}</strong> plan.
         </p>
         <div style="background:#111318;border-radius:8px;padding:16px;margin:16px 0">
           <div style="background:#333;border-radius:4px;height:8px;overflow:hidden">
-            <div style="background:${pct >= 90 ? '#f87171' : '#fbbf24'};height:100%;width:${pct}%;border-radius:4px"></div>
+            <div style="background:${pct >= 90 ? "#f87171" : "#fbbf24"};height:100%;width:${pct}%;border-radius:4px"></div>
           </div>
           <p style="color:#999;font-size:12px;margin:8px 0 0">${current} / ${limit} ${field} used</p>
         </div>
@@ -80,7 +97,7 @@ export const templates = {
 
   CONNECTION_EXPIRED({ channel, clientId }) {
     return {
-      subject: `Your ${channel} connection expired`,
+      subject: "Reconnect your account to keep publishing",
       html: wrap("Connection Expired", `
         <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0 0 8px">
           Your <strong style="color:#fff">${channel}</strong> connection has expired.
@@ -98,53 +115,19 @@ export const templates = {
         <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0 0 8px">
           <strong style="color:#fff">${count}</strong> post${count !== 1 ? "s have" : " has"} been generated and ${count !== 1 ? "are" : "is"} ready for review.
         </p>
-        ${btn("Review Content", `${APP}/clients/${clientId}/library`)}
-      `),
-    };
-  },
-
-  WEEKLY_SUMMARY({ postsPublished, postsGenerated, bestPost }) {
-    return {
-      subject: "Your content this week",
-      html: wrap("Weekly Summary", `
-        <div style="display:flex;gap:16px;margin:16px 0">
-          <div style="flex:1;background:#111318;border-radius:8px;padding:16px;text-align:center">
-            <p style="color:#4ade80;font-size:24px;font-weight:700;margin:0">${postsPublished}</p>
-            <p style="color:#999;font-size:11px;margin:4px 0 0">Published</p>
-          </div>
-          <div style="flex:1;background:#111318;border-radius:8px;padding:16px;text-align:center">
-            <p style="color:#4ade80;font-size:24px;font-weight:700;margin:0">${postsGenerated}</p>
-            <p style="color:#999;font-size:11px;margin:4px 0 0">Generated</p>
-          </div>
-        </div>
-        ${bestPost ? `
-        <div style="background:#111318;border-radius:8px;padding:16px;margin:16px 0;border-left:3px solid #4ade80">
-          <p style="color:#666;font-size:11px;margin:0 0 4px">BEST POST</p>
-          <p style="color:#aaa;font-size:13px;margin:0;line-height:1.5">${(bestPost.body || "").slice(0, 150)}</p>
-        </div>` : ""}
-        ${btn("Open Dashboard", APP)}
-      `),
-    };
-  },
-
-  POST_NEEDS_APPROVAL({ count, clientId }) {
-    return {
-      subject: `${count} post${count !== 1 ? "s" : ""} waiting for approval`,
-      html: wrap("Posts Need Approval", `
-        <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0 0 8px">
-          You have <strong style="color:#fff">${count}</strong> post${count !== 1 ? "s" : ""} pending review.
-        </p>
-        ${btn("Review Now", `${APP}/clients/${clientId}/planner`)}
+        ${btn("Review Content", `${APP}/clients/${clientId}/planner`)}
       `),
     };
   },
 };
 
+// ── SMS templates (critical events only) ────────────────────────────────
+
 export const smsTemplates = {
-  POST_FAILED({ channel }) {
-    return `Squadpitch: Your ${channel} post failed to publish. Check your dashboard.`;
+  POST_FAILED() {
+    return "Squadpitch: Your post failed to publish. Check your dashboard to fix it.";
   },
-  CONNECTION_EXPIRED({ channel }) {
-    return `Squadpitch: Your ${channel} connection expired. Please reconnect.`;
+  CONNECTION_EXPIRED() {
+    return "Squadpitch: Your account connection expired. Reconnect in Squadpitch.";
   },
 };

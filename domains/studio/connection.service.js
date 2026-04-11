@@ -7,7 +7,7 @@
 
 import { prisma } from "../../prisma.js";
 import { encryptToken, decryptToken } from "../../lib/tokenCrypto.js";
-import { sendNotification } from "../notifications/notification.service.js";
+import { enqueueNotification } from "../notifications/notification.service.js";
 
 export async function listConnections(clientId) {
   await checkAndUpdateExpiredConnections(clientId);
@@ -129,10 +129,12 @@ export async function checkAndUpdateExpiredConnections(clientId) {
       .findUnique({ where: { auth0Sub: conn.createdBy }, select: { id: true } })
       .then((user) => {
         if (user) {
-          sendNotification({
+          enqueueNotification({
             userId: user.id,
             eventType: "CONNECTION_EXPIRED",
             payload: { channel: conn.channel, clientId },
+            resourceType: "connection",
+            resourceId: `${clientId}:${conn.channel}`,
           }).catch(() => {});
         }
       })

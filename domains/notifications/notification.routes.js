@@ -2,7 +2,6 @@
 // Mounted under /api/v1/notifications/*
 
 import express from "express";
-import { sendError } from "../../lib/apiErrors.js";
 import {
   getPreferences,
   updatePreferences,
@@ -26,12 +25,13 @@ notificationRouter.get(`${BASE}/preferences`, async (req, res, next) => {
 // PUT preferences
 notificationRouter.put(`${BASE}/preferences`, async (req, res, next) => {
   try {
-    const { emailEnabled, smsEnabled, phone, preferences } = req.body;
+    const { emailEnabled, smsEnabled, phoneNumber, preferencesJson } = req.body;
     const data = {};
     if (typeof emailEnabled === "boolean") data.emailEnabled = emailEnabled;
     if (typeof smsEnabled === "boolean") data.smsEnabled = smsEnabled;
-    if (phone !== undefined) data.phone = phone || null;
-    if (preferences && typeof preferences === "object") data.preferences = preferences;
+    if (phoneNumber !== undefined) data.phoneNumber = phoneNumber || null;
+    if (preferencesJson && typeof preferencesJson === "object")
+      data.preferencesJson = preferencesJson;
 
     const updated = await updatePreferences(req.user.id, data);
     res.json({ preferences: updated });

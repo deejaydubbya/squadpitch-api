@@ -411,29 +411,33 @@ model PostMetrics {
 // ── Notifications ────────────────────────────────────────────────────
 
 model NotificationPreference {
-  id           String   @id @default(cuid())
-  userId       String   @unique
-  emailEnabled Boolean  @default(true)
-  smsEnabled   Boolean  @default(false)
-  phone        String?
-  preferences  Json     @default("{\"POST_PUBLISHED\":true,\"POST_FAILED\":true,\"USAGE_LIMIT_NEARING\":true,\"CONNECTION_EXPIRED\":true,\"BATCH_COMPLETE\":true,\"WEEKLY_SUMMARY\":true,\"POST_NEEDS_APPROVAL\":true}")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  emailEnabled    Boolean  @default(true)
+  smsEnabled      Boolean  @default(false)
+  phoneNumber     String?
+  preferencesJson Json     @default("{\"POST_PUBLISHED\":true,\"POST_FAILED\":true,\"USAGE_LIMIT_NEARING\":true,\"CONNECTION_EXPIRED\":true,\"BATCH_COMPLETE\":true}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@map("notification_preferences")
 }
 
 model NotificationLog {
-  id        String   @id @default(cuid())
-  userId    String
-  eventType String
-  channel   String
-  status    String   @default("SENT")
-  payload   Json?
-  error     String?  @db.Text
-  createdAt DateTime @default(now())
+  id                String   @id @default(cuid())
+  userId            String
+  eventType         String
+  channel           String   // "email" | "sms"
+  status            String   @default("queued") // queued | sent | failed | skipped
+  provider          String?  // "postmark" | "twilio"
+  providerMessageId String?
+  resourceType      String?  // "draft" | "connection" | "usage" etc.
+  resourceId        String?
+  errorMessage      String?  @db.Text
+  createdAt         DateTime @default(now())
 
   @@index([userId, createdAt])
   @@index([userId, eventType])
+  @@index([userId, eventType, resourceId])
   @@map("notification_logs")
 }

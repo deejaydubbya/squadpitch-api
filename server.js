@@ -145,6 +145,7 @@ const httpServer = createServer(app);
 let scheduledPublishWorker;
 let mediaGenWorker;
 let videoGenWorker;
+let notificationWorker;
 
 let server;
 (async () => {
@@ -168,6 +169,11 @@ let server;
         "./workers/videoGenWorker.js"
       );
       videoGenWorker = startVideoGenWorker();
+
+      const { startNotificationWorker } = await import(
+        "./workers/notificationWorker.js"
+      );
+      notificationWorker = startNotificationWorker();
     }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
@@ -180,6 +186,7 @@ const shutdown = (sig) => async () => {
   try { if (scheduledPublishWorker) await scheduledPublishWorker.close(); } catch {}
   try { if (mediaGenWorker) await mediaGenWorker.close(); } catch {}
   try { if (videoGenWorker) await videoGenWorker.close(); } catch {}
+  try { if (notificationWorker) await notificationWorker.close(); } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
   } catch {}

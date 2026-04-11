@@ -1,25 +1,34 @@
-// Notification service — the central dispatcher.
+// Notification service — the central entry point.
 //
-// Accept event + payload → check preferences → send email/SMS → log result.
-// All sends are fire-and-forget (do not block the caller).
+// Accepts events from across the app, checks user preferences, deduplicates,
+// writes a notification_logs row (status: queued), and enqueues BullMQ jobs
+// for the actual email/SMS delivery. NEVER sends inline.
 
 import { prisma } from "../../prisma.js";
-import { sendEmail } from "./emailProvider.js";
-import { sendSms } from "./smsProvider.js";
-import { templates, smsTemplates } from "./emailTemplates.js";
+import { getNotificationQueue } from "../../lib/queues.js";
 
-// Rate limiting: max 1 notification per event type per user per 10 minutes
-const recentSends = new Map(); // key: `${userId}:${eventType}` → timestamp
-const RATE_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
+// Only these 5 event types exist.
+const VALID_EVENTS = new Set([
+  "POST_PUBLISHED",
+  "POST_FAILED",
+  "USAGE_LIMIT_NEARING",
+  "CONNECTION_EXPIRED",
+  "BATCH_COMPLETE",
+]);
 
-// SMS-eligible event types (critical only)
+// SMS is only sent for these critical events.
 const SMS_EVENTS = new Set(["POST_FAILED", "CONNECTION_EXPIRED"]);
+
+// Deduplication window — 5 minutes.
+const DEDUP_WINDOW_MS = 5 * 60 * 1000;
 
 /**
  * Get or create notification preferences for a user.
  */
 export async function getPreferences(userId) {
-  let prefs = await prisma.notificationPreference.findUnique({ where: { userId } });
+  let prefs = await prisma.notificationPreference.findUnique({
+    where: { userId },
+  });
   if (!prefs) {
     prefs = await prisma.notificationPreference.create({
       data: { userId },
@@ -40,115 +49,6 @@ export async function updatePreferences(userId, data) {
 }
 
 /**
- * Check rate limit. Returns true if allowed.
- */
-function checkRateLimit(userId, eventType) {
-  const key = `${userId}:${eventType}`;
-  const last = recentSends.get(key);
-  if (last && Date.now() - last < RATE_LIMIT_MS) {
-    return false;
-  }
-  recentSends.set(key, Date.now());
-  // Cleanup old entries periodically
-  if (recentSends.size > 10000) {
-    const cutoff = Date.now() - RATE_LIMIT_MS;
-    for (const [k, v] of recentSends) {
-      if (v < cutoff) recentSends.delete(k);
-    }
-  }
-  return true;
-}
-
-/**
- * Log a notification attempt.
- */
-async function logNotification(userId, eventType, channel, status, payload, error) {
-  try {
-    await prisma.notificationLog.create({
-      data: {
-        userId,
-        eventType,
-        channel,
-        status,
-        payload: payload ?? undefined,
-        error: error ?? undefined,
-      },
-    });
-  } catch (err) {
-    console.error("[NOTIFICATION] Failed to log:", err.message);
-  }
-}
-
-/**
- * Send a notification for a given event.
- *
- * This function is designed to be called fire-and-forget. It never throws
- * to the caller — all errors are caught and logged.
- *
- * @param {object} params
- * @param {string} params.userId - The user to notify
- * @param {string} params.eventType - One of the event type constants
- * @param {object} params.payload - Event-specific data passed to templates
- */
-export async function sendNotification({ userId, eventType, payload }) {
-  try {
-    // 1. Rate limit
-    if (!checkRateLimit(userId, eventType)) {
-      return;
-    }
-
-    // 2. Load preferences
-    const prefs = await getPreferences(userId);
-    const eventPrefs = prefs.preferences ?? {};
-
-    // 3. Check if this event type is enabled
-    if (eventPrefs[eventType] === false) {
-      return;
-    }
-
-    // 4. Get user email
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
-    if (!user?.email) {
-      console.warn(`[NOTIFICATION] No email for user ${userId}`);
-      return;
-    }
-
-    // 5. Send email
-    if (prefs.emailEnabled) {
-      const templateFn = templates[eventType];
-      if (templateFn) {
-        const { subject, html } = templateFn(payload);
-        try {
-          await sendEmail({ to: user.email, subject, html });
-          await logNotification(userId, eventType, "email", "SENT", payload);
-        } catch (err) {
-          console.error(`[NOTIFICATION:EMAIL] Failed: ${err.message}`);
-          await logNotification(userId, eventType, "email", "FAILED", payload, err.message);
-        }
-      }
-    }
-
-    // 6. Send SMS (critical events only)
-    if (prefs.smsEnabled && prefs.phone && SMS_EVENTS.has(eventType)) {
-      const smsFn = smsTemplates[eventType];
-      if (smsFn) {
-        const body = smsFn(payload);
-        try {
-          await sendSms({ to: prefs.phone, body });
-          await logNotification(userId, eventType, "sms", "SENT", payload);
-        } catch (err) {
-          console.error(`[NOTIFICATION:SMS] Failed: ${err.message}`);
-          await logNotification(userId, eventType, "sms", "FAILED", payload, err.message);
-        }
-      }
-    }
-  } catch (err) {
-    // Never crash the caller
-    console.error(`[NOTIFICATION] Unexpected error: ${err.message}`);
-  }
-}
-
-/**
  * Get notification logs for a user.
  */
 export async function getNotificationLogs(userId, { limit = 50, offset = 0 } = {}) {
@@ -158,4 +58,153 @@ export async function getNotificationLogs(userId, { limit = 50, offset = 0 } = {
     take: limit,
     skip: offset,
   });
+}
+
+/**
+ * Check for duplicate notification within the dedup window.
+ * Returns true if a duplicate exists (should skip).
+ */
+async function isDuplicate(userId, eventType, resourceId) {
+  const cutoff = new Date(Date.now() - DEDUP_WINDOW_MS);
+  const existing = await prisma.notificationLog.findFirst({
+    where: {
+      userId,
+      eventType,
+      resourceId: resourceId ?? null,
+      createdAt: { gte: cutoff },
+      status: { in: ["queued", "sent"] },
+    },
+    select: { id: true },
+  });
+  return !!existing;
+}
+
+/**
+ * Enqueue a notification. This is the single entry point for the entire app.
+ *
+ * Does NOT send anything directly. It:
+ * 1. Validates the event type
+ * 2. Loads user preferences
+ * 3. Checks deduplication
+ * 4. Creates notification_logs rows (status: queued)
+ * 5. Enqueues BullMQ jobs
+ *
+ * Safe to call fire-and-forget — never throws to the caller.
+ *
+ * @param {object} params
+ * @param {string} params.userId
+ * @param {string} params.eventType
+ * @param {object} params.payload - Event-specific data passed to templates
+ * @param {string} [params.resourceType] - e.g. "draft", "connection"
+ * @param {string} [params.resourceId] - e.g. the draft ID
+ */
+export async function enqueueNotification({
+  userId,
+  eventType,
+  payload,
+  resourceType,
+  resourceId,
+}) {
+  try {
+    if (!VALID_EVENTS.has(eventType)) {
+      console.warn(`[NOTIFICATION] Unknown event type: ${eventType}`);
+      return;
+    }
+
+    // 1. Deduplication
+    if (await isDuplicate(userId, eventType, resourceId)) {
+      return;
+    }
+
+    // 2. Load preferences
+    const prefs = await getPreferences(userId);
+    const eventPrefs = prefs.preferencesJson ?? {};
+
+    // 3. Check if this event type is enabled
+    if (eventPrefs[eventType] === false) {
+      return;
+    }
+
+    // 4. Get user email
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    if (!user?.email) {
+      console.warn(`[NOTIFICATION] No email for user ${userId}`);
+      return;
+    }
+
+    const queue = getNotificationQueue();
+
+    // 5. Enqueue email job
+    if (prefs.emailEnabled) {
+      const logEntry = await prisma.notificationLog.create({
+        data: {
+          userId,
+          eventType,
+          channel: "email",
+          status: "queued",
+          provider: "postmark",
+          resourceType: resourceType ?? null,
+          resourceId: resourceId ?? null,
+        },
+      });
+
+      if (queue) {
+        await queue.add("send-notification-email", {
+          logId: logEntry.id,
+          userId,
+          email: user.email,
+          eventType,
+          payload,
+        });
+      } else {
+        // No queue available — mark as failed
+        console.warn("[NOTIFICATION] No Redis queue — email not sent");
+        await prisma.notificationLog.update({
+          where: { id: logEntry.id },
+          data: { status: "failed", errorMessage: "Queue unavailable" },
+        });
+      }
+    }
+
+    // 6. Enqueue SMS job (critical events only)
+    if (
+      prefs.smsEnabled &&
+      prefs.phoneNumber &&
+      SMS_EVENTS.has(eventType)
+    ) {
+      const logEntry = await prisma.notificationLog.create({
+        data: {
+          userId,
+          eventType,
+          channel: "sms",
+          status: "queued",
+          provider: "twilio",
+          resourceType: resourceType ?? null,
+          resourceId: resourceId ?? null,
+        },
+      });
+
+      if (queue) {
+        await queue.add("send-notification-sms", {
+          logId: logEntry.id,
+          userId,
+          phoneNumber: prefs.phoneNumber,
+          eventType,
+          payload,
+        });
+      } else {
+        console.warn("[NOTIFICATION] No Redis queue — SMS not sent");
+        await prisma.notificationLog.update({
+          where: { id: logEntry.id },
+          data: { status: "failed", errorMessage: "Queue unavailable" },
+        });
+      }
+    }
+  } catch (err) {
+    // Never crash the caller.
+    console.error(`[NOTIFICATION] enqueueNotification error: ${err.message}`);
+  }
 }
