@@ -19,6 +19,7 @@ import {
 } from "../connection.service.js";
 import { formatDraft } from "../draft.service.js";
 import { getAdapterForChannel } from "./channelAdapters/index.js";
+import { sendNotification } from "../../notifications/notification.service.js";
 
 // Narrow mediaProfile select: the Instagram adapter only needs
 // assetLibraryJson[0].url as a fallback media source, so avoid pulling the
@@ -149,6 +150,14 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
       lastError: null,
     }).catch(() => {});
 
+    // Fire-and-forget notification
+    notifyDraftOwner(workingDraft, "POST_PUBLISHED", {
+      channel: workingDraft.channel,
+      body: workingDraft.body,
+      externalPostUrl,
+      clientId: workingDraft.clientId,
+    });
+
     return formatDraft(updated);
   } catch (err) {
     // Draft STAYS in APPROVED/SCHEDULED. Record the failure details so the
@@ -183,7 +192,29 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
       ).catch(() => {});
     }
 
+    // Fire-and-forget failure notification
+    notifyDraftOwner(workingDraft, "POST_FAILED", {
+      channel: workingDraft.channel,
+      error: err?.message ?? "Unknown error",
+      clientId: workingDraft.clientId,
+    });
+
     // Re-throw so the route handler returns a proper error response.
     throw err;
   }
+}
+
+/**
+ * Resolve draft.createdBy (auth0Sub) to a userId and send notification.
+ * Fire-and-forget — never throws.
+ */
+function notifyDraftOwner(draft, eventType, payload) {
+  prisma.user
+    .findUnique({ where: { auth0Sub: draft.createdBy }, select: { id: true } })
+    .then((user) => {
+      if (user) {
+        sendNotification({ userId: user.id, eventType, payload }).catch(() => {});
+      }
+    })
+    .catch(() => {});
 }

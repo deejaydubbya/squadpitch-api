@@ -53,6 +53,14 @@ export const env = {
   YOUTUBE_CLIENT_SECRET: process.env.YOUTUBE_CLIENT_SECRET,
   YOUTUBE_REDIRECT_URI: process.env.YOUTUBE_REDIRECT_URI,
 
+  // Notifications
+  RESEND_API_KEY: process.env.RESEND_API_KEY,
+  NOTIFICATION_FROM_EMAIL: process.env.NOTIFICATION_FROM_EMAIL ?? "Squadpitch <notifications@squadpitch.com>",
+  TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
+  TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
+  APP_URL: process.env.APP_URL ?? "https://squadpitch-web.fly.dev",
+
   // Stripe billing
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,

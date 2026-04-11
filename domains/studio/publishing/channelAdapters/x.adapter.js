@@ -38,9 +38,11 @@ function truncateAtBoundary(text, max) {
 function buildTweetText(draft) {
   const body = draft.body ?? "";
   const tags = Array.isArray(draft.hashtags) ? draft.hashtags : [];
-  const tagLine = tags
+  const bodyLower = body.toLowerCase();
+  const newTags = tags
     .map((t) => (t.startsWith("#") ? t : `#${t}`))
-    .join(" ");
+    .filter((t) => !bodyLower.includes(t.toLowerCase()));
+  const tagLine = newTags.join(" ");
 
   // Best case: body + hashtags fit
   const withTags = tagLine ? `${body}\n\n${tagLine}` : body;

@@ -206,7 +206,6 @@ const CHANNEL_ASPECT_RATIOS = {
   FACEBOOK:  { width: 1200, height: 630 },    // ~1.9:1
   LINKEDIN:  { width: 1200, height: 627 },    // ~1.91:1
   X:         { width: 1200, height: 675 },    // 16:9
-  BLOG:      { width: 1200, height: 630 },    // OG image
 };
 
 export async function enqueueGeneration({

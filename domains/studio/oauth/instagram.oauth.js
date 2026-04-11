@@ -70,11 +70,18 @@ async function metaGet(path, query) {
 /**
  * Build the Facebook Login dialog URL the user should visit.
  */
+function getInstagramRedirectUri() {
+  return env.META_OAUTH_REDIRECT_URI.replace(
+    /\/oauth\/[^/]+\/callback/i,
+    "/oauth/INSTAGRAM/callback"
+  );
+}
+
 export function buildAuthUrl({ state }) {
   assertConfigured();
   const params = new URLSearchParams({
     client_id: env.META_APP_ID,
-    redirect_uri: env.META_OAUTH_REDIRECT_URI,
+    redirect_uri: getInstagramRedirectUri(),
     state,
     scope: INSTAGRAM_SCOPES.join(","),
     response_type: "code",
@@ -93,7 +100,7 @@ export async function exchangeCode({ code }) {
   const short = await metaGet("/oauth/access_token", {
     client_id: env.META_APP_ID,
     client_secret: env.META_APP_SECRET,
-    redirect_uri: env.META_OAUTH_REDIRECT_URI,
+    redirect_uri: getInstagramRedirectUri(),
     code,
   });
   const shortToken = short.access_token;

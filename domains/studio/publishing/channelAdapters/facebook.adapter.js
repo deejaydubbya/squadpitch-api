@@ -23,9 +23,11 @@ class FacebookPublishError extends Error {
 function buildCaption(draft) {
   const body = draft.body ?? "";
   const tags = Array.isArray(draft.hashtags) ? draft.hashtags : [];
-  const tagLine = tags
+  const bodyLower = body.toLowerCase();
+  const newTags = tags
     .map((t) => (t.startsWith("#") ? t : `#${t}`))
-    .join(" ");
+    .filter((t) => !bodyLower.includes(t.toLowerCase()));
+  const tagLine = newTags.join(" ");
   return tagLine ? `${body}\n\n${tagLine}` : body;
 }
 

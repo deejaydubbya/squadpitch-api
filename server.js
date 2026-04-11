@@ -12,6 +12,7 @@ import { getRedis } from "./redis.js";
 // Domain routers
 import { studioRouter } from "./domains/studio/studio.routes.js";
 import { billingRouter } from "./domains/billing/billing.routes.js";
+import { notificationRouter } from "./domains/notifications/notification.routes.js";
 
 import { sendError, validationError } from "./lib/apiErrors.js";
 import { requireAuth } from "./middleware/auth.js";
@@ -112,6 +113,9 @@ app.use(studioRouter);
 
 // Billing domain
 app.use(billingRouter);
+
+// Notifications domain
+app.use(notificationRouter);
 
 // ===== Error handling =====
 app.use((req, res) => {

@@ -7,6 +7,7 @@
 
 import { prisma } from "../../prisma.js";
 import { encryptToken, decryptToken } from "../../lib/tokenCrypto.js";
+import { sendNotification } from "../notifications/notification.service.js";
 
 export async function listConnections(clientId) {
   await checkAndUpdateExpiredConnections(clientId);
@@ -100,9 +101,20 @@ export async function updateConnectionStatus(
 /**
  * Batch-expire connections whose tokenExpiresAt has passed.
  * Called at the start of listConnections() to keep status up-to-date.
+ * Also fires CONNECTION_EXPIRED notifications for affected users.
  */
 export async function checkAndUpdateExpiredConnections(clientId) {
-  return prisma.channelConnection.updateMany({
+  // Find which connections are about to expire before updating
+  const expiring = await prisma.channelConnection.findMany({
+    where: {
+      clientId,
+      status: "CONNECTED",
+      tokenExpiresAt: { lt: new Date() },
+    },
+    select: { channel: true, createdBy: true },
+  });
+
+  const result = await prisma.channelConnection.updateMany({
     where: {
       clientId,
       status: "CONNECTED",
@@ -110,6 +122,24 @@ export async function checkAndUpdateExpiredConnections(clientId) {
     },
     data: { status: "EXPIRED" },
   });
+
+  // Fire-and-forget notifications for each expired connection
+  for (const conn of expiring) {
+    prisma.user
+      .findUnique({ where: { auth0Sub: conn.createdBy }, select: { id: true } })
+      .then((user) => {
+        if (user) {
+          sendNotification({
+            userId: user.id,
+            eventType: "CONNECTION_EXPIRED",
+            payload: { channel: conn.channel, clientId },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }
+
+  return result;
 }
 
 /**

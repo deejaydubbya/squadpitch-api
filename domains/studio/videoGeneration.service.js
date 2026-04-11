@@ -15,7 +15,6 @@ const VIDEO_CHANNEL_ASPECT_RATIOS = {
   FACEBOOK:  "16:9",   // landscape
   LINKEDIN:  "16:9",   // landscape
   X:         "16:9",   // landscape
-  BLOG:      "16:9",   // landscape
 };
 
 const DEFAULT_VIDEO_MODEL =

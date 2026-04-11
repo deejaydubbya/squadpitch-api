@@ -6,6 +6,7 @@
 import express from "express";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
+import { prisma } from "../../prisma.js";
 import * as service from "./studio.service.js";
 import {
   CreateClientSchema,
@@ -29,7 +30,8 @@ import {
 } from "./studio.schemas.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
-import { checkUsageLimit, incrementUsage } from "../billing/billing.service.js";
+import { checkUsageLimit, incrementUsage, checkUsageNearing } from "../billing/billing.service.js";
+import { sendNotification } from "../notifications/notification.service.js";
 
 export const studioRouter = express.Router();
 
@@ -223,6 +225,25 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     });
 
     await incrementUsage(req.user.id, "posts");
+
+    // Fire-and-forget usage nearing notification
+    checkUsageNearing(req.user.id, "posts").then((info) => {
+      if (info) sendNotification({ userId: req.user.id, eventType: "USAGE_LIMIT_NEARING", payload: info });
+    }).catch(() => {});
+
+    // Check if pending drafts accumulated → POST_NEEDS_APPROVAL
+    prisma.draft.count({
+      where: { clientId: parsed.data.clientId, status: { in: ["DRAFT", "PENDING_REVIEW"] } },
+    }).then((count) => {
+      if (count >= 3) {
+        sendNotification({
+          userId: req.user.id,
+          eventType: "POST_NEEDS_APPROVAL",
+          payload: { count, clientId: parsed.data.clientId },
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+
     res.status(201).json(draft);
   } catch (err) {
     next(err);
@@ -235,6 +256,24 @@ studioRouter.post(`${BASE}/clients/:id/ideas`, async (req, res, next) => {
   try {
     const ideas = await service.generateContentIdeas(req.params.id);
     res.json({ ideas });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Batch-complete notification ──────────────────────────────────────────
+
+studioRouter.post(`${BASE}/clients/:id/batch-complete`, async (req, res, next) => {
+  try {
+    const count = parseInt(req.body.count) || 0;
+    if (count > 0) {
+      sendNotification({
+        userId: req.user.id,
+        eventType: "BATCH_COMPLETE",
+        payload: { count, clientId: req.params.id },
+      }).catch(() => {});
+    }
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
@@ -398,6 +437,11 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
     });
 
     await incrementUsage(req.user.id, "posts");
+
+    checkUsageNearing(req.user.id, "posts").then((info) => {
+      if (info) sendNotification({ userId: req.user.id, eventType: "USAGE_LIMIT_NEARING", payload: info });
+    }).catch(() => {});
+
     res.json(draft);
   } catch (err) {
     next(err);
@@ -515,6 +559,11 @@ studioRouter.post(
       });
 
       await incrementUsage(req.user.id, "images");
+
+      checkUsageNearing(req.user.id, "images").then((info) => {
+        if (info) sendNotification({ userId: req.user.id, eventType: "USAGE_LIMIT_NEARING", payload: info });
+      }).catch(() => {});
+
       res.status(201).json(service.formatAsset(asset));
     } catch (err) {
       next(err);
@@ -540,6 +589,11 @@ studioRouter.post(
       });
 
       await incrementUsage(req.user.id, "videos");
+
+      checkUsageNearing(req.user.id, "videos").then((info) => {
+        if (info) sendNotification({ userId: req.user.id, eventType: "USAGE_LIMIT_NEARING", payload: info });
+      }).catch(() => {});
+
       res.status(201).json(service.formatAsset(asset));
     } catch (err) {
       next(err);
