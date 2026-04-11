@@ -3,20 +3,20 @@ export const PLAN_TIERS = {
     label: "Starter",
     priceMonthly: 2900, // cents
     limits: {
-      clients: 3,
-      generations: 100,
-      publishes: 100,
-      mediaGens: 10,
+      clients: 1,
+      posts: 50,
+      images: 20,
+      videos: 0,
     },
   },
   GROWTH: {
     label: "Growth",
     priceMonthly: 7900,
     limits: {
-      clients: 10,
-      generations: 500,
-      publishes: 200,
-      mediaGens: 50,
+      clients: 3,
+      posts: 200,
+      images: 100,
+      videos: 20,
     },
   },
   PRO: {
@@ -24,9 +24,9 @@ export const PLAN_TIERS = {
     priceMonthly: 19900,
     limits: {
       clients: Infinity,
-      generations: Infinity,
-      publishes: Infinity,
-      mediaGens: Infinity,
+      posts: 1000,
+      images: 500,
+      videos: 100,
     },
   },
 };

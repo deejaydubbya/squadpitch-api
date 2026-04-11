@@ -61,7 +61,22 @@ async function persistFailedDraft({
 /**
  * Normalize the structured response from OpenAI into the shape we persist.
  */
+function normalizeVariation(v) {
+  if (!v || typeof v !== "object") return null;
+  return {
+    body: typeof v.body === "string" ? v.body : "",
+    hooks: Array.isArray(v.hooks) ? v.hooks.filter((h) => typeof h === "string") : [],
+    hashtags: Array.isArray(v.hashtags)
+      ? v.hashtags.filter((h) => typeof h === "string").map((h) => h.replace(/^#+/, ""))
+      : [],
+    cta: typeof v.cta === "string" && v.cta.length > 0 ? v.cta : null,
+  };
+}
+
 function normalizeGeneratedContent(parsed) {
+  const rawVariations = Array.isArray(parsed?.variations) ? parsed.variations : [];
+  const variations = rawVariations.map(normalizeVariation).filter(Boolean);
+
   return {
     body: typeof parsed?.body === "string" ? parsed.body : "",
     hooks: Array.isArray(parsed?.hooks)
@@ -76,9 +91,7 @@ function normalizeGeneratedContent(parsed) {
       typeof parsed?.cta === "string" && parsed.cta.length > 0
         ? parsed.cta
         : null,
-    variations: Array.isArray(parsed?.variations)
-      ? parsed.variations.filter((v) => typeof v === "string")
-      : [],
+    variations,
     altText:
       typeof parsed?.altText === "string" && parsed.altText.length > 0
         ? parsed.altText

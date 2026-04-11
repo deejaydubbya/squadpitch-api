@@ -104,9 +104,9 @@ export async function getUsage(userId) {
   return {
     period: { start: periodStart, end: periodEnd },
     usage: {
-      generations: record?.generations ?? 0,
-      publishes: record?.publishes ?? 0,
-      mediaGens: record?.mediaGens ?? 0,
+      posts: record?.posts ?? 0,
+      images: record?.images ?? 0,
+      videos: record?.videos ?? 0,
     },
     limits,
     tier: sub?.tier ?? "STARTER",

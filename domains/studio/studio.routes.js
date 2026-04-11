@@ -213,8 +213,8 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
     // Usage limit check
-    const allowed = await checkUsageLimit(req.user.id, "generations");
-    if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more.");
+    const allowed = await checkUsageLimit(req.user.id, "posts");
+    if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more.");
 
     const actorSub = getAuth0Sub(req);
     const draft = await service.generateDraft({
@@ -222,8 +222,19 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
       createdBy: actorSub,
     });
 
-    await incrementUsage(req.user.id, "generations");
+    await incrementUsage(req.user.id, "posts");
     res.status(201).json(draft);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Content Ideas ──────────────────────────────────────────────────────
+
+studioRouter.post(`${BASE}/clients/:id/ideas`, async (req, res, next) => {
+  try {
+    const ideas = await service.generateContentIdeas(req.params.id);
+    res.json({ ideas });
   } catch (err) {
     next(err);
   }
@@ -336,11 +347,48 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
   }
 });
 
+// Auto-schedule: distribute drafts across upcoming days
+studioRouter.post(`${BASE}/clients/:id/auto-schedule`, async (req, res, next) => {
+  try {
+    const { draftIds } = req.body;
+    if (!Array.isArray(draftIds) || draftIds.length === 0) {
+      return sendError(res, 400, "VALIDATION", "draftIds array is required");
+    }
+    const actorSub = getAuth0Sub(req);
+
+    // Optimal posting times (hour in UTC)
+    const OPTIMAL_HOURS = [9, 12, 15, 18];
+    const now = new Date();
+    const scheduled = [];
+
+    for (let i = 0; i < draftIds.length; i++) {
+      // Distribute across next 7 days
+      const dayOffset = Math.floor(i / 2) + 1; // 2 posts per day max, start tomorrow
+      const hourIdx = i % OPTIMAL_HOURS.length;
+
+      const scheduledFor = new Date(now);
+      scheduledFor.setDate(scheduledFor.getDate() + dayOffset);
+      scheduledFor.setHours(OPTIMAL_HOURS[hourIdx], 0, 0, 0);
+
+      try {
+        const draft = await service.scheduleDraft(draftIds[i], scheduledFor.toISOString(), actorSub);
+        scheduled.push(service.formatDraft(draft));
+      } catch {
+        // Skip drafts that can't be scheduled (wrong status, etc.)
+      }
+    }
+
+    res.json({ scheduled, count: scheduled.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
 studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
   try {
     // Usage limit check
-    const allowed = await checkUsageLimit(req.user.id, "publishes");
-    if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "You have reached your monthly publish limit. Upgrade your plan for more.");
+    const allowed = await checkUsageLimit(req.user.id, "posts");
+    if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly publish limit. Upgrade your plan for more.");
 
     const actorSub = getAuth0Sub(req);
     const draft = await service.publishDraft({
@@ -349,7 +397,7 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
       source: "manual",
     });
 
-    await incrementUsage(req.user.id, "publishes");
+    await incrementUsage(req.user.id, "posts");
     res.json(draft);
   } catch (err) {
     next(err);
@@ -457,8 +505,8 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       // Usage limit check
-      const allowed = await checkUsageLimit(req.user.id, "mediaGens");
-      if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "You have reached your monthly media generation limit. Upgrade your plan for more.");
+      const allowed = await checkUsageLimit(req.user.id, "images");
+      if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly image generation limit. Upgrade your plan for more.");
 
       const actorSub = getAuth0Sub(req);
       const asset = await service.enqueueGeneration({
@@ -466,7 +514,7 @@ studioRouter.post(
         createdBy: actorSub,
       });
 
-      await incrementUsage(req.user.id, "mediaGens");
+      await incrementUsage(req.user.id, "images");
       res.status(201).json(service.formatAsset(asset));
     } catch (err) {
       next(err);
@@ -482,8 +530,8 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       // Usage limit check
-      const allowed = await checkUsageLimit(req.user.id, "mediaGens");
-      if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "You have reached your monthly media generation limit. Upgrade your plan for more.");
+      const allowed = await checkUsageLimit(req.user.id, "videos");
+      if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly video generation limit. Upgrade your plan for more.");
 
       const actorSub = getAuth0Sub(req);
       const asset = await service.enqueueVideoGeneration({
@@ -491,7 +539,7 @@ studioRouter.post(
         createdBy: actorSub,
       });
 
-      await incrementUsage(req.user.id, "mediaGens");
+      await incrementUsage(req.user.id, "videos");
       res.status(201).json(service.formatAsset(asset));
     } catch (err) {
       next(err);

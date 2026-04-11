@@ -9,6 +9,32 @@
  * JSON schema consumed by OpenAI's response_format: { type: "json_schema" }.
  * This is the authoritative shape that drafts are persisted in.
  */
+const VARIATION_OBJECT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    body: {
+      type: "string",
+      description: "The content body for this variation.",
+    },
+    hooks: {
+      type: "array",
+      items: { type: "string" },
+      description: "Opening lines for this variation.",
+    },
+    hashtags: {
+      type: "array",
+      items: { type: "string" },
+      description: "Hashtags without leading '#'.",
+    },
+    cta: {
+      type: "string",
+      description: "Call to action. Empty string if not applicable.",
+    },
+  },
+  required: ["body", "hooks", "hashtags", "cta"],
+};
+
 export const CONTENT_OUTPUT_SCHEMA = {
   name: "draft",
   strict: true,
@@ -18,26 +44,26 @@ export const CONTENT_OUTPUT_SCHEMA = {
     properties: {
       body: {
         type: "string",
-        description: "The primary content body — the actual post, caption, or script.",
+        description: "The primary content body (Version A) — the actual post, caption, or script.",
       },
       hooks: {
         type: "array",
         items: { type: "string" },
-        description: "Opening lines or attention-grabbing alternatives.",
+        description: "Opening lines or attention-grabbing alternatives for Version A.",
       },
       hashtags: {
         type: "array",
         items: { type: "string" },
-        description: "Relevant hashtags without the leading '#'.",
+        description: "Relevant hashtags without the leading '#' for Version A.",
       },
       cta: {
         type: "string",
-        description: "Call to action. Empty string if not applicable.",
+        description: "Call to action for Version A. Empty string if not applicable.",
       },
       variations: {
         type: "array",
-        items: { type: "string" },
-        description: "Alternative short variations of the body.",
+        items: VARIATION_OBJECT_SCHEMA,
+        description: "Two additional complete variations (Version B and Version C) of the content, each with a different angle, tone, or structure.",
       },
       altText: {
         type: "string",
@@ -201,6 +227,9 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance }) {
     lines.push(`\nGuidance from operator:\n${guidance.trim()}`);
   }
 
+  lines.push(
+    "\nGenerate 3 distinct variations of the content. The primary fields (body, hooks, hashtags, cta) are Version A. Include 2 additional complete variations in the 'variations' array (Version B and Version C). Each variation should take a different angle, tone, or structure while staying on-brand."
+  );
   lines.push(
     "\nRespond with JSON matching the draft schema."
   );

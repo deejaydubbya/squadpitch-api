@@ -368,9 +368,9 @@ model UsageRecord {
   userId      String
   periodStart DateTime
   periodEnd   DateTime
-  generations Int      @default(0)
-  publishes   Int      @default(0)
-  mediaGens   Int      @default(0)
+  posts       Int      @default(0)
+  images      Int      @default(0)
+  videos      Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

@@ -63,6 +63,7 @@ export {
 export { getClientAnalytics } from "./analytics.service.js";
 
 export { generateDraft } from "./generation/aiGenerationService.js";
+export { generateContentIdeas } from "./generation/ideasService.js";
 
 export {
   listAssets,
