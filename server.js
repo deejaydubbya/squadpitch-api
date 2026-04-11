@@ -105,13 +105,19 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "squadpitch-api" });
 });
 
-// Auth + user upsert for all /api/* routes
-app.use("/api", requireAuth, requireUser);
+// Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
+app.use("/api", (req, res, next) => {
+  if (req.path === "/v1/billing/webhook") return next("route");
+  return requireAuth(req, res, (err) => {
+    if (err) return next(err);
+    requireUser(req, res, next);
+  });
+});
 
 // Studio domain
 app.use(studioRouter);
 
-// Billing domain
+// Billing domain (webhook handler verifies via Stripe signature, not Bearer token)
 app.use(billingRouter);
 
 // Notifications domain
