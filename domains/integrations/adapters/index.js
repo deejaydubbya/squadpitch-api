@@ -11,6 +11,9 @@ import { SheetsAdapter } from "./sheets.adapter.js";
 import { DiscordAdapter } from "./discord.adapter.js";
 import { DriveAdapter } from "./drive.adapter.js";
 import { DropboxAdapter } from "./dropbox.adapter.js";
+import { HubspotAdapter } from "./hubspot.adapter.js";
+import { MailchimpAdapter } from "./mailchimp.adapter.js";
+import { ConvertkitAdapter } from "./convertkit.adapter.js";
 
 const adapters = new Map();
 
@@ -21,6 +24,9 @@ const sheets = new SheetsAdapter();
 const discord = new DiscordAdapter();
 const drive = new DriveAdapter();
 const dropbox = new DropboxAdapter();
+const hubspot = new HubspotAdapter();
+const mailchimp = new MailchimpAdapter();
+const convertkit = new ConvertkitAdapter();
 
 adapters.set(webhook.name, webhook);
 adapters.set(slack.name, slack);
@@ -29,6 +35,9 @@ adapters.set(sheets.name, sheets);
 adapters.set(discord.name, discord);
 adapters.set(drive.name, drive);
 adapters.set(dropbox.name, dropbox);
+adapters.set(hubspot.name, hubspot);
+adapters.set(mailchimp.name, mailchimp);
+adapters.set(convertkit.name, convertkit);
 
 /**
  * Get all registered adapters.

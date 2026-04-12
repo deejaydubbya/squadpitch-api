@@ -10,6 +10,9 @@
 //   send-notification-webhook  → Outbound webhook (HMAC-signed)
 //   send-integration-notion    → Notion page creation
 //   send-integration-sheets    → Google Sheets row append
+//   send-integration-hubspot   → HubSpot CRM activity logging
+//   send-integration-mailchimp → Mailchimp draft campaign creation
+//   send-integration-convertkit→ ConvertKit draft broadcast creation
 //
 // On success: updates notification_logs status → "sent", stores providerMessageId.
 // On failure: updates notification_logs status → "failed", stores errorMessage.
@@ -26,6 +29,9 @@ import { templates, smsTemplates } from "../domains/notifications/emailTemplates
 import { createNotionPage } from "../domains/integrations/providers/notionProvider.js";
 import { appendSheetRow } from "../domains/integrations/providers/sheetsProvider.js";
 import { sendDiscordNotification } from "../domains/integrations/providers/discordProvider.js";
+import { logActivity as logHubspotActivity } from "../domains/integrations/providers/hubspotProvider.js";
+import { createDraftCampaign } from "../domains/integrations/providers/mailchimpProvider.js";
+import { createDraftBroadcast } from "../domains/integrations/providers/convertkitProvider.js";
 
 async function processJob(job) {
   const { name, data } = job;
@@ -60,6 +66,18 @@ async function processJob(job) {
 
   if (name === "send-integration-discord") {
     return processDiscordJob(data);
+  }
+
+  if (name === "send-integration-hubspot") {
+    return processHubspotJob(data);
+  }
+
+  if (name === "send-integration-mailchimp") {
+    return processMailchimpJob(data);
+  }
+
+  if (name === "send-integration-convertkit") {
+    return processConvertkitJob(data);
   }
 
   throw new Error(`Unknown notification job type: ${name}`);
@@ -233,6 +251,39 @@ async function processDiscordJob({ integrationId, config, eventType, payload }) 
     const result = await sendDiscordNotification(config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true };
+  } catch (err) {
+    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    throw err;
+  }
+}
+
+async function processHubspotJob({ integrationId, config, eventType, payload }) {
+  try {
+    const result = await logHubspotActivity(config, eventType, payload);
+    await updateIntegrationLog(integrationId, eventType, "success", result);
+    return { sent: true, noteId: result.noteId };
+  } catch (err) {
+    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    throw err;
+  }
+}
+
+async function processMailchimpJob({ integrationId, config, eventType, payload }) {
+  try {
+    const result = await createDraftCampaign(config, eventType, payload);
+    await updateIntegrationLog(integrationId, eventType, "success", result);
+    return { sent: true, campaignId: result.campaignId };
+  } catch (err) {
+    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    throw err;
+  }
+}
+
+async function processConvertkitJob({ integrationId, config, eventType, payload }) {
+  try {
+    const result = await createDraftBroadcast(config, eventType, payload);
+    await updateIntegrationLog(integrationId, eventType, "success", result);
+    return { sent: true, broadcastId: result.broadcastId };
   } catch (err) {
     await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
     throw err;
