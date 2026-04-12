@@ -13,6 +13,8 @@
 //   send-integration-hubspot   → HubSpot CRM activity logging
 //   send-integration-mailchimp → Mailchimp draft campaign creation
 //   send-integration-convertkit→ ConvertKit draft broadcast creation
+//   send-integration-wordpress → WordPress draft post creation
+//   send-integration-webflow   → Webflow draft CMS item creation
 //
 // On success: updates notification_logs status → "sent", stores providerMessageId.
 // On failure: updates notification_logs status → "failed", stores errorMessage.
@@ -32,6 +34,8 @@ import { sendDiscordNotification } from "../domains/integrations/providers/disco
 import { logActivity as logHubspotActivity } from "../domains/integrations/providers/hubspotProvider.js";
 import { createDraftCampaign } from "../domains/integrations/providers/mailchimpProvider.js";
 import { createDraftBroadcast } from "../domains/integrations/providers/convertkitProvider.js";
+import { createDraftPost } from "../domains/integrations/providers/wordpressProvider.js";
+import { createDraftItem } from "../domains/integrations/providers/webflowProvider.js";
 
 async function processJob(job) {
   const { name, data } = job;
@@ -78,6 +82,14 @@ async function processJob(job) {
 
   if (name === "send-integration-convertkit") {
     return processConvertkitJob(data);
+  }
+
+  if (name === "send-integration-wordpress") {
+    return processWordpressJob(data);
+  }
+
+  if (name === "send-integration-webflow") {
+    return processWebflowJob(data);
   }
 
   throw new Error(`Unknown notification job type: ${name}`);
@@ -284,6 +296,28 @@ async function processConvertkitJob({ integrationId, config, eventType, payload 
     const result = await createDraftBroadcast(config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, broadcastId: result.broadcastId };
+  } catch (err) {
+    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    throw err;
+  }
+}
+
+async function processWordpressJob({ integrationId, config, eventType, payload }) {
+  try {
+    const result = await createDraftPost(config, eventType, payload);
+    await updateIntegrationLog(integrationId, eventType, "success", result);
+    return { sent: true, postId: result.postId };
+  } catch (err) {
+    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    throw err;
+  }
+}
+
+async function processWebflowJob({ integrationId, config, eventType, payload }) {
+  try {
+    const result = await createDraftItem(config, eventType, payload);
+    await updateIntegrationLog(integrationId, eventType, "success", result);
+    return { sent: true, itemId: result.itemId };
   } catch (err) {
     await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
     throw err;

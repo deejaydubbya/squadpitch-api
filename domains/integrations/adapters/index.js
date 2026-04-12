@@ -14,6 +14,8 @@ import { DropboxAdapter } from "./dropbox.adapter.js";
 import { HubspotAdapter } from "./hubspot.adapter.js";
 import { MailchimpAdapter } from "./mailchimp.adapter.js";
 import { ConvertkitAdapter } from "./convertkit.adapter.js";
+import { WordpressAdapter } from "./wordpress.adapter.js";
+import { WebflowAdapter } from "./webflow.adapter.js";
 
 const adapters = new Map();
 
@@ -27,6 +29,8 @@ const dropbox = new DropboxAdapter();
 const hubspot = new HubspotAdapter();
 const mailchimp = new MailchimpAdapter();
 const convertkit = new ConvertkitAdapter();
+const wordpress = new WordpressAdapter();
+const webflow = new WebflowAdapter();
 
 adapters.set(webhook.name, webhook);
 adapters.set(slack.name, slack);
@@ -38,6 +42,8 @@ adapters.set(dropbox.name, dropbox);
 adapters.set(hubspot.name, hubspot);
 adapters.set(mailchimp.name, mailchimp);
 adapters.set(convertkit.name, convertkit);
+adapters.set(wordpress.name, wordpress);
+adapters.set(webflow.name, webflow);
 
 /**
  * Get all registered adapters.
