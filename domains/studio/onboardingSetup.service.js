@@ -5,6 +5,7 @@
 
 import { generateStructuredContent } from "./generation/openai.provider.js";
 import { scrapeUrl } from "./scrapeUrl.js";
+import { crawlWebsite } from "./crawlWebsite.js";
 
 const MAX_TEXT_LENGTH = 500_000;
 const EXTRACTION_TIMEOUT_MS = 60_000;
@@ -91,6 +92,8 @@ const BRAND_EXTRACTION_FORMAT = {
   },
 };
 
+const MAX_COMBINED_LENGTH = 400_000;
+
 // ── Scrape ──────────────────────────────────────────────────────────────
 
 /**
@@ -99,6 +102,70 @@ const BRAND_EXTRACTION_FORMAT = {
  */
 export async function scrapeWebsite(url) {
   return scrapeUrl(url);
+}
+
+// ── Multi-source combine ────────────────────────────────────────────────
+
+/**
+ * Crawl/scrape + combine documents + text into one content blob for AI.
+ *
+ * Proportional budget: website 60%, documents 30%, text 10%.
+ */
+export async function crawlAndCombine({ url, text, documentTexts = [] }) {
+  const sections = [];
+  let images = [];
+
+  // Website content
+  if (url) {
+    const crawled = await crawlWebsite(url);
+    images = crawled.pages.flatMap((p) => p.images || []);
+    for (const page of crawled.pages) {
+      sections.push({
+        source: "website",
+        label: `Website page: ${page.url}`,
+        content: page.text,
+      });
+    }
+  }
+
+  // Document content
+  if (documentTexts.length > 0) {
+    for (let i = 0; i < documentTexts.length; i++) {
+      sections.push({
+        source: "document",
+        label: `Uploaded document ${i + 1}`,
+        content: documentTexts[i],
+      });
+    }
+  }
+
+  // Text description
+  if (text) {
+    sections.push({
+      source: "text",
+      label: "Business description",
+      content: text,
+    });
+  }
+
+  // Proportional truncation
+  const budgets = { website: 0.6, document: 0.3, text: 0.1 };
+  const grouped = { website: [], document: [], text: [] };
+  for (const s of sections) grouped[s.source].push(s);
+
+  let combinedText = "";
+  for (const source of ["website", "document", "text"]) {
+    const group = grouped[source];
+    if (group.length === 0) continue;
+    const budget = Math.floor(MAX_COMBINED_LENGTH * budgets[source]);
+    const perItem = Math.floor(budget / group.length);
+    for (const s of group) {
+      const truncated = s.content.slice(0, perItem);
+      combinedText += `\n\n--- ${s.label} ---\n${truncated}`;
+    }
+  }
+
+  return { combinedText: combinedText.trim(), images };
 }
 
 // ── AI Extraction ──────────────────────────────────────────────────────

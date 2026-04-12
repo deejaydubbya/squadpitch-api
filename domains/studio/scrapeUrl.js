@@ -22,9 +22,10 @@ const BLOCKED_MSG =
  * direct fetch + cheerio if Jina fails.
  *
  * @param {string} url
- * @returns {Promise<{ text: string, title: string, metaDescription: string, ogImage: string, images: string[] }>}
+ * @param {{ extractLinks?: boolean }} options
+ * @returns {Promise<{ text: string, title: string, metaDescription: string, ogImage: string, images: string[], links?: string[] }>}
  */
-export async function scrapeUrl(url) {
+export async function scrapeUrl(url, { extractLinks = false } = {}) {
   // Validate
   let parsed;
   try {
@@ -36,11 +37,18 @@ export async function scrapeUrl(url) {
     throw Object.assign(new Error("Only http/https URLs are supported"), { status: 400 });
   }
 
+  const origin = extractLinks ? parsed.origin : null;
+
   // Try Jina Reader first
   const jinaResult = await scrapeWithJina(url);
 
   // Jina succeeded — return the content
-  if (jinaResult.ok) return jinaResult.data;
+  if (jinaResult.ok) {
+    if (extractLinks && jinaResult.data) {
+      jinaResult.data.links = extractLinksFromMarkdown(jinaResult.rawMarkdown || "", origin);
+    }
+    return jinaResult.data;
+  }
 
   // Jina says the site is blocked — surface the error directly
   if (jinaResult.blocked) {
@@ -49,7 +57,7 @@ export async function scrapeUrl(url) {
 
   // Jina failed for a non-blocking reason — try direct fetch
   try {
-    return await scrapeDirectly(url);
+    return await scrapeDirectly(url, { extractLinks, origin });
   } catch (err) {
     // If direct fetch also gets a 4xx, the site is blocking us
     if (err.message?.includes("HTTP 4")) {
@@ -133,12 +141,57 @@ async function scrapeWithJina(url) {
   return {
     ok: true,
     data: { text, title, metaDescription: "", ogImage, images: images.slice(0, 50) },
+    rawMarkdown: markdown,
   };
+}
+
+// ── Link extraction helpers ───────────────────────────────────────────────
+
+const SKIP_EXTENSIONS = new Set([
+  ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico",
+  ".css", ".js", ".map", ".woff", ".woff2", ".ttf", ".eot",
+  ".pdf", ".zip", ".tar", ".gz", ".mp4", ".mp3",
+]);
+
+function shouldSkipLink(href) {
+  if (!href || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:")) return true;
+  const ext = href.slice(href.lastIndexOf(".")).toLowerCase().split("?")[0];
+  return SKIP_EXTENSIONS.has(ext);
+}
+
+function extractLinksFromMarkdown(markdown, origin) {
+  if (!origin) return [];
+  const links = new Set();
+  const linkRegex = /\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
+  let m;
+  while ((m = linkRegex.exec(markdown)) !== null) {
+    const href = m[1];
+    if (shouldSkipLink(href)) continue;
+    try {
+      const parsed = new URL(href);
+      if (parsed.origin === origin) links.add(parsed.origin + parsed.pathname);
+    } catch {}
+  }
+  return [...links];
+}
+
+function extractLinksFromCheerio($, origin) {
+  if (!origin) return [];
+  const links = new Set();
+  $("a[href]").each((_, el) => {
+    const href = $(el).attr("href");
+    if (shouldSkipLink(href)) return;
+    try {
+      const resolved = new URL(href, origin);
+      if (resolved.origin === origin) links.add(resolved.origin + resolved.pathname);
+    } catch {}
+  });
+  return [...links];
 }
 
 // ── Direct fetch + cheerio (fallback) ─────────────────────────────────────
 
-async function scrapeDirectly(url) {
+async function scrapeDirectly(url, { extractLinks = false, origin = null } = {}) {
   let html;
   try {
     const res = await fetch(url, {
@@ -192,5 +245,9 @@ async function scrapeDirectly(url) {
     );
   }
 
-  return { text, title, metaDescription, ogImage, images: images.slice(0, 20) };
+  const result = { text, title, metaDescription, ogImage, images: images.slice(0, 20) };
+  if (extractLinks) {
+    result.links = extractLinksFromCheerio($, origin);
+  }
+  return result;
 }

@@ -455,10 +455,16 @@ export const ImportFromNotionSchema = z.object({
 
 // ── Onboarding ──────────────────────────────────────────────────────────
 
-export const OnboardingAnalyzeSchema = z.object({
-  input: z.string().min(3).max(5000),
-  inputType: z.enum(["url", "text"]),
-});
+export const OnboardingAnalyzeSchema = z
+  .object({
+    input: z.string().max(5000).optional().default(""),
+    inputType: z.enum(["url", "text"]),
+    documentTexts: z.array(z.string().max(200000)).max(5).optional().default([]),
+  })
+  .refine(
+    (d) => d.input.length >= 3 || (d.documentTexts && d.documentTexts.length > 0),
+    { message: "Provide a URL, text description, or at least one document" }
+  );
 
 export const ConfirmImportSchema = z.object({
   items: z

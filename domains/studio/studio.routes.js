@@ -65,6 +65,8 @@ import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } 
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
+import multer from "multer";
+import { parseDocument, isAcceptedFile } from "./documentParser.js";
 
 export const studioRouter = express.Router();
 
@@ -567,22 +569,70 @@ studioRouter.get(
 
 // ── Onboarding ──────────────────────────────────────────────────────
 
+// Document upload middleware
+const uploadDocs = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 5 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, isAcceptedFile(file.mimetype, file.originalname));
+  },
+}).array("files", 5);
+
+studioRouter.post(`${BASE}/onboarding/upload-documents`, (req, res, next) => {
+  uploadDocs(req, res, async (err) => {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return sendError(res, 400, "FILE_TOO_LARGE", "File exceeds 20MB limit");
+      }
+      if (err.code === "LIMIT_FILE_COUNT") {
+        return sendError(res, 400, "TOO_MANY_FILES", "Maximum 5 files allowed");
+      }
+      return next(err);
+    }
+    try {
+      const files = req.files || [];
+      if (files.length === 0) {
+        return sendError(res, 400, "NO_FILES", "No files provided");
+      }
+      const documents = await Promise.all(
+        files.map((f) =>
+          parseDocument(f.buffer, { filename: f.originalname, mimetype: f.mimetype })
+        )
+      );
+      res.json({ documents });
+    } catch (err) {
+      if (err.status === 400) {
+        return sendError(res, 400, "PARSE_ERROR", err.message);
+      }
+      next(err);
+    }
+  });
+});
+
 studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
   try {
     const parsed = OnboardingAnalyzeSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
-    const { input, inputType } = parsed.data;
+    const { input, inputType, documentTexts } = parsed.data;
     let brandData;
     let images = [];
 
-    if (inputType === "url") {
-      const scraped = await onboardingService.scrapeWebsite(input);
-      brandData = await onboardingService.extractBrandData(scraped.text, { url: input });
-      images = scraped.images;
-      if (!brandData.name && scraped.title) {
-        brandData.name = scraped.title;
-      }
+    const hasUrl = inputType === "url" && input.length >= 3;
+    const hasText = inputType === "text" && input.length >= 3;
+    const hasDocs = documentTexts.length > 0;
+
+    // Multi-source: combine crawled pages + documents + text
+    if (hasUrl || hasDocs || hasText) {
+      const { combinedText, images: crawledImages } = await onboardingService.crawlAndCombine({
+        url: hasUrl ? input : null,
+        text: hasText ? input : null,
+        documentTexts,
+      });
+      images = crawledImages;
+      brandData = await onboardingService.extractBrandData(combinedText, {
+        url: hasUrl ? input : undefined,
+      });
     } else {
       brandData = await onboardingService.extractBrandFromText(input);
     }
@@ -595,7 +645,7 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
         audience: brandData.audience,
         offers: brandData.offers,
         competitors: brandData.competitors,
-        website: inputType === "url" ? input : undefined,
+        website: hasUrl ? input : undefined,
       },
       voiceData: {
         tone: brandData.suggestedTone,
