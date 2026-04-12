@@ -18,6 +18,9 @@ export const env = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   OPENAI_DEFAULT_MODEL: process.env.OPENAI_DEFAULT_MODEL ?? "gpt-4o-mini",
 
+  // Jina Reader — URL scraping
+  JINA_API_KEY: process.env.JINA_API_KEY,
+
   // Fal.ai — image/video generation
   FAL_API_KEY: process.env.FAL_API_KEY,
   FAL_DEFAULT_MODEL: process.env.FAL_DEFAULT_MODEL ?? "fal-ai/flux/dev",

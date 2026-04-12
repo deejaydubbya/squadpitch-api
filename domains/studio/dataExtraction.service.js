@@ -43,24 +43,47 @@ INDUSTRY_NEWS — Relevant news/trends
 EVENT — Upcoming or past events
   dataJson: { eventName, date, location, description, registrationUrl }
 
-CUSTOM — Anything that doesn't fit above
-  dataJson: { (any relevant key-value pairs) }
+CUSTOM — Anything that doesn't fit above (e.g. product listings, real estate, job postings, recipes, events)
+  dataJson: { (any relevant key-value pairs that capture the structured data) }
 `;
 
-const SYSTEM_PROMPT = `You are a data extraction engine for a content marketing platform. Your job is to analyze raw content and extract structured business data items that can be used to generate social media content.
+const SYSTEM_PROMPT = `You are a data extraction engine. Your job is to analyze raw content and extract structured data items.
 
 ${DATA_ITEM_TYPES_DESCRIPTION}
+
+Type classification guidelines — ALWAYS prefer a specific type over CUSTOM:
+- Product/service pages with prices, features, or specs → PRODUCT_LAUNCH
+- Customer reviews, quotes, or star ratings → TESTIMONIAL
+- Numbers, percentages, metrics, or data points → STATISTIC
+- Sale prices, discounts, coupon codes, limited-time offers → PROMOTION
+- Success stories, before/after comparisons, client results → CASE_STUDY
+- Award wins, revenue milestones, anniversary celebrations → MILESTONE
+- Q&A format, help docs, support articles → FAQ
+- Employee bios, team pages, about-us profiles → TEAM_SPOTLIGHT
+- News articles, trend reports, industry analysis → INDUSTRY_NEWS
+- Events with dates, locations, registration links → EVENT
+- ONLY use CUSTOM when none of the above types apply (e.g. real estate listings, job postings, recipes, directory entries)
 
 Rules:
 - Extract as many distinct data items as the content supports (1-50 items)
 - Each item MUST have a type, title, and relevant dataJson fields
+- When the user provides a hint about what to extract, prioritize finding those items
 - Set confidence (0.0-1.0) based on how well the content matches the type
 - Assign relevant tags (1-5 per item)
-- Set priority (0-10) based on content marketing value
+- Set priority (0-10) based on usefulness
 - Write concise summaries (1-2 sentences) capturing the key message
 - Titles should be compelling and specific, not generic
-- If content is ambiguous, prefer more specific types over CUSTOM
-- Do NOT fabricate data — only extract what's present in the content`;
+- Do NOT fabricate data — only extract what's present in the content
+- If image URLs are provided, include the most relevant imageUrl in each item's dataJson
+
+You MUST return a JSON object with an "items" array. Even if the content is unusual, extract what you can.`;
+
+// Valid DataItemType enum values (must match Prisma schema)
+const VALID_TYPES = new Set([
+  "TESTIMONIAL", "CASE_STUDY", "PRODUCT_LAUNCH", "PROMOTION",
+  "STATISTIC", "MILESTONE", "FAQ", "TEAM_SPOTLIGHT",
+  "INDUSTRY_NEWS", "EVENT", "CUSTOM",
+]);
 
 // NOTE: dataJson has dynamic keys per item type, so we cannot use strict: true
 // (OpenAI strict mode requires additionalProperties: false on all objects).
@@ -74,7 +97,7 @@ const RESPONSE_FORMAT = { type: "json_object" };
  * @param {{ hint?: string, sourceUrl?: string }} opts
  * @returns {Promise<Array<{ type, title, summary, dataJson, tags, priority, confidence }>>}
  */
-export async function parseToStructuredData(rawContent, { hint, sourceUrl } = {}) {
+export async function parseToStructuredData(rawContent, { hint, sourceUrl, images } = {}) {
   if (!rawContent || typeof rawContent !== "string") {
     return [];
   }
@@ -82,9 +105,13 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl } = {}
   // Truncate to bound token usage
   const truncated = rawContent.slice(0, MAX_INPUT_BYTES);
 
-  let userPrompt = `Extract structured business data items from the following content:\n\n${truncated}`;
+  let userPrompt = "";
+  if (hint) userPrompt += `IMPORTANT — The user wants to extract: ${hint}\n\n`;
+  userPrompt += `Extract structured data items from the following content:\n\n${truncated}`;
   if (sourceUrl) userPrompt += `\n\nSource URL: ${sourceUrl}`;
-  if (hint) userPrompt += `\n\nAdditional context from user: ${hint}`;
+  if (images && images.length > 0) {
+    userPrompt += `\n\nImage URLs found on this page (associate with relevant items in dataJson.imageUrl):\n${images.slice(0, 30).join("\n")}`;
+  }
 
   const result = await generateStructuredContent({
     systemPrompt: SYSTEM_PROMPT,
@@ -101,7 +128,7 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl } = {}
   return items
     .filter((item) => item.title && item.type)
     .map((item) => ({
-      type: item.type,
+      type: VALID_TYPES.has(item.type) ? item.type : "CUSTOM",
       title: String(item.title).slice(0, 200),
       summary: item.summary ? String(item.summary).slice(0, 2000) : null,
       dataJson: item.dataJson && typeof item.dataJson === "object" ? item.dataJson : {},

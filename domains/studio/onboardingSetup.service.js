@@ -3,10 +3,9 @@
 // Used by the onboarding flow to analyze a business URL or description
 // and extract structured brand/voice data for workspace setup.
 
-import * as cheerio from "cheerio";
 import { generateStructuredContent } from "./generation/openai.provider.js";
+import { scrapeUrl } from "./scrapeUrl.js";
 
-const FETCH_TIMEOUT_MS = 15_000;
 const MAX_TEXT_LENGTH = 500_000;
 const EXTRACTION_TIMEOUT_MS = 60_000;
 const EXTRACTION_TEMPERATURE = 0.3;
@@ -95,66 +94,11 @@ const BRAND_EXTRACTION_FORMAT = {
 // ── Scrape ──────────────────────────────────────────────────────────────
 
 /**
- * Fetch a URL and extract text content + metadata using cheerio.
+ * Fetch a URL and extract text content + metadata.
+ * Uses Jina Reader for JS-rendered sites, falls back to direct fetch.
  */
 export async function scrapeWebsite(url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw Object.assign(new Error("Invalid URL"), { status: 400 });
-  }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw Object.assign(new Error("Only http/https URLs are supported"), { status: 400 });
-  }
-
-  let html;
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "SquadpitchBot/1.0 (content import)",
-        Accept: "text/html,application/xhtml+xml,text/plain",
-      },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      redirect: "follow",
-    });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    html = await res.text();
-  } catch (err) {
-    if (err.name === "AbortError" || err.name === "TimeoutError") {
-      throw Object.assign(new Error("URL request timed out"), { status: 408 });
-    }
-    throw Object.assign(new Error(`Failed to fetch URL: ${err.message}`), { status: 502 });
-  }
-
-  const $ = cheerio.load(html);
-
-  // Extract metadata before removing elements
-  const title = $("title").first().text().trim() || "";
-  const metaDescription =
-    $('meta[name="description"]').attr("content")?.trim() ||
-    $('meta[property="og:description"]').attr("content")?.trim() ||
-    "";
-  const ogImage =
-    $('meta[property="og:image"]').attr("content")?.trim() || "";
-  const images = [];
-  $("img[src]").each((_, el) => {
-    const src = $(el).attr("src");
-    if (src) images.push(src);
-  });
-
-  // Extract text
-  $("script, style, nav, footer, header, iframe, noscript").remove();
-  let text = $("article").text() || $("main").text() || $("body").text();
-  text = text.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT_LENGTH);
-
-  if (text.length < 10) {
-    throw Object.assign(new Error("Could not extract meaningful content from URL"), { status: 422 });
-  }
-
-  return { text, title, metaDescription, ogImage, images: images.slice(0, 20) };
+  return scrapeUrl(url);
 }
 
 // ── AI Extraction ──────────────────────────────────────────────────────

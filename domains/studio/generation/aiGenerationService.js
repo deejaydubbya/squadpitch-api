@@ -218,5 +218,13 @@ export async function generateDraft({
     incrementDataItemUsage(dataItem.id).catch(() => {});
   }
 
+  // Auto-attach image from data item if available
+  if (dataItem?.dataJson?.imageUrl && !draft.mediaUrl) {
+    await prisma.draft.update({
+      where: { id: draft.id },
+      data: { mediaUrl: dataItem.dataJson.imageUrl, mediaType: "image" },
+    }).catch(() => {});
+  }
+
   return formatDraft(draft);
 }

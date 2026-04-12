@@ -3,14 +3,13 @@
 // Each extract function returns a preview (does NOT save).
 // saveImportedItems() persists reviewed items to the database.
 
-import * as cheerio from "cheerio";
 import { parse as csvParse } from "csv-parse/sync";
 import { prisma } from "../../prisma.js";
 import { parseToStructuredData } from "./dataExtraction.service.js";
+import { scrapeUrl } from "./scrapeUrl.js";
 import { readSheetRows } from "../integrations/providers/sheetsProvider.js";
 import { readNotionPages } from "../integrations/providers/notionProvider.js";
 
-const FETCH_TIMEOUT_MS = 15_000;
 const MAX_CSV_SIZE = 5_000_000; // 5MB
 const MAX_TEXT_LENGTH = 500_000; // 500KB
 
@@ -20,52 +19,8 @@ const MAX_TEXT_LENGTH = 500_000; // 500KB
  * Fetch a URL, extract text content, and parse via AI.
  */
 export async function extractFromUrl(url, { hint } = {}) {
-  // Validate
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw Object.assign(new Error("Invalid URL"), { status: 400 });
-  }
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw Object.assign(new Error("Only http/https URLs are supported"), { status: 400 });
-  }
-
-  // Fetch
-  let html;
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "SquadpitchBot/1.0 (content import)",
-        Accept: "text/html,application/xhtml+xml,text/plain",
-      },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      redirect: "follow",
-    });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    html = await res.text();
-  } catch (err) {
-    if (err.name === "AbortError" || err.name === "TimeoutError") {
-      throw Object.assign(new Error("URL request timed out"), { status: 408 });
-    }
-    throw Object.assign(new Error(`Failed to fetch URL: ${err.message}`), { status: 502 });
-  }
-
-  // Extract text
-  const $ = cheerio.load(html);
-  $("script, style, nav, footer, header, iframe, noscript").remove();
-
-  let textSource = $("article").text() || $("main").text() || $("body").text();
-  textSource = textSource.replace(/\s+/g, " ").trim().slice(0, MAX_TEXT_LENGTH);
-
-  if (textSource.length < 10) {
-    throw Object.assign(new Error("Could not extract meaningful content from URL"), { status: 422 });
-  }
-
-  const items = await parseToStructuredData(textSource, { hint, sourceUrl: url });
-
+  const { text, images } = await scrapeUrl(url);
+  const items = await parseToStructuredData(text, { hint, sourceUrl: url, images });
   return { items, sourceUrl: url };
 }
 
