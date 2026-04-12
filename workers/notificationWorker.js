@@ -25,6 +25,7 @@ import { deliverWebhook } from "../domains/notifications/providers/webhookProvid
 import { templates, smsTemplates } from "../domains/notifications/emailTemplates.js";
 import { createNotionPage } from "../domains/integrations/providers/notionProvider.js";
 import { appendSheetRow } from "../domains/integrations/providers/sheetsProvider.js";
+import { sendDiscordNotification } from "../domains/integrations/providers/discordProvider.js";
 
 async function processJob(job) {
   const { name, data } = job;
@@ -55,6 +56,10 @@ async function processJob(job) {
 
   if (name === "send-integration-sheets") {
     return processSheetsJob(data);
+  }
+
+  if (name === "send-integration-discord") {
+    return processDiscordJob(data);
   }
 
   throw new Error(`Unknown notification job type: ${name}`);
@@ -220,6 +225,17 @@ async function processSheetsJob({ integrationId, config, eventType, payload }) {
   } catch (err) {
     await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
     throw err; // Re-throw for BullMQ retry
+  }
+}
+
+async function processDiscordJob({ integrationId, config, eventType, payload }) {
+  try {
+    const result = await sendDiscordNotification(config, eventType, payload);
+    await updateIntegrationLog(integrationId, eventType, "success", result);
+    return { sent: true };
+  } catch (err) {
+    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    throw err;
   }
 }
 

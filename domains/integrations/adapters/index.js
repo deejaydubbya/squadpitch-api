@@ -8,6 +8,9 @@ import { WebhookAdapter } from "./webhook.adapter.js";
 import { SlackAdapter } from "./slack.adapter.js";
 import { NotionAdapter } from "./notion.adapter.js";
 import { SheetsAdapter } from "./sheets.adapter.js";
+import { DiscordAdapter } from "./discord.adapter.js";
+import { DriveAdapter } from "./drive.adapter.js";
+import { DropboxAdapter } from "./dropbox.adapter.js";
 
 const adapters = new Map();
 
@@ -15,11 +18,17 @@ const webhook = new WebhookAdapter();
 const slack = new SlackAdapter();
 const notion = new NotionAdapter();
 const sheets = new SheetsAdapter();
+const discord = new DiscordAdapter();
+const drive = new DriveAdapter();
+const dropbox = new DropboxAdapter();
 
 adapters.set(webhook.name, webhook);
 adapters.set(slack.name, slack);
 adapters.set(notion.name, notion);
 adapters.set(sheets.name, sheets);
+adapters.set(discord.name, discord);
+adapters.set(drive.name, drive);
+adapters.set(dropbox.name, dropbox);
 
 /**
  * Get all registered adapters.

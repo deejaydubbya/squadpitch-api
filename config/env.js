@@ -63,6 +63,16 @@ export const env = {
   VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
   APP_URL: process.env.APP_URL ?? "https://squadpitch-web.fly.dev",
 
+  // Google Drive (media import)
+  GOOGLE_DRIVE_CLIENT_ID: process.env.GOOGLE_DRIVE_CLIENT_ID,
+  GOOGLE_DRIVE_CLIENT_SECRET: process.env.GOOGLE_DRIVE_CLIENT_SECRET,
+  GOOGLE_DRIVE_REDIRECT_URI: process.env.GOOGLE_DRIVE_REDIRECT_URI,
+
+  // Dropbox (media import)
+  DROPBOX_APP_KEY: process.env.DROPBOX_APP_KEY,
+  DROPBOX_APP_SECRET: process.env.DROPBOX_APP_SECRET,
+  DROPBOX_REDIRECT_URI: process.env.DROPBOX_REDIRECT_URI,
+
   // Stripe billing
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,

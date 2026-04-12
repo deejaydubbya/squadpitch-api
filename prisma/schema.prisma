@@ -67,6 +67,7 @@ enum ConnectionStatus {
 enum MediaAssetSource {
   UPLOAD
   AI_GENERATED
+  IMPORTED
 }
 
 enum MediaAssetStatus {
