@@ -10,6 +10,7 @@ import { encryptToken } from "../../lib/tokenCrypto.js";
 import { redisSet, redisGet, redisDel } from "../../redis.js";
 import * as driveProvider from "./providers/driveProvider.js";
 import * as dropboxProvider from "./providers/dropboxProvider.js";
+import * as sheetsProvider from "./providers/sheetsProvider.js";
 import { listFiles, importFile } from "./mediaImport.service.js";
 
 export const mediaImportRouter = express.Router();
@@ -50,6 +51,8 @@ mediaImportRouter.post(`${BASE}/connect/:provider`, async (req, res, next) => {
       authUrl = driveProvider.getAuthUrl(state);
     } else if (provider === "dropbox") {
       authUrl = dropboxProvider.getAuthUrl(state);
+    } else if (provider === "google_sheets") {
+      authUrl = sheetsProvider.getAuthUrl(state);
     } else {
       return res.status(400).json({ error: `Unknown provider: ${provider}` });
     }
@@ -89,6 +92,8 @@ mediaImportRouter.post(`${BASE}/callback`, async (req, res, next) => {
       tokens = driveProvider.exchangeCode(code);
     } else if (provider === "dropbox") {
       tokens = dropboxProvider.exchangeCode(code);
+    } else if (provider === "google_sheets") {
+      tokens = sheetsProvider.exchangeCode(code);
     } else {
       return res.status(400).json({ error: `Unknown provider: ${provider}` });
     }
@@ -114,7 +119,8 @@ mediaImportRouter.post(`${BASE}/callback`, async (req, res, next) => {
         },
       });
     } else {
-      const label = provider === "google_drive" ? "Google Drive" : "Dropbox";
+      const labelMap = { google_drive: "Google Drive", dropbox: "Dropbox", google_sheets: "Google Sheets" };
+      const label = labelMap[provider] ?? provider;
       integration = await prisma.integration.create({
         data: {
           userId,

@@ -249,7 +249,7 @@ async function processNotionJob({ integrationId, config, eventType, payload }) {
 
 async function processSheetsJob({ integrationId, config, eventType, payload }) {
   try {
-    const result = await appendSheetRow(config, eventType, payload);
+    const result = await appendSheetRow(integrationId, config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, updatedRange: result.updatedRange };
   } catch (err) {

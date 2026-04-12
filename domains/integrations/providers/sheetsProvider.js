@@ -1,69 +1,133 @@
-// Google Sheets integration provider.
-// Appends rows to a Google Sheet via the Sheets API.
+// Google Sheets integration provider — OAuth2.
 //
 // Config shape (stored in Integration.config):
 //   {
-//     serviceAccountEmail: string,
-//     privateKey: string,          // PEM-encoded RSA private key
-//     spreadsheetId: string,
-//     sheetName: string            // defaults to "Sheet1"
+//     accessToken: string (encrypted),
+//     refreshToken: string (encrypted),
+//     email: string,
+//     spreadsheetId?: string,
+//     sheetName?: string
 //   }
 //
-// The service account must be shared as an editor on the spreadsheet.
+// OAuth credentials come from env:
+//   GOOGLE_SHEETS_CLIENT_ID, GOOGLE_SHEETS_CLIENT_SECRET, GOOGLE_SHEETS_REDIRECT_URI
 
-import { SignJWT, importPKCS8 } from "jose";
+import { env } from "../../../config/env.js";
+import { encryptToken, decryptToken } from "../../../lib/tokenCrypto.js";
+import { prisma } from "../../../prisma.js";
 
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
-
-// Simple in-memory token cache: email → { token, expiresAt }
-const tokenCache = new Map();
+const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
 
 /**
- * Get a Google OAuth2 access token via service account JWT.
+ * Build the OAuth2 authorization URL for Google Sheets.
  */
-async function getAccessToken(serviceAccountEmail, privateKey) {
-  const cached = tokenCache.get(serviceAccountEmail);
-  if (cached && cached.expiresAt > Date.now() + 60_000) {
-    return cached.token;
-  }
+export function getAuthUrl(state) {
+  const params = new URLSearchParams({
+    client_id: env.GOOGLE_SHEETS_CLIENT_ID,
+    redirect_uri: env.GOOGLE_SHEETS_REDIRECT_URI,
+    response_type: "code",
+    scope: SCOPES,
+    access_type: "offline",
+    prompt: "consent",
+    state,
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+}
 
-  const key = await importPKCS8(privateKey, "RS256");
-
-  const jwt = await new SignJWT({
-    scope: SCOPE,
-  })
-    .setProtectedHeader({ alg: "RS256", typ: "JWT" })
-    .setIssuer(serviceAccountEmail)
-    .setAudience(TOKEN_URL)
-    .setIssuedAt()
-    .setExpirationTime("1h")
-    .sign(key);
-
+/**
+ * Exchange an authorization code for tokens.
+ */
+export async function exchangeCode(code) {
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: jwt,
+      client_id: env.GOOGLE_SHEETS_CLIENT_ID,
+      client_secret: env.GOOGLE_SHEETS_CLIENT_SECRET,
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: env.GOOGLE_SHEETS_REDIRECT_URI,
     }),
     signal: AbortSignal.timeout(10_000),
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Google token exchange failed (${res.status}): ${text.slice(0, 300)}`);
+    throw new Error(`Google Sheets token exchange failed (${res.status}): ${text.slice(0, 300)}`);
   }
 
   const data = await res.json();
 
-  tokenCache.set(serviceAccountEmail, {
-    token: data.access_token,
-    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+  // Get user email
+  const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+    headers: { Authorization: `Bearer ${data.access_token}` },
+    signal: AbortSignal.timeout(5_000),
+  });
+  const user = userRes.ok ? await userRes.json() : {};
+
+  return {
+    accessToken: encryptToken(data.access_token),
+    refreshToken: encryptToken(data.refresh_token),
+    email: user.email ?? null,
+    expiresIn: data.expires_in,
+  };
+}
+
+/**
+ * Refresh an access token.
+ */
+async function refreshAccessToken(integrationId, config) {
+  const refreshToken = decryptToken(config.refreshToken);
+
+  const res = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.GOOGLE_SHEETS_CLIENT_ID,
+      client_secret: env.GOOGLE_SHEETS_CLIENT_SECRET,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Google Sheets token refresh failed (${res.status})`);
+  }
+
+  const data = await res.json();
+  const newAccessToken = encryptToken(data.access_token);
+
+  // Update stored token
+  await prisma.integration.update({
+    where: { id: integrationId },
+    data: { config: { ...config, accessToken: newAccessToken } },
   });
 
   return data.access_token;
+}
+
+/**
+ * Get a valid access token, refreshing if needed.
+ */
+async function getAccessToken(integrationId, config) {
+  try {
+    const token = decryptToken(config.accessToken);
+    // Test the token with a lightweight Sheets API call
+    const res = await fetch(`${SHEETS_API}?fields=spreadsheetId`, {
+      method: "HEAD",
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    // Any non-401 means the token is still valid (even 404 is fine — token works)
+    if (res.status !== 401) return token;
+  } catch {
+    // Token invalid, try refresh
+  }
+
+  return refreshAccessToken(integrationId, config);
 }
 
 /**
@@ -99,15 +163,20 @@ function buildRow(eventType, payload = {}) {
 /**
  * Append a row to a Google Sheet.
  *
- * @param {{ serviceAccountEmail: string, privateKey: string, spreadsheetId: string, sheetName?: string }} config
+ * @param {string} integrationId
+ * @param {object} config — { accessToken, refreshToken, email, spreadsheetId, sheetName }
  * @param {string} eventType
  * @param {object} payload
  * @returns {{ success: boolean, updatedRange?: string }}
  */
-export async function appendSheetRow(config, eventType, payload) {
-  const { serviceAccountEmail, privateKey, spreadsheetId, sheetName = "Sheet1" } = config;
+export async function appendSheetRow(integrationId, config, eventType, payload) {
+  const { spreadsheetId, sheetName = "Sheet1" } = config;
 
-  const accessToken = await getAccessToken(serviceAccountEmail, privateKey);
+  if (!spreadsheetId) {
+    throw new Error("Sheets integration missing spreadsheetId");
+  }
+
+  const accessToken = await getAccessToken(integrationId, config);
   const range = encodeURIComponent(`${sheetName}!A:F`);
 
   const url = `${SHEETS_API}/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
@@ -127,10 +196,6 @@ export async function appendSheetRow(config, eventType, payload) {
   const text = await res.text().catch(() => "");
 
   if (!res.ok) {
-    // Clear token cache on auth failure so next attempt gets a fresh token
-    if (res.status === 401 || res.status === 403) {
-      tokenCache.delete(serviceAccountEmail);
-    }
     throw new Error(`Sheets API error (${res.status}): ${text.slice(0, 500)}`);
   }
 
@@ -141,10 +206,14 @@ export async function appendSheetRow(config, eventType, payload) {
 /**
  * Validate a Sheets config by reading spreadsheet metadata.
  */
-export async function validateSheetsConfig(config) {
-  const { serviceAccountEmail, privateKey, spreadsheetId } = config;
+export async function validateSheetsConfig(integrationId, config) {
+  const { spreadsheetId } = config;
 
-  const accessToken = await getAccessToken(serviceAccountEmail, privateKey);
+  if (!spreadsheetId) {
+    throw new Error("Sheets integration missing spreadsheetId");
+  }
+
+  const accessToken = await getAccessToken(integrationId, config);
 
   const res = await fetch(`${SHEETS_API}/${spreadsheetId}?fields=properties.title`, {
     headers: { Authorization: `Bearer ${accessToken}` },
