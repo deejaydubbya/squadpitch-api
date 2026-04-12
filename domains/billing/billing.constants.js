@@ -13,7 +13,7 @@ export const PLAN_TIERS = {
     label: "Starter",
     priceMonthly: 2900, // cents
     limits: {
-      clients: 1,
+      clients: 3,
       posts: 50,
       images: 20,
       videos: 0,
