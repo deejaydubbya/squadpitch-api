@@ -134,7 +134,9 @@ export async function exportFile(userId, integrationId, assetId, folderRef) {
 
   // Download asset from Cloudinary URL
   const dlRes = await fetch(asset.url, { signal: AbortSignal.timeout(60_000) });
-  if (!dlRes.ok) throw new Error(`Failed to download asset (${dlRes.status})`);
+  if (!dlRes.ok) {
+    throw Object.assign(new Error(`Failed to download asset (${dlRes.status})`), { status: 502 });
+  }
   const arrayBuf = await dlRes.arrayBuffer();
   const buffer = Buffer.from(arrayBuf);
 

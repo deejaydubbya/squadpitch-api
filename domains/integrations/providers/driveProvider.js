@@ -257,7 +257,16 @@ export async function uploadFile(integrationId, config, buffer, filename, mimeTy
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Drive upload failed (${res.status}): ${text.slice(0, 300)}`);
+    if (res.status === 403) {
+      throw Object.assign(
+        new Error("Google Drive permission denied. Please reconnect Google Drive to grant write access."),
+        { status: 403 }
+      );
+    }
+    throw Object.assign(
+      new Error(`Drive upload failed (${res.status}): ${text.slice(0, 300)}`),
+      { status: res.status }
+    );
   }
 
   return res.json();

@@ -257,7 +257,10 @@ export async function uploadFile(integrationId, config, buffer, filename, _mimeT
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Dropbox upload failed (${res.status}): ${text.slice(0, 300)}`);
+    throw Object.assign(
+      new Error(`Dropbox upload failed (${res.status}): ${text.slice(0, 300)}`),
+      { status: res.status >= 400 && res.status < 500 ? res.status : 502 }
+    );
   }
 
   const data = await res.json();
