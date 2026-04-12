@@ -49,6 +49,7 @@ import * as dataAnalyticsService from "./dataAnalytics.service.js";
 import { generateInsights } from "./insights.service.js";
 import { generateRecommendations } from "./recommendations.service.js";
 import { previewAutopilot, executeAutopilot } from "./dataAwareAutopilot.service.js";
+import { getDashboardRecommendations, getDashboardActions } from "./dashboard.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
 import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } from "../billing/billing.service.js";
@@ -524,6 +525,26 @@ studioRouter.post(
     }
   }
 );
+
+// ── Dashboard ──────────────────────────────────────────────────────────
+
+studioRouter.get(`${BASE}/clients/:id/dashboard/recommendations`, requireClientOwner, async (req, res, next) => {
+  try {
+    const result = await getDashboardRecommendations(req.params.id);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.get(`${BASE}/clients/:id/dashboard/actions`, requireClientOwner, async (req, res, next) => {
+  try {
+    const result = await getDashboardActions(req.params.id);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ── Analytics ───────────────────────────────────────────────────────────
 
