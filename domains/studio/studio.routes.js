@@ -47,6 +47,7 @@ import {
   ImportFromSheetsSchema,
   ImportFromNotionSchema,
   ConfirmImportSchema,
+  OnboardingAnalyzeSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import * as dataService from "./data.service.js";
@@ -63,6 +64,7 @@ import { getOAuthForChannel } from "./oauth/index.js";
 import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } from "../billing/billing.service.js";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
+import * as onboardingService from "./onboardingSetup.service.js";
 
 export const studioRouter = express.Router();
 
@@ -562,6 +564,62 @@ studioRouter.get(
     }
   }
 );
+
+// ── Onboarding ──────────────────────────────────────────────────────
+
+studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
+  try {
+    const parsed = OnboardingAnalyzeSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const { input, inputType } = parsed.data;
+    let brandData;
+    let images = [];
+
+    if (inputType === "url") {
+      const scraped = await onboardingService.scrapeWebsite(input);
+      brandData = await onboardingService.extractBrandData(scraped.text, { url: input });
+      images = scraped.images;
+      if (!brandData.name && scraped.title) {
+        brandData.name = scraped.title;
+      }
+    } else {
+      brandData = await onboardingService.extractBrandFromText(input);
+    }
+
+    res.json({
+      brandData: {
+        name: brandData.name,
+        description: brandData.description,
+        industry: brandData.industry,
+        audience: brandData.audience,
+        offers: brandData.offers,
+        competitors: brandData.competitors,
+        website: inputType === "url" ? input : undefined,
+      },
+      voiceData: {
+        tone: brandData.suggestedTone,
+        doRules: brandData.voiceRules.do,
+        dontRules: brandData.voiceRules.dont,
+        contentBuckets: brandData.contentBuckets,
+      },
+      suggestedGoal: brandData.suggestedGoal,
+      suggestedChannels: brandData.suggestedChannels,
+      images,
+    });
+  } catch (err) {
+    if (err.status === 400 || err.status === 408 || err.status === 422) {
+      return sendError(res, err.status, "ONBOARDING_ERROR", err.message);
+    }
+    if (err.status === 502) {
+      return sendError(res, 502, "SCRAPE_FAILED", err.message);
+    }
+    if (err.code?.startsWith("OPENAI_")) {
+      return sendError(res, 503, "AI_EXTRACTION_FAILED", "AI analysis failed. Please try again.");
+    }
+    next(err);
+  }
+});
 
 // ── Data Import ──────────────────────────────────────────────────────
 

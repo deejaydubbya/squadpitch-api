@@ -62,44 +62,10 @@ Rules:
 - If content is ambiguous, prefer more specific types over CUSTOM
 - Do NOT fabricate data — only extract what's present in the content`;
 
-const RESPONSE_FORMAT = {
-  type: "json_schema",
-  json_schema: {
-    name: "extracted_data",
-    strict: true,
-    schema: {
-      type: "object",
-      properties: {
-        items: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              type: {
-                type: "string",
-                enum: [
-                  "TESTIMONIAL", "CASE_STUDY", "PRODUCT_LAUNCH", "PROMOTION",
-                  "STATISTIC", "MILESTONE", "FAQ", "TEAM_SPOTLIGHT",
-                  "INDUSTRY_NEWS", "EVENT", "CUSTOM",
-                ],
-              },
-              title: { type: "string" },
-              summary: { type: "string" },
-              dataJson: { type: "object", additionalProperties: true },
-              tags: { type: "array", items: { type: "string" } },
-              priority: { type: "number" },
-              confidence: { type: "number" },
-            },
-            required: ["type", "title", "summary", "dataJson", "tags", "priority", "confidence"],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ["items"],
-      additionalProperties: false,
-    },
-  },
-};
+// NOTE: dataJson has dynamic keys per item type, so we cannot use strict: true
+// (OpenAI strict mode requires additionalProperties: false on all objects).
+// We use json_object mode instead and describe the schema in the system prompt.
+const RESPONSE_FORMAT = { type: "json_object" };
 
 /**
  * Parse raw content into structured data items using AI.

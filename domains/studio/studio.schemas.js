@@ -453,6 +453,13 @@ export const ImportFromNotionSchema = z.object({
   hint: z.string().max(500).optional(),
 });
 
+// ── Onboarding ──────────────────────────────────────────────────────────
+
+export const OnboardingAnalyzeSchema = z.object({
+  input: z.string().min(3).max(5000),
+  inputType: z.enum(["url", "text"]),
+});
+
 export const ConfirmImportSchema = z.object({
   items: z
     .array(
