@@ -74,11 +74,12 @@ export async function getClientMetricsSummary({
 }
 
 /**
- * Stub — will integrate with platform APIs (Instagram Insights, etc.)
- * once connection refresh + token rotation is implemented.
+ * Sync metrics for a published draft from its platform API.
+ * Delegates to the metrics sync orchestrator.
  */
 export async function syncMetrics(draftId) {
-  return { synced: false, reason: "not_implemented" };
+  const { syncMetricsForDraft } = await import("./metricsSyncService.js");
+  return syncMetricsForDraft(draftId);
 }
 
 export function formatMetrics(metrics) {

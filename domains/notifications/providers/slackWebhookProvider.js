@@ -12,6 +12,11 @@ function buildSlackBlocks(eventType, payload = {}) {
   const { platformName, clientName, clientId, count, error, body } = payload;
 
   const configs = {
+    TEST: {
+      emoji: ":rocket:",
+      text: payload.message || "Test notification from Squadpitch — your Slack integration is working!",
+      color: "#8b5cf6",
+    },
     POST_PUBLISHED: {
       emoji: ":white_check_mark:",
       text: platformName && clientName

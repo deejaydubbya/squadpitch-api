@@ -15,6 +15,8 @@ import {
   unsubscribePush,
   getPushSubscriptions,
 } from "./notification.service.js";
+import { sendSms } from "./providers/twilioSmsProvider.js";
+import { sendEmail } from "./providers/postmarkEmailProvider.js";
 import { env } from "../../config/env.js";
 
 export const notificationRouter = express.Router();
@@ -159,6 +161,52 @@ notificationRouter.get(`${BASE}/push/subscriptions`, async (req, res, next) => {
     res.json({ subscriptions });
   } catch (err) {
     next(err);
+  }
+});
+
+// ── Test notifications ───────────────────────────────────────────────
+
+notificationRouter.post(`${BASE}/test-email`, async (req, res, next) => {
+  try {
+    const user = await (await import("../../prisma.js")).prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { email: true },
+    });
+    if (!user?.email) {
+      return res.status(400).json({ error: "No email address on your account" });
+    }
+    const result = await sendEmail({
+      to: user.email,
+      subject: "Squadpitch Test Email",
+      html: `<p>This is a test notification from Squadpitch. Your email notifications are working!</p>`,
+    });
+    if (!result) {
+      return res.status(500).json({ error: "Email provider unavailable — check Postmark configuration" });
+    }
+    res.json({ ok: true, messageId: result.messageId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Test SMS ─────────────────────────────────────────────────────────
+
+notificationRouter.post(`${BASE}/test-sms`, async (req, res, next) => {
+  try {
+    const prefs = await getPreferences(req.user.id);
+    if (!prefs.phoneNumber) {
+      return res.status(400).json({ error: "No phone number configured. Add one in notification settings." });
+    }
+    const result = await sendSms({
+      to: prefs.phoneNumber,
+      body: "Squadpitch: Test SMS — your text notifications are working!",
+    });
+    if (!result) {
+      return res.status(500).json({ error: "SMS provider unavailable — check Twilio configuration" });
+    }
+    res.json({ ok: true, sid: result.sid });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

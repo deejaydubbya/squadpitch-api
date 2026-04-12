@@ -89,3 +89,5 @@ export {
   syncMetrics,
   formatMetrics,
 } from "./postMetrics.service.js";
+
+export { getMetricsSyncStatus } from "./metricsSyncService.js";

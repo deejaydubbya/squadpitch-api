@@ -166,6 +166,9 @@ let mediaGenWorker;
 let videoGenWorker;
 let notificationWorker;
 let weeklyDigestWorker;
+let metricsSyncWorker;
+let recalculateAnalyticsWorker;
+let refreshInsightsWorker;
 
 let server;
 (async () => {
@@ -199,6 +202,21 @@ let server;
         "./workers/weeklyDigestWorker.js"
       );
       weeklyDigestWorker = startWeeklyDigestWorker();
+
+      const { startMetricsSyncWorker } = await import(
+        "./workers/metricsSyncWorker.js"
+      );
+      metricsSyncWorker = startMetricsSyncWorker();
+
+      const { startRecalculateAnalyticsWorker } = await import(
+        "./workers/recalculateAnalyticsWorker.js"
+      );
+      recalculateAnalyticsWorker = startRecalculateAnalyticsWorker();
+
+      const { startRefreshInsightsWorker } = await import(
+        "./workers/refreshInsightsWorker.js"
+      );
+      refreshInsightsWorker = startRefreshInsightsWorker();
     }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
@@ -213,6 +231,9 @@ const shutdown = (sig) => async () => {
   try { if (videoGenWorker) await videoGenWorker.close(); } catch {}
   try { if (notificationWorker) await notificationWorker.close(); } catch {}
   try { if (weeklyDigestWorker) await weeklyDigestWorker.close(); } catch {}
+  try { if (metricsSyncWorker) await metricsSyncWorker.close(); } catch {}
+  try { if (recalculateAnalyticsWorker) await recalculateAnalyticsWorker.close(); } catch {}
+  try { if (refreshInsightsWorker) await refreshInsightsWorker.close(); } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
   } catch {}

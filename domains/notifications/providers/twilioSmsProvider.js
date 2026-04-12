@@ -7,10 +7,18 @@ let twilioClient = null;
 
 async function getTwilio() {
   if (twilioClient) return twilioClient;
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) return null;
-  const twilio = await import("twilio");
-  twilioClient = twilio.default(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
-  return twilioClient;
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
+    console.warn("[TWILIO] Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN");
+    return null;
+  }
+  try {
+    const twilio = await import("twilio");
+    twilioClient = twilio.default(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+    return twilioClient;
+  } catch (err) {
+    console.error(`[TWILIO] Failed to initialize client: ${err.message}`);
+    return null;
+  }
 }
 
 /**

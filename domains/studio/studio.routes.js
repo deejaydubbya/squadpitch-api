@@ -27,9 +27,28 @@ import {
   LinkAssetSchema,
   GeneratePostFromAssetSchema,
   MetricsSummaryQuerySchema,
+  AnalyticsOverviewQuerySchema,
   ChannelParamSchema,
   OAuthCompleteSchema,
+  CreateDataSourceSchema,
+  CreateDataItemSchema,
+  UpdateDataItemSchema,
+  ListDataItemsQuerySchema,
+  ListBlueprintsQuerySchema,
+  ContentOpportunitiesQuerySchema,
+  BulkGenerateSchema,
+  DataPerformanceQuerySchema,
+  AutopilotPreviewSchema,
+  AutopilotExecuteSchema,
 } from "./studio.schemas.js";
+import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
+import * as dataService from "./data.service.js";
+import * as blueprintService from "./blueprint.service.js";
+import * as opportunityService from "./contentOpportunity.service.js";
+import * as dataAnalyticsService from "./dataAnalytics.service.js";
+import { generateInsights } from "./insights.service.js";
+import { generateRecommendations } from "./recommendations.service.js";
+import { previewAutopilot, executeAutopilot } from "./dataAwareAutopilot.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
 import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } from "../billing/billing.service.js";
@@ -226,12 +245,326 @@ studioRouter.put(`${BASE}/clients/:id/channels`, requireClientOwner, async (req,
   }
 });
 
+// ── Business Data ──────────────────────────────────────────────────────
+
+studioRouter.get(
+  `${BASE}/clients/:id/data-sources`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const sources = await dataService.listDataSources(req.params.id);
+      res.json({ dataSources: sources.map(dataService.formatDataSource) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/data-sources`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = CreateDataSourceSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const source = await dataService.createDataSource(req.params.id, parsed.data);
+      res.status(201).json(dataService.formatDataSource(source));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/clients/:id/business-data`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ListDataItemsQuerySchema.safeParse(req.query);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const items = await dataService.listDataItems(req.params.id, parsed.data);
+      res.json({ dataItems: items.map(dataService.formatDataItem) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/business-data`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = CreateDataItemSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const item = await dataService.createDataItem(req.params.id, parsed.data);
+      res.status(201).json(dataService.formatDataItem(item));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(`${BASE}/business-data/:itemId`, async (req, res, next) => {
+  try {
+    const item = await dataService.getDataItem(req.params.itemId);
+    if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
+    res.json(dataService.formatDataItem(item));
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.patch(`${BASE}/business-data/:itemId`, async (req, res, next) => {
+  try {
+    const parsed = UpdateDataItemSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const item = await dataService.updateDataItem(req.params.itemId, parsed.data);
+    res.json(dataService.formatDataItem(item));
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.post(
+  `${BASE}/business-data/:itemId/archive`,
+  async (req, res, next) => {
+    try {
+      const item = await dataService.archiveDataItem(req.params.itemId);
+      res.json(dataService.formatDataItem(item));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.delete(
+  `${BASE}/business-data/:itemId`,
+  async (req, res, next) => {
+    try {
+      await dataService.deleteDataItem(req.params.itemId);
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Content Blueprints ─────────────────────────────────────────────────
+
+studioRouter.get(`${BASE}/content-blueprints`, async (req, res, next) => {
+  try {
+    const parsed = ListBlueprintsQuerySchema.safeParse(req.query);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const blueprints = await blueprintService.listBlueprints(parsed.data);
+    res.json({ blueprints: blueprints.map(blueprintService.formatBlueprint) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.get(`${BASE}/content-blueprints/:id`, async (req, res, next) => {
+  try {
+    const bp = await blueprintService.getBlueprint(req.params.id);
+    if (!bp) return sendError(res, 404, "NOT_FOUND", "Blueprint not found");
+    res.json(blueprintService.formatBlueprint(bp));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Content Opportunities ──────────────────────────────────────────────
+
+studioRouter.get(
+  `${BASE}/clients/:id/content-opportunities`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ContentOpportunitiesQuerySchema.safeParse(req.query);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const opportunities = await opportunityService.getContentOpportunities(
+        req.params.id,
+        parsed.data
+      );
+      res.json({ opportunities });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/business-data/:itemId/opportunities`,
+  async (req, res, next) => {
+    try {
+      const channel = req.query.channel || undefined;
+      const opportunities = await opportunityService.getOpportunitiesForItem(
+        req.params.itemId,
+        { channel }
+      );
+      res.json({ opportunities });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Bulk Generate ──────────────────────────────────────────────────────
+
+studioRouter.post(
+  `${BASE}/clients/:id/business-data/bulk-generate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = BulkGenerateSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const actorSub = getAuth0Sub(req);
+      const results = [];
+
+      for (const item of parsed.data.items) {
+        try {
+          const allowed = await checkUsageLimit(req.user.id, "posts");
+          if (!allowed) {
+            results.push({ dataItemId: item.dataItemId, status: "limit_reached" });
+            continue;
+          }
+
+          const draft = await service.generateDraft({
+            clientId: req.params.id,
+            kind: "POST",
+            channel: item.channel,
+            guidance: item.guidance ?? "",
+            createdBy: actorSub,
+            dataItemId: item.dataItemId,
+            blueprintId: item.blueprintId,
+          });
+
+          await incrementUsage(req.user.id, "posts");
+          results.push({ dataItemId: item.dataItemId, status: "success", draftId: draft.id });
+        } catch {
+          results.push({ dataItemId: item.dataItemId, status: "error" });
+        }
+      }
+
+      res.status(201).json({
+        results,
+        generated: results.filter((r) => r.status === "success").length,
+        total: results.length,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Data Performance ─────────────────────────────────────────────────────
+
+studioRouter.get(
+  `${BASE}/clients/:id/business-data/top-performing`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = DataPerformanceQuerySchema.safeParse(req.query);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const items = await dataAnalyticsService.getTopPerformingDataItems(
+        req.params.id,
+        parsed.data
+      );
+      res.json({ items });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/clients/:id/business-data/best-blueprints`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = DataPerformanceQuerySchema.safeParse(req.query);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const blueprints = await dataAnalyticsService.getBestBlueprints(
+        req.params.id,
+        parsed.data
+      );
+      res.json({ blueprints });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/clients/:id/business-data/best-platform/:dataType`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await dataAnalyticsService.getBestPlatformForDataType(
+        req.params.id,
+        req.params.dataType
+      );
+      res.json({ bestPlatform: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/business-data/recalculate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await dataAnalyticsService.recalculateAllPerformance(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── Analytics ───────────────────────────────────────────────────────────
 
 studioRouter.get(`${BASE}/clients/:id/analytics`, requireClientOwner, async (req, res, next) => {
   try {
     const analytics = await service.getClientAnalytics(req.params.id);
     res.json(analytics);
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.get(`${BASE}/clients/:id/analytics/overview`, requireClientOwner, async (req, res, next) => {
+  try {
+    const parsed = AnalyticsOverviewQuerySchema.safeParse(req.query);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const overview = await getAnalyticsOverview({ clientId: req.params.id, range: parsed.data.range });
+    res.json(overview);
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.get(`${BASE}/clients/:id/analytics/posts/:postId`, requireClientOwner, async (req, res, next) => {
+  try {
+    const detail = await getPostDetail(req.params.id, req.params.postId);
+    if (!detail) return sendError(res, 404, "NOT_FOUND", "Post not found");
+    res.json(detail);
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.get(`${BASE}/clients/:id/analytics/insights`, requireClientOwner, async (req, res, next) => {
+  try {
+    const range = req.query.range || '30d';
+    const [insights, recResult] = await Promise.all([
+      generateInsights({ clientId: req.params.id, range }),
+      generateRecommendations({ clientId: req.params.id, range }),
+    ]);
+    res.json({ insights, recommendations: recResult.recommendations, meta: recResult.meta ?? null });
   } catch (err) {
     next(err);
   }
@@ -249,9 +582,12 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more.");
 
     const actorSub = getAuth0Sub(req);
+    const { dataItemId, blueprintId, ...genData } = parsed.data;
     const draft = await service.generateDraft({
-      ...parsed.data,
+      ...genData,
       createdBy: actorSub,
+      dataItemId,
+      blueprintId,
     });
 
     await incrementUsage(req.user.id, "posts");
@@ -313,6 +649,74 @@ studioRouter.post(`${BASE}/clients/:id/batch-complete`, requireClientOwner, asyn
     next(err);
   }
 });
+
+// ── Autopilot ──────────────────────────────────────────────────────────
+
+studioRouter.post(
+  `${BASE}/clients/:id/autopilot/preview`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = AutopilotPreviewSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await previewAutopilot(req.params.id, parsed.data);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/autopilot/execute`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = AutopilotExecuteSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const actorSub = getAuth0Sub(req);
+      const result = await executeAutopilot(req.params.id, actorSub, {
+        suggestions: parsed.data.suggestions,
+        channel: parsed.data.channel,
+        autoSchedule: parsed.data.autoSchedule,
+        generateDraft: service.generateDraft,
+        scheduleDraft: service.scheduleDraft,
+        checkUsageLimit,
+        incrementUsage,
+        userId: req.user.id,
+      });
+
+      // Fire-and-forget: notification + activity
+      if (result.generated > 0) {
+        enqueueNotification({
+          userId: req.user.id,
+          eventType: "BATCH_COMPLETE",
+          payload: { count: result.generated, clientId: req.params.id, source: "autopilot" },
+          resourceType: "client",
+          resourceId: req.params.id,
+        }).catch(() => {});
+
+        recordActivity({
+          userId: req.user.id,
+          clientId: req.params.id,
+          eventType: "AUTOPILOT_EXECUTED",
+          payload: {
+            generated: result.generated,
+            scheduled: result.scheduled,
+            clientId: req.params.id,
+          },
+          resourceType: "client",
+          resourceId: req.params.id,
+        }).catch(() => {});
+      }
+
+      res.status(201).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // ── Drafts ──────────────────────────────────────────────────────────────
 
@@ -844,6 +1248,19 @@ studioRouter.post(
     try {
       const result = await service.syncMetrics(req.params.id);
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/clients/:id/metrics/sync-status`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const status = await service.getMetricsSyncStatus(req.params.id);
+      res.json(status);
     } catch (err) {
       next(err);
     }

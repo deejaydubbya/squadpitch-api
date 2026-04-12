@@ -1,7 +1,7 @@
-// Slack adapter — wraps the existing SlackConnection system.
+// Slack adapter — reads from the generic Integration table (type = "slack").
 //
-// Queries SlackConnection for the user, checks subscribed events,
-// and enqueues a BullMQ Slack delivery job (same path as today).
+// Config shape: { webhookUrl, channelName?, subscribedEvents? }
+// Checks subscribed events and enqueues a BullMQ Slack delivery job.
 
 import { prisma } from "../../../prisma.js";
 import { getNotificationQueue } from "../../../lib/queues.js";
@@ -11,30 +11,30 @@ export class SlackAdapter extends BaseAdapter {
   name = "slack";
 
   async handleEvent(userId, eventType, payload) {
-    const conn = await prisma.slackConnection.findUnique({
-      where: { userId },
-      select: { id: true, webhookUrl: true, isActive: true, subscribedEvents: true },
+    const integration = await prisma.integration.findFirst({
+      where: { userId, type: "slack", isActive: true },
     });
 
-    if (!conn || !conn.isActive) return [];
+    if (!integration) return [];
 
-    const events = Array.isArray(conn.subscribedEvents) ? conn.subscribedEvents : [];
-    if (!events.includes(eventType)) return [];
+    const config = integration.config ?? {};
+    if (!config.webhookUrl) return [];
+    if (!this.shouldHandle(config, eventType)) return [];
 
     const queue = getNotificationQueue();
     if (!queue) {
-      return [{ integrationId: conn.id, status: "failed", error: "Queue unavailable" }];
+      return [{ integrationId: integration.id, status: "failed", error: "Queue unavailable" }];
     }
 
     try {
       await queue.add("send-notification-slack", {
-        webhookUrl: conn.webhookUrl,
+        webhookUrl: config.webhookUrl,
         eventType,
         payload,
       });
-      return [{ integrationId: conn.id, status: "success" }];
+      return [{ integrationId: integration.id, status: "success" }];
     } catch (err) {
-      return [{ integrationId: conn.id, status: "failed", error: err.message }];
+      return [{ integrationId: integration.id, status: "failed", error: err.message }];
     }
   }
 }

@@ -22,6 +22,7 @@ export class ConvertkitAdapter extends BaseAdapter {
     const results = [];
 
     for (const integration of integrations) {
+      if (!this.shouldHandle(integration.config, eventType)) continue;
       if (!queue) {
         results.push({
           integrationId: integration.id,

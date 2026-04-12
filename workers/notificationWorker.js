@@ -107,14 +107,18 @@ async function processEmailJob({ logId, email, eventType, payload }) {
 
   try {
     const result = await sendEmail({ to: email, subject, html });
+    if (!result) {
+      await markFailed(logId, "Email provider unavailable — check Postmark configuration");
+      return { skipped: true };
+    }
     await prisma.notificationLog.update({
       where: { id: logId },
       data: {
         status: "sent",
-        providerMessageId: result?.messageId ?? null,
+        providerMessageId: result.messageId ?? null,
       },
     });
-    return { sent: true, messageId: result?.messageId };
+    return { sent: true, messageId: result.messageId };
   } catch (err) {
     await markFailed(logId, err?.message ?? "Email send failed");
     throw err; // Re-throw so BullMQ retries transient failures.
@@ -132,14 +136,18 @@ async function processSmsJob({ logId, phoneNumber, eventType, payload }) {
 
   try {
     const result = await sendSms({ to: phoneNumber, body });
+    if (!result) {
+      await markFailed(logId, "SMS provider unavailable — check Twilio configuration");
+      return { skipped: true };
+    }
     await prisma.notificationLog.update({
       where: { id: logId },
       data: {
         status: "sent",
-        providerMessageId: result?.sid ?? null,
+        providerMessageId: result.sid ?? null,
       },
     });
-    return { sent: true, sid: result?.sid };
+    return { sent: true, sid: result.sid };
   } catch (err) {
     await markFailed(logId, err?.message ?? "SMS send failed");
     throw err;

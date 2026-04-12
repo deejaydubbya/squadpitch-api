@@ -157,6 +157,100 @@ export const UpsertChannelSettingsSchema = z.object({
   items: z.array(ChannelSettingsItemSchema).min(1),
 });
 
+// ── Business Data ───────────────────────────────────────────────────────
+
+export const DataItemTypeEnum = z.enum([
+  "TESTIMONIAL",
+  "CASE_STUDY",
+  "PRODUCT_LAUNCH",
+  "PROMOTION",
+  "STATISTIC",
+  "MILESTONE",
+  "FAQ",
+  "TEAM_SPOTLIGHT",
+  "INDUSTRY_NEWS",
+  "EVENT",
+  "CUSTOM",
+]);
+
+export const DataItemStatusEnum = z.enum(["ACTIVE", "ARCHIVED"]);
+
+export const BlueprintCategoryEnum = z.enum([
+  "SOCIAL_PROOF",
+  "EDUCATION",
+  "BEHIND_THE_SCENES",
+  "PROMOTION",
+  "ENGAGEMENT",
+  "STORYTELLING",
+  "AUTHORITY",
+  "SEASONAL",
+]);
+
+export const CreateDataSourceSchema = z.object({
+  name: z.string().min(1).max(120),
+  type: z.enum(["MANUAL"]).default("MANUAL"),
+});
+
+export const CreateDataItemSchema = z.object({
+  dataSourceId: z.string().optional(),
+  type: DataItemTypeEnum,
+  title: z.string().min(1).max(200),
+  summary: z.string().max(2000).nullable().optional(),
+  dataJson: z.record(z.string(), z.any()).default({}),
+  tags: z.array(z.string().max(100)).default([]),
+  priority: z.number().int().min(0).max(10).default(0),
+  expiresAt: z.string().datetime().nullable().optional(),
+});
+
+export const UpdateDataItemSchema = z.object({
+  type: DataItemTypeEnum.optional(),
+  title: z.string().min(1).max(200).optional(),
+  summary: z.string().max(2000).nullable().optional(),
+  dataJson: z.record(z.string(), z.any()).optional(),
+  tags: z.array(z.string().max(100)).optional(),
+  priority: z.number().int().min(0).max(10).optional(),
+  expiresAt: z.string().datetime().nullable().optional(),
+});
+
+export const ListDataItemsQuerySchema = z.object({
+  type: DataItemTypeEnum.optional(),
+  status: DataItemStatusEnum.optional(),
+  search: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+});
+
+export const ListBlueprintsQuerySchema = z.object({
+  category: BlueprintCategoryEnum.optional(),
+  applicableType: DataItemTypeEnum.optional(),
+  channel: ChannelEnum.optional(),
+});
+
+export const ContentOpportunitiesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  channel: ChannelEnum.optional(),
+  type: DataItemTypeEnum.optional(),
+});
+
+export const BulkGenerateSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        dataItemId: z.string().min(1),
+        blueprintId: z.string().min(1),
+        channel: ChannelEnum,
+        guidance: z.string().max(4000).optional(),
+      })
+    )
+    .min(1)
+    .max(20),
+});
+
+// ── Data Performance ────────────────────────────────────────────────────
+
+export const DataPerformanceQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 // ── Generation ──────────────────────────────────────────────────────────
 
 export const GenerateContentSchema = z.object({
@@ -165,6 +259,8 @@ export const GenerateContentSchema = z.object({
   channel: ChannelEnum,
   bucketKey: z.string().max(40).optional(),
   guidance: z.string().min(1).max(4000),
+  dataItemId: z.string().optional(),
+  blueprintId: z.string().optional(),
 });
 
 // ── Draft lifecycle ─────────────────────────────────────────────────────
@@ -269,6 +365,12 @@ export const MetricsSummaryQuerySchema = z.object({
   until: z.string().datetime().optional(),
 });
 
+// ── Analytics overview ────────────────────────────────────────────────
+
+export const AnalyticsOverviewQuerySchema = z.object({
+  range: z.enum(["7d", "30d", "90d", "all"]).default("30d"),
+});
+
 // ── Channel connections / OAuth ─────────────────────────────────────────
 
 export const ChannelParamSchema = z.object({
@@ -278,4 +380,26 @@ export const ChannelParamSchema = z.object({
 export const OAuthCompleteSchema = z.object({
   code: z.string().min(1),
   state: z.string().min(1),
+});
+
+// ── Autopilot ───────────────────────────────────────────────────────────
+
+export const AutopilotPreviewSchema = z.object({
+  count: z.number().int().min(1).max(20).default(5),
+  channel: ChannelEnum.optional(),
+  excludeDataItemIds: z.array(z.string()).default([]),
+});
+
+export const AutopilotExecuteSchema = z.object({
+  channel: ChannelEnum.optional(),
+  autoSchedule: z.boolean().default(false),
+  suggestions: z
+    .array(
+      z.object({
+        dataItem: z.object({ id: z.string().min(1) }),
+        blueprint: z.object({ id: z.string().min(1) }),
+      })
+    )
+    .min(1)
+    .max(20),
 });

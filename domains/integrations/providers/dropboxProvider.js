@@ -99,15 +99,30 @@ async function refreshAccessToken(integrationId, config) {
   });
 
   if (!res.ok) {
-    throw new Error(`Dropbox token refresh failed (${res.status})`);
+    const body = await res.text().catch(() => "");
+    const isPermanent = res.status === 400 || res.status === 401;
+    if (isPermanent) {
+      await prisma.integration.update({
+        where: { id: integrationId },
+        data: { isActive: false },
+      }).catch(() => {});
+      console.error(`[DROPBOX_REFRESH] Permanent failure (${res.status}) integrationId=${integrationId}: ${body.slice(0, 300)}`);
+    }
+    throw new Error(`Dropbox token refresh failed (${res.status}): ${body.slice(0, 300)}`);
   }
 
   const data = await res.json();
   const newAccessToken = encryptToken(data.access_token);
 
+  // Update stored tokens (save new refresh token if returned)
+  const updatedConfig = { ...config, accessToken: newAccessToken };
+  if (data.refresh_token) {
+    updatedConfig.refreshToken = encryptToken(data.refresh_token);
+  }
+
   await prisma.integration.update({
     where: { id: integrationId },
-    data: { config: { ...config, accessToken: newAccessToken } },
+    data: { config: updatedConfig },
   });
 
   return data.access_token;

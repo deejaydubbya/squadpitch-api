@@ -189,6 +189,20 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
       clientId: workingDraft.clientId,
     });
 
+    // Enqueue metrics sync with 5-minute delay
+    import("../metricsSyncService.js")
+      .then(({ enqueuePostPublishSync }) =>
+        enqueuePostPublishSync(draftId)
+      )
+      .catch(() => {});
+
+    // Update data item + blueprint performance stats
+    import("../dataAnalytics.service.js")
+      .then(({ updatePerformanceForDraft }) =>
+        updatePerformanceForDraft(draftId)
+      )
+      .catch(() => {});
+
     return formatDraft(updated);
   } catch (err) {
     // Draft STAYS in APPROVED/SCHEDULED. Record the failure details so the

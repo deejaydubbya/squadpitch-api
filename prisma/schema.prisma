@@ -77,6 +77,40 @@ enum MediaAssetStatus {
   FAILED
 }
 
+enum DataSourceType {
+  MANUAL
+}
+
+enum DataItemStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum DataItemType {
+  TESTIMONIAL
+  CASE_STUDY
+  PRODUCT_LAUNCH
+  PROMOTION
+  STATISTIC
+  MILESTONE
+  FAQ
+  TEAM_SPOTLIGHT
+  INDUSTRY_NEWS
+  EVENT
+  CUSTOM
+}
+
+enum BlueprintCategory {
+  SOCIAL_PROOF
+  EDUCATION
+  BEHIND_THE_SCENES
+  PROMOTION
+  ENGAGEMENT
+  STORYTELLING
+  AUTHORITY
+  SEASONAL
+}
+
 // ── User ───────────────────────────────────────────────────────────────
 
 model User {
@@ -104,15 +138,22 @@ model Client {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  brandProfile    BrandProfile?
-  voiceProfile    VoiceProfile?
-  mediaProfile    MediaProfile?
-  channelSettings ChannelSettings[]
-  drafts          Draft[]
-  moderationLogs  ModerationLog[]
-  connections     ChannelConnection[]
-  mediaAssets     MediaAsset[]
-  postMetrics     PostMetrics[]
+  brandProfile      BrandProfile?
+  voiceProfile      VoiceProfile?
+  mediaProfile      MediaProfile?
+  channelSettings   ChannelSettings[]
+  drafts            Draft[]
+  moderationLogs    ModerationLog[]
+  connections       ChannelConnection[]
+  mediaAssets       MediaAsset[]
+  postMetrics       PostMetrics[]
+  rawMetrics        RawMetric[]
+  normalizedMetrics NormalizedMetric[]
+  postInsights      PostInsight[]
+  workspaceAnalytics WorkspaceAnalytics?
+  analyticsSnapshots AnalyticsSnapshot[]
+  dataSources        WorkspaceDataSource[]
+  dataItems          WorkspaceDataItem[]
 
   @@index([status])
   @@map("clients")
@@ -236,6 +277,10 @@ model Draft {
   mediaAssets          MediaAsset[]
   draftAssets          DraftAsset[]
   metrics              PostMetrics?
+  rawMetric            RawMetric[]
+  normalizedMetric     NormalizedMetric?
+  postInsight          PostInsight?
+  contentSources       GeneratedContentSource[]
 
   @@index([clientId, status])
   @@index([clientId, channel])
@@ -603,4 +648,220 @@ model IntegrationLog {
 
   @@index([integrationId, createdAt])
   @@map("integration_logs")
+}
+
+// ── Analytics ─────────────────────────────────────────────────────────
+
+model RawMetric {
+  id             String   @id @default(cuid())
+  clientId       String
+  draftId        String
+  channel        Channel
+  externalPostId String?
+  dataJson       Json
+  fetchedAt      DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft          Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([draftId])
+  @@map("raw_metrics")
+}
+
+model NormalizedMetric {
+  id                     String   @id @default(cuid())
+  clientId               String
+  draftId                String   @unique
+  channel                Channel
+  impressions            Int?
+  reach                  Int?
+  engagements            Int?
+  clicks                 Int?
+  engagementRate         Float?
+  relativeEngagementRate Float?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  client                 Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft                  Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, channel])
+  @@map("normalized_metrics")
+}
+
+model PostInsight {
+  id                 String   @id @default(cuid())
+  clientId           String
+  draftId            String   @unique
+  performanceScore   Float?
+  contentType        String?
+  hookType           String?
+  sentiment          String?
+  lengthBucket       String?
+  mediaType          String?
+  postingTimeBucket  String?
+  recommendationTags Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  client             Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft              Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@map("post_insights")
+}
+
+// ── Workspace Analytics ──────────────────────────────────────────────
+
+model WorkspaceAnalytics {
+  id                  String   @id @default(cuid())
+  clientId            String   @unique
+  avgEngagementRate   Float?
+  avgPerformanceScore Float?
+  totalPosts          Int      @default(0)
+  totalPublishedPosts Int      @default(0)
+  totalReach          Int      @default(0)
+  totalEngagements    Int      @default(0)
+  topPlatform         String?
+  bestContentType     String?
+  bestMediaType       String?
+  lastCalculatedAt    DateTime @default(now())
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  client              Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("workspace_analytics")
+}
+
+model AnalyticsSnapshot {
+  id                  String   @id @default(cuid())
+  clientId            String
+  snapshotDate        DateTime @db.Date
+  avgPerformanceScore Float?
+  avgEngagementRate   Float?
+  totalPosts          Int      @default(0)
+  totalReach          Int      @default(0)
+  totalEngagements    Int      @default(0)
+  createdAt           DateTime @default(now())
+  client              Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, snapshotDate])
+  @@index([clientId, snapshotDate])
+  @@map("analytics_snapshots")
+}
+
+// ── Business Data ────────────────────────────────────────────────────
+
+model WorkspaceDataSource {
+  id        String         @id @default(cuid())
+  clientId  String
+  type      DataSourceType @default(MANUAL)
+  name      String
+  config    Json?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  client    Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  dataItems WorkspaceDataItem[]
+
+  @@index([clientId])
+  @@map("workspace_data_sources")
+}
+
+model WorkspaceDataItem {
+  id           String         @id @default(cuid())
+  clientId     String
+  dataSourceId String
+  type         DataItemType
+  status       DataItemStatus @default(ACTIVE)
+  title        String
+  summary      String?        @db.Text
+  dataJson     Json
+  tags         String[]
+  priority     Int            @default(0)
+  expiresAt    DateTime?
+  usageCount   Int            @default(0)
+  lastUsedAt   DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  dataSource     WorkspaceDataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  contentSources GeneratedContentSource[]
+  performance    DataItemPerformance?
+
+  @@index([clientId, status])
+  @@index([clientId, type])
+  @@map("workspace_data_items")
+}
+
+model ContentBlueprint {
+  id                String            @id @default(cuid())
+  slug              String            @unique
+  name              String
+  description       String            @db.Text
+  category          BlueprintCategory
+  promptTemplate    String            @db.Text
+  applicableTypes   DataItemType[]
+  applicableChannels Channel[]
+  isActive          Boolean           @default(true)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  contentSources GeneratedContentSource[]
+  performance    BlueprintPerformance?
+
+  @@index([category])
+  @@map("content_blueprints")
+}
+
+model GeneratedContentSource {
+  id          String   @id @default(cuid())
+  draftId     String
+  dataItemId  String
+  blueprintId String
+  createdAt   DateTime @default(now())
+
+  draft     Draft             @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  dataItem  WorkspaceDataItem @relation(fields: [dataItemId], references: [id], onDelete: Cascade)
+  blueprint ContentBlueprint  @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+
+  @@index([draftId])
+  @@index([dataItemId])
+  @@index([blueprintId])
+  @@map("generated_content_sources")
+}
+
+model DataItemPerformance {
+  id             String   @id @default(cuid())
+  dataItemId     String   @unique
+  totalDrafts    Int      @default(0)
+  totalPublished Int      @default(0)
+  avgEngagement        Float?
+  avgPerformanceScore  Float?
+  lastCalculated DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  dataItem WorkspaceDataItem @relation(fields: [dataItemId], references: [id], onDelete: Cascade)
+
+  @@map("data_item_performance")
+}
+
+model BlueprintPerformance {
+  id             String   @id @default(cuid())
+  blueprintId    String   @unique
+  totalDrafts    Int      @default(0)
+  totalPublished Int      @default(0)
+  avgEngagement        Float?
+  avgPerformanceScore  Float?
+  lastCalculated DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  blueprint ContentBlueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+
+  @@map("blueprint_performance")
 }

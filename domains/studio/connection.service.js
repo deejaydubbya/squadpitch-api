@@ -8,6 +8,7 @@
 import { prisma } from "../../prisma.js";
 import { encryptToken, decryptToken } from "../../lib/tokenCrypto.js";
 import { enqueueNotification } from "../notifications/notification.service.js";
+import { ensureValidAccessToken } from "./tokenRefreshService.js";
 
 export async function listConnections(clientId) {
   await checkAndUpdateExpiredConnections(clientId);
@@ -99,26 +100,33 @@ export async function updateConnectionStatus(
 }
 
 /**
- * Batch-expire connections whose tokenExpiresAt has passed.
- * Called at the start of listConnections() to keep status up-to-date.
- * Also fires CONNECTION_EXPIRED notifications for affected users.
+ * Batch-expire connections whose tokenExpiresAt has passed AND have no
+ * refresh token (Meta, LinkedIn). Connections with refresh tokens (YouTube,
+ * X, TikTok) are auto-refreshed at publish time — marking them EXPIRED here
+ * would be a false alarm since their access tokens expire every 1-2 hours
+ * but the refresh token keeps them alive.
  */
 export async function checkAndUpdateExpiredConnections(clientId) {
-  // Find which connections are about to expire before updating
+  // Only expire connections that have NO refresh token — those truly need
+  // re-authentication when the access token expires.
   const expiring = await prisma.channelConnection.findMany({
     where: {
       clientId,
       status: "CONNECTED",
       tokenExpiresAt: { lt: new Date() },
+      refreshToken: null,
     },
     select: { channel: true, createdBy: true },
   });
+
+  if (!expiring.length) return { count: 0 };
 
   const result = await prisma.channelConnection.updateMany({
     where: {
       clientId,
       status: "CONNECTED",
       tokenExpiresAt: { lt: new Date() },
+      refreshToken: null,
     },
     data: { status: "EXPIRED" },
   });
@@ -149,13 +157,22 @@ export async function checkAndUpdateExpiredConnections(clientId) {
  * making a lightweight Graph API call to verify the token works.
  */
 export async function validateConnection(clientId, channel) {
-  const conn = await getConnectionForAdapter(clientId, channel);
+  let conn = await getConnectionForAdapter(clientId, channel);
   if (!conn) return { valid: false, status: "NOT_FOUND", error: "Connection not found" };
 
-  // Check token expiry by date first.
+  // Check token expiry — attempt refresh if a refresh token exists.
   if (conn.tokenExpiresAt && new Date(conn.tokenExpiresAt) < new Date()) {
-    await updateConnectionStatus(clientId, channel, { status: "EXPIRED" });
-    return { valid: false, status: "EXPIRED" };
+    if (conn.refreshToken) {
+      try {
+        conn = await ensureValidAccessToken(conn);
+      } catch {
+        // Refresh failed — connection is now NEEDS_RECONNECT (set by tokenRefreshService)
+        return { valid: false, status: "NEEDS_RECONNECT", error: "Token refresh failed — please reconnect" };
+      }
+    } else {
+      await updateConnectionStatus(clientId, channel, { status: "EXPIRED" });
+      return { valid: false, status: "EXPIRED" };
+    }
   }
 
   // Channel-specific live validation endpoints.

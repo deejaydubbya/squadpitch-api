@@ -180,11 +180,107 @@ IMPORTANT — avoid these generic patterns:
 }
 
 /**
+ * Format a business data item for injection into the user prompt.
+ * Extracts type-specific fields from dataJson for clarity.
+ */
+export function formatBusinessDataForPrompt(dataItem) {
+  if (!dataItem) return "";
+  const lines = [];
+  lines.push(`\n--- BUSINESS DATA ---`);
+  lines.push(`Type: ${dataItem.type}`);
+  lines.push(`Title: ${dataItem.title}`);
+  if (dataItem.summary) lines.push(`Summary: ${dataItem.summary}`);
+
+  const d = dataItem.dataJson ?? {};
+  switch (dataItem.type) {
+    case "TESTIMONIAL":
+      if (d.quote) lines.push(`Quote: "${d.quote}"`);
+      if (d.author) lines.push(`Author: ${d.author}`);
+      if (d.role) lines.push(`Role: ${d.role}`);
+      if (d.result) lines.push(`Result: ${d.result}`);
+      break;
+    case "STATISTIC":
+      if (d.metric) lines.push(`Metric: ${d.metric}`);
+      if (d.value) lines.push(`Value: ${d.value}`);
+      if (d.context) lines.push(`Context: ${d.context}`);
+      break;
+    case "CASE_STUDY":
+      if (d.client) lines.push(`Client: ${d.client}`);
+      if (d.challenge) lines.push(`Challenge: ${d.challenge}`);
+      if (d.solution) lines.push(`Solution: ${d.solution}`);
+      if (d.result) lines.push(`Result: ${d.result}`);
+      break;
+    case "PRODUCT_LAUNCH":
+      if (d.productName) lines.push(`Product: ${d.productName}`);
+      if (d.launchDate) lines.push(`Launch date: ${d.launchDate}`);
+      if (d.features) lines.push(`Key features: ${d.features}`);
+      if (d.pricing) lines.push(`Pricing: ${d.pricing}`);
+      break;
+    case "PROMOTION":
+      if (d.offer) lines.push(`Offer: ${d.offer}`);
+      if (d.deadline) lines.push(`Deadline: ${d.deadline}`);
+      if (d.code) lines.push(`Code: ${d.code}`);
+      if (d.terms) lines.push(`Terms: ${d.terms}`);
+      break;
+    case "TEAM_SPOTLIGHT":
+      if (d.name) lines.push(`Name: ${d.name}`);
+      if (d.role) lines.push(`Role: ${d.role}`);
+      if (d.funFact) lines.push(`Fun fact: ${d.funFact}`);
+      if (d.bio) lines.push(`Bio: ${d.bio}`);
+      break;
+    case "FAQ":
+      if (d.question) lines.push(`Question: ${d.question}`);
+      if (d.answer) lines.push(`Answer: ${d.answer}`);
+      break;
+    case "MILESTONE":
+      if (d.achievement) lines.push(`Achievement: ${d.achievement}`);
+      if (d.date) lines.push(`Date: ${d.date}`);
+      if (d.significance) lines.push(`Significance: ${d.significance}`);
+      break;
+    case "EVENT":
+      if (d.eventName) lines.push(`Event: ${d.eventName}`);
+      if (d.date) lines.push(`Date: ${d.date}`);
+      if (d.location) lines.push(`Location: ${d.location}`);
+      if (d.details) lines.push(`Details: ${d.details}`);
+      break;
+    case "INDUSTRY_NEWS":
+      if (d.headline) lines.push(`Headline: ${d.headline}`);
+      if (d.source) lines.push(`Source: ${d.source}`);
+      if (d.takeaway) lines.push(`Takeaway: ${d.takeaway}`);
+      break;
+    default:
+      // CUSTOM or any other — dump all keys
+      for (const [k, v] of Object.entries(d)) {
+        if (v) lines.push(`${k}: ${v}`);
+      }
+  }
+
+  if (dataItem.tags?.length > 0) {
+    lines.push(`Tags: ${dataItem.tags.join(", ")}`);
+  }
+  lines.push(`--- END BUSINESS DATA ---`);
+  return lines.join("\n");
+}
+
+/**
+ * Format a content blueprint angle for injection into the user prompt.
+ */
+export function formatBlueprintForPrompt(blueprint) {
+  if (!blueprint) return "";
+  const lines = [];
+  lines.push(`\n--- CONTENT ANGLE ---`);
+  lines.push(`Blueprint: ${blueprint.name} (${blueprint.category})`);
+  lines.push(`Angle: ${blueprint.promptTemplate}`);
+  lines.push(`--- END CONTENT ANGLE ---`);
+  return lines.join("\n");
+}
+
+/**
  * Build the user prompt. The user prompt encodes WHAT we are asking the
  * system to produce right now — the kind of content, the channel, any
  * matched content bucket template, and the operator's guidance.
  */
-export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance }) {
+export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, dataItem, blueprint }) {
   const { contentBuckets, channelSettings } = ctx;
   const lines = [];
 
@@ -221,6 +317,16 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance }) {
     if (bucket.template) {
       lines.push(`Bucket template / angle:\n${bucket.template}`);
     }
+  }
+
+  // Business data injection
+  if (dataItem) {
+    lines.push(formatBusinessDataForPrompt(dataItem));
+  }
+
+  // Blueprint angle injection
+  if (blueprint) {
+    lines.push(formatBlueprintForPrompt(blueprint));
   }
 
   if (guidance && guidance.trim().length > 0) {

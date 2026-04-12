@@ -21,9 +21,27 @@
  * @property {(userId: string, eventType: string, payload: object) => Promise<AdapterResult[]>} handleEvent
  */
 
+const ALL_EVENTS = ["POST_PUBLISHED", "POST_FAILED", "BATCH_COMPLETE", "CONNECTION_EXPIRED"];
+
 export class BaseAdapter {
   /** @type {string} */
   name = "base";
+
+  /**
+   * Check whether an integration should handle this event type
+   * based on its subscribedEvents config. Always allows "TEST" through.
+   *
+   * @param {object} config — integration config JSON
+   * @param {string} eventType
+   * @returns {boolean}
+   */
+  shouldHandle(config, eventType) {
+    if (eventType === "TEST") return true;
+    const events = Array.isArray(config?.subscribedEvents)
+      ? config.subscribedEvents
+      : ALL_EVENTS;
+    return events.includes(eventType);
+  }
 
   /**
    * Dispatch an event for all active instances of this integration type.

@@ -16,6 +16,7 @@ import {
   OpenAIProviderError,
 } from "./openai.provider.js";
 import { formatDraft } from "../draft.service.js";
+import { incrementDataItemUsage } from "../data.service.js";
 
 /**
  * Persist a FAILED draft row when generation fails so operators see the
@@ -117,8 +118,35 @@ export async function generateDraft({
   bucketKey,
   guidance,
   createdBy,
+  dataItemId,
+  blueprintId,
 }) {
   const ctx = await loadClientGenerationContext(clientId);
+
+  // Load optional business data + blueprint
+  const dataItem = dataItemId
+    ? await prisma.workspaceDataItem.findUnique({ where: { id: dataItemId } })
+    : null;
+
+  // Auto-select best blueprint if data item provided but no blueprint specified
+  let resolvedBlueprintId = blueprintId;
+  let autoSelectedSlug = null;
+  if (dataItemId && !blueprintId) {
+    try {
+      const { getSmartBlueprintForItem } = await import("../dataAnalytics.service.js");
+      const best = await getSmartBlueprintForItem(dataItemId, clientId, { channel });
+      if (best) {
+        resolvedBlueprintId = best.id;
+        autoSelectedSlug = best.slug;
+      }
+    } catch {
+      // Smart selection unavailable — proceed without blueprint
+    }
+  }
+
+  const blueprint = resolvedBlueprintId
+    ? await prisma.contentBlueprint.findUnique({ where: { id: resolvedBlueprintId } })
+    : null;
 
   const systemPrompt = buildSystemPrompt(ctx);
   const userPrompt = buildUserPrompt(ctx, {
@@ -126,6 +154,8 @@ export async function generateDraft({
     channel,
     bucketKey,
     guidance,
+    dataItem,
+    blueprint,
   });
   const responseFormat = buildResponseFormat();
 
@@ -171,10 +201,22 @@ export async function generateDraft({
       variations: content.variations.length > 0 ? content.variations : null,
       altText: content.altText,
       imageGuidance: content.imageGuidance,
-      warnings: [],
+      warnings: autoSelectedSlug ? [`auto_blueprint: ${autoSelectedSlug}`] : [],
       createdBy,
     },
   });
+
+  // Record provenance + update usage if data-aware generation
+  if (dataItem && blueprint) {
+    await prisma.generatedContentSource.create({
+      data: {
+        draftId: draft.id,
+        dataItemId: dataItem.id,
+        blueprintId: blueprint.id,
+      },
+    });
+    incrementDataItemUsage(dataItem.id).catch(() => {});
+  }
 
   return formatDraft(draft);
 }
