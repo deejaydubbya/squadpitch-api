@@ -403,3 +403,71 @@ export const AutopilotExecuteSchema = z.object({
     .min(1)
     .max(20),
 });
+
+// ── Data Import ──────────────────────────────────────────────────────────
+
+export const DataSourceTypeEnum = z.enum([
+  "URL",
+  "CSV",
+  "TEXT",
+  "GOOGLE_SHEETS",
+  "NOTION",
+]);
+
+export const ImportFromUrlSchema = z.object({
+  url: z.string().url().max(2000),
+  hint: z.string().max(500).optional(),
+});
+
+export const ImportFromTextSchema = z.object({
+  text: z.string().min(10).max(100000),
+  hint: z.string().max(500).optional(),
+});
+
+export const ImportCSVPreviewSchema = z.object({
+  csvContent: z.string().min(5).max(5000000),
+});
+
+export const ImportCSVExtractSchema = z.object({
+  csvContent: z.string().min(5).max(5000000),
+  columnMapping: z.object({
+    title: z.string().optional(),
+    summary: z.string().optional(),
+    type: z.string().optional(),
+    tags: z.string().optional(),
+    priority: z.string().optional(),
+    dataJsonFields: z.array(z.string()).optional(),
+  }),
+  defaultType: DataItemTypeEnum.optional(),
+});
+
+export const ImportFromSheetsSchema = z.object({
+  integrationId: z.string().min(1),
+  spreadsheetId: z.string().min(1),
+  sheetName: z.string().optional(),
+  hint: z.string().max(500).optional(),
+});
+
+export const ImportFromNotionSchema = z.object({
+  integrationId: z.string().min(1),
+  hint: z.string().max(500).optional(),
+});
+
+export const ConfirmImportSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        type: DataItemTypeEnum,
+        title: z.string().min(1).max(200),
+        summary: z.string().max(2000).nullable().optional(),
+        dataJson: z.record(z.string(), z.any()).optional(),
+        tags: z.array(z.string().max(100)).optional(),
+        priority: z.number().int().min(0).max(10).optional(),
+        expiresAt: z.string().datetime().nullable().optional(),
+      })
+    )
+    .min(1)
+    .max(100),
+  sourceType: DataSourceTypeEnum,
+  sourceUrl: z.string().url().optional(),
+});

@@ -250,6 +250,52 @@ export async function appendSheetRow(integrationId, config, eventType, payload) 
 }
 
 /**
+ * Read all rows from a Google Sheet.
+ *
+ * @param {string} integrationId
+ * @param {string} spreadsheetId
+ * @param {string} [sheetName="Sheet1"]
+ * @returns {Promise<{ headers: string[], rows: string[][], rowCount: number }>}
+ */
+export async function readSheetRows(integrationId, spreadsheetId, sheetName = "Sheet1") {
+  if (!spreadsheetId) {
+    throw new Error("spreadsheetId is required");
+  }
+
+  // Load integration config for token refresh
+  const integration = await prisma.integration.findUnique({
+    where: { id: integrationId },
+    select: { config: true },
+  });
+  if (!integration) throw new Error("Integration not found");
+
+  const accessToken = await getAccessToken(integrationId, integration.config);
+  const range = encodeURIComponent(sheetName);
+
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}/values/${range}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Sheets API error (${res.status}): ${text.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  const values = data.values || [];
+
+  if (values.length === 0) {
+    return { headers: [], rows: [], rowCount: 0 };
+  }
+
+  const headers = values[0];
+  const rows = values.slice(1);
+
+  return { headers, rows, rowCount: rows.length };
+}
+
+/**
  * Validate a Sheets config by reading spreadsheet metadata.
  */
 export async function validateSheetsConfig(integrationId, config) {

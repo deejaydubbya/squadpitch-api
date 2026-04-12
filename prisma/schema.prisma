@@ -79,6 +79,11 @@ enum MediaAssetStatus {
 
 enum DataSourceType {
   MANUAL
+  URL
+  CSV
+  TEXT
+  GOOGLE_SHEETS
+  NOTION
 }
 
 enum DataItemStatus {

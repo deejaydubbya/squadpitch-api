@@ -40,6 +40,13 @@ import {
   DataPerformanceQuerySchema,
   AutopilotPreviewSchema,
   AutopilotExecuteSchema,
+  ImportFromUrlSchema,
+  ImportFromTextSchema,
+  ImportCSVPreviewSchema,
+  ImportCSVExtractSchema,
+  ImportFromSheetsSchema,
+  ImportFromNotionSchema,
+  ConfirmImportSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import * as dataService from "./data.service.js";
@@ -50,10 +57,12 @@ import { generateInsights } from "./insights.service.js";
 import { generateRecommendations } from "./recommendations.service.js";
 import { previewAutopilot, executeAutopilot } from "./dataAwareAutopilot.service.js";
 import { getDashboardRecommendations, getDashboardActions } from "./dashboard.service.js";
+import { getUnusedData, getDataSuggestions } from "./dataUsage.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
 import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } from "../billing/billing.service.js";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
+import * as importService from "./dataImport.service.js";
 
 export const studioRouter = express.Router();
 
@@ -521,6 +530,161 @@ studioRouter.post(
       const result = await dataAnalyticsService.recalculateAllPerformance(req.params.id);
       res.json(result);
     } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Data Usage & Suggestions ─────────────────────────────────────────
+
+studioRouter.get(
+  `${BASE}/clients/:id/business-data/unused`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await getUnusedData(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/clients/:id/business-data/suggestions`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await getDataSuggestions(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Data Import ──────────────────────────────────────────────────────
+
+studioRouter.post(
+  `${BASE}/clients/:id/data-import/url`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ImportFromUrlSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await importService.extractFromUrl(parsed.data.url, { hint: parsed.data.hint });
+      res.json(result);
+    } catch (err) {
+      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/data-import/text`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ImportFromTextSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await importService.extractFromText(parsed.data.text, { hint: parsed.data.hint });
+      res.json(result);
+    } catch (err) {
+      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/data-import/csv/preview`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ImportCSVPreviewSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = importService.previewCSV(parsed.data.csvContent);
+      res.json(result);
+    } catch (err) {
+      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/data-import/csv/extract`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ImportCSVExtractSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = importService.extractFromCSV(parsed.data.csvContent, {
+        columnMapping: parsed.data.columnMapping,
+        defaultType: parsed.data.defaultType,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/data-import/sheets`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ImportFromSheetsSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await importService.extractFromGoogleSheets(parsed.data.integrationId, {
+        spreadsheetId: parsed.data.spreadsheetId,
+        sheetName: parsed.data.sheetName,
+        hint: parsed.data.hint,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/data-import/notion`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ImportFromNotionSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await importService.extractFromNotion(parsed.data.integrationId, {
+        hint: parsed.data.hint,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/clients/:id/data-import/confirm`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ConfirmImportSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await importService.saveImportedItems(req.params.id, {
+        items: parsed.data.items,
+        sourceType: parsed.data.sourceType,
+        sourceUrl: parsed.data.sourceUrl,
+      });
+      res.status(201).json(result);
+    } catch (err) {
+      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
       next(err);
     }
   }

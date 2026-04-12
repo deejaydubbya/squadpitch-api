@@ -103,6 +103,92 @@ export async function createNotionPage(config, eventType, payload) {
 }
 
 /**
+ * Read pages from a Notion database, extracting property values.
+ *
+ * @param {{ apiKey: string, databaseId: string }} config
+ * @param {{ limit?: number }} opts
+ * @returns {Promise<{ pages: Record<string, string>[], pageCount: number }>}
+ */
+export async function readNotionPages(config, { limit = 100 } = {}) {
+  const { apiKey, databaseId } = config;
+
+  if (!databaseId) {
+    throw new Error("Notion integration missing databaseId");
+  }
+
+  const res = await fetch(`${NOTION_API}/databases/${databaseId}/query`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Notion-Version": NOTION_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ page_size: Math.min(limit, 100) }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Notion API error (${res.status}): ${text.slice(0, 500)}`);
+  }
+
+  const data = await res.json();
+  const results = data.results || [];
+
+  const pages = results.map((page) => {
+    const props = page.properties || {};
+    const extracted = {};
+
+    for (const [key, prop] of Object.entries(props)) {
+      extracted[key] = extractNotionPropertyValue(prop);
+    }
+
+    return extracted;
+  });
+
+  return { pages, pageCount: pages.length };
+}
+
+/**
+ * Extract a plain-text value from a Notion property object.
+ */
+function extractNotionPropertyValue(prop) {
+  if (!prop) return "";
+  switch (prop.type) {
+    case "title":
+      return (prop.title || []).map((t) => t.plain_text || "").join("");
+    case "rich_text":
+      return (prop.rich_text || []).map((t) => t.plain_text || "").join("");
+    case "number":
+      return prop.number != null ? String(prop.number) : "";
+    case "select":
+      return prop.select?.name || "";
+    case "multi_select":
+      return (prop.multi_select || []).map((s) => s.name).join(", ");
+    case "date":
+      return prop.date?.start || "";
+    case "checkbox":
+      return prop.checkbox ? "true" : "false";
+    case "url":
+      return prop.url || "";
+    case "email":
+      return prop.email || "";
+    case "phone_number":
+      return prop.phone_number || "";
+    case "formula":
+      return prop.formula?.string || prop.formula?.number?.toString() || "";
+    case "rollup":
+      return prop.rollup?.number?.toString() || "";
+    case "people":
+      return (prop.people || []).map((p) => p.name || "").join(", ");
+    case "status":
+      return prop.status?.name || "";
+    default:
+      return "";
+  }
+}
+
+/**
  * Validate a Notion config by querying the database.
  */
 export async function validateNotionConfig(config) {
