@@ -21,12 +21,20 @@ const CONTENT_BASE = "https://content.dropboxapi.com/2";
 /**
  * Build the OAuth2 authorization URL for Dropbox.
  */
+const DROPBOX_SCOPES = [
+  "files.metadata.read",
+  "files.content.read",
+  "files.content.write",
+  "account_info.read",
+].join(" ");
+
 export function getAuthUrl(state) {
   const params = new URLSearchParams({
     client_id: env.DROPBOX_APP_KEY,
     redirect_uri: env.DROPBOX_REDIRECT_URI,
     response_type: "code",
     token_access_type: "offline",
+    scope: DROPBOX_SCOPES,
     state,
   });
   return `https://www.dropbox.com/oauth2/authorize?${params}`;
