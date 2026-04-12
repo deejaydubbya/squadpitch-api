@@ -2,7 +2,7 @@
 //
 // Extracts text from PDF, DOCX, TXT, and CSV files.
 
-import pdf from "pdf-parse/lib/pdf-parse.js";
+import pdf from "pdf-parse";
 import mammoth from "mammoth";
 
 const SUPPORTED_TYPES = new Map([
