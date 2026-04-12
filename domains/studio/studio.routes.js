@@ -24,6 +24,8 @@ import {
   GenerateMediaSchema,
   GenerateVideoSchema,
   AttachAssetSchema,
+  LinkAssetSchema,
+  GeneratePostFromAssetSchema,
   MetricsSummaryQuerySchema,
   ChannelParamSchema,
   OAuthCompleteSchema,
@@ -708,6 +710,96 @@ studioRouter.post(
     try {
       const asset = await service.detachAssetFromDraft(req.params.assetId);
       res.json(service.formatAsset(asset));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Asset link / unlink (many-to-many) ──────────────────────────────────
+
+studioRouter.post(
+  `${BASE}/assets/:assetId/link`,
+  async (req, res, next) => {
+    try {
+      const parsed = LinkAssetSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const { draftId, role, orderIndex } = parsed.data;
+      await service.linkAssetToDraft(req.params.assetId, draftId, role, orderIndex);
+      const asset = await service.getAsset(req.params.assetId);
+      res.json(service.formatAsset(asset));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.delete(
+  `${BASE}/assets/:assetId/link/:draftId`,
+  async (req, res, next) => {
+    try {
+      await service.unlinkAssetFromDraft(req.params.assetId, req.params.draftId);
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/assets/:assetId/usage`,
+  async (req, res, next) => {
+    try {
+      const rows = await service.getAssetUsage(req.params.assetId);
+      const drafts = rows.map((r) => ({
+        id: r.draft.id,
+        channel: r.draft.channel,
+        bodySnippet: r.draft.body?.slice(0, 80) ?? "",
+        status: r.draft.status,
+        role: r.role,
+      }));
+      res.json({ drafts });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/assets/:assetId/generate-post`,
+  async (req, res, next) => {
+    try {
+      const parsed = GeneratePostFromAssetSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const asset = await service.getAsset(req.params.assetId);
+      if (!asset) return sendError(res, 404, "NOT_FOUND", "Asset not found");
+
+      // Usage limit check
+      const allowed = await checkUsageLimit(req.user.id, "posts");
+      if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more.");
+
+      // Build guidance from the asset's context
+      const context = asset.renderedPrompt || asset.caption || asset.filename || "image";
+      const guidance = parsed.data.guidance
+        ? `${parsed.data.guidance}\n\nAsset context: ${context}`
+        : `Write a social media post inspired by this visual: ${context}`;
+
+      const actorSub = getAuth0Sub(req);
+      const draft = await service.generateDraft({
+        clientId: asset.clientId,
+        kind: parsed.data.kind,
+        channel: parsed.data.channel,
+        guidance,
+        createdBy: actorSub,
+      });
+
+      await incrementUsage(req.user.id, "posts");
+
+      // Auto-link the asset to the new draft
+      await service.linkAssetToDraft(asset.id, draft.id, "primary");
+
+      res.status(201).json(draft);
     } catch (err) {
       next(err);
     }

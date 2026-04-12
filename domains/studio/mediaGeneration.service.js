@@ -19,6 +19,7 @@ export async function listAssets({
   status,
   draftId,
   assetType,
+  search,
   limit = 50,
   cursor,
 }) {
@@ -27,9 +28,17 @@ export async function listAssets({
   if (status) where.status = status;
   if (draftId) where.draftId = draftId;
   if (assetType) where.assetType = assetType;
+  if (search) {
+    where.OR = [
+      { renderedPrompt: { contains: search, mode: "insensitive" } },
+      { filename: { contains: search, mode: "insensitive" } },
+      { caption: { contains: search, mode: "insensitive" } },
+    ];
+  }
 
   return prisma.mediaAsset.findMany({
     where,
+    include: { _count: { select: { draftAssets: true } } },
     orderBy: { createdAt: "desc" },
     take: limit,
     ...(cursor && { skip: 1, cursor: { id: cursor } }),
@@ -316,6 +325,61 @@ export function resolveModelConfig(mediaProfile) {
   };
 }
 
+// ── Link / Unlink (many-to-many via DraftAsset) ─────────────────────────
+
+export async function linkAssetToDraft(assetId, draftId, role, orderIndex) {
+  const draftAsset = await prisma.draftAsset.upsert({
+    where: { draftId_assetId: { draftId, assetId } },
+    update: { role: role ?? null, orderIndex: orderIndex ?? 0 },
+    create: { draftId, assetId, role: role ?? null, orderIndex: orderIndex ?? 0 },
+  });
+
+  // Also set the draft's primary media if it has none.
+  const asset = await prisma.mediaAsset.findUnique({
+    where: { id: assetId },
+    select: { url: true, assetType: true },
+  });
+  if (asset?.url) {
+    await maybeSetDraftMedia(draftId, asset.url, asset.assetType || "image");
+  }
+
+  return draftAsset;
+}
+
+export async function unlinkAssetFromDraft(assetId, draftId) {
+  await prisma.draftAsset.deleteMany({
+    where: { draftId, assetId },
+  });
+
+  // Backward compat: if the asset's old FK matches, clear it.
+  const asset = await prisma.mediaAsset.findUnique({
+    where: { id: assetId },
+    select: { draftId: true },
+  });
+  if (asset?.draftId === draftId) {
+    await prisma.mediaAsset.update({
+      where: { id: assetId },
+      data: { draftId: null },
+    });
+  }
+}
+
+export async function getAssetUsageCount(assetId) {
+  return prisma.draftAsset.count({ where: { assetId } });
+}
+
+export async function getAssetUsage(assetId) {
+  return prisma.draftAsset.findMany({
+    where: { assetId },
+    include: {
+      draft: {
+        select: { id: true, channel: true, body: true, status: true },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
 // ── Format ──────────────────────────────────────────────────────────────
 
 export function formatAsset(asset) {
@@ -346,6 +410,7 @@ export function formatAsset(asset) {
     externalJobId: asset.externalJobId,
     durationMs: asset.durationMs,
     errorMessage: asset.errorMessage,
+    usageCount: asset._count?.draftAssets ?? 0,
     createdBy: asset.createdBy,
     createdAt: asset.createdAt,
     updatedAt: asset.updatedAt,

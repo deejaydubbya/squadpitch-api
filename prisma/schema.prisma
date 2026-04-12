@@ -234,6 +234,7 @@ model Draft {
   client               Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
   moderationLogs       ModerationLog[]
   mediaAssets          MediaAsset[]
+  draftAssets          DraftAsset[]
   metrics              PostMetrics?
 
   @@index([clientId, status])
@@ -330,11 +331,30 @@ model MediaAsset {
   updatedAt         DateTime         @updatedAt
 
   client            Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draftAssets       DraftAsset[]
 
   @@index([clientId, status])
   @@index([clientId, source])
   @@index([draftId])
   @@map("media_assets")
+}
+
+// ── Draft-Asset Join Table ────────────────────────────────────────────
+
+model DraftAsset {
+  id         String   @id @default(cuid())
+  draftId    String
+  assetId    String
+  role       String?  // "primary", "thumbnail", or null
+  orderIndex Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  draft      Draft      @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  asset      MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, assetId])
+  @@index([assetId])
+  @@map("draft_assets")
 }
 
 // ── Subscription ──────────────────────────────────────────────────────

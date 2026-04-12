@@ -216,6 +216,7 @@ export const ListAssetsQuerySchema = z.object({
   status: MediaAssetStatusEnum.optional(),
   assetType: z.enum(["image", "video"]).optional(),
   draftId: z.string().optional(),
+  search: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().optional(),
 });
@@ -246,6 +247,18 @@ export const GenerateVideoSchema = z.object({
 export const AttachAssetSchema = z.object({
   draftId: z.string().min(1),
   displayOrder: z.number().int().min(0).optional(),
+});
+
+export const LinkAssetSchema = z.object({
+  draftId: z.string().min(1),
+  role: z.enum(["primary", "thumbnail"]).optional(),
+  orderIndex: z.number().int().min(0).optional(),
+});
+
+export const GeneratePostFromAssetSchema = z.object({
+  kind: DraftKindEnum.default("POST"),
+  channel: ChannelEnum,
+  guidance: z.string().max(4000).optional(),
 });
 
 // ── Post metrics ───────────────────────────────────────────────────────

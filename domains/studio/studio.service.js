@@ -73,6 +73,10 @@ export {
   deleteAsset,
   attachAssetToDraft,
   detachAssetFromDraft,
+  linkAssetToDraft,
+  unlinkAssetFromDraft,
+  getAssetUsageCount,
+  getAssetUsage,
   enqueueGeneration,
   formatAsset,
 } from "./mediaGeneration.service.js";
