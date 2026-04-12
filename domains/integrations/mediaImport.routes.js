@@ -149,6 +149,31 @@ mediaImportRouter.post(`${BASE}/callback`, async (req, res, next) => {
   }
 });
 
+// ── Google Sheets: list spreadsheets ─────────────────────────────────
+
+/**
+ * GET /api/v1/integrations/media-import/:integrationId/spreadsheets
+ * Returns list of spreadsheets accessible by the connected Google account.
+ */
+mediaImportRouter.get(`${BASE}/:integrationId/spreadsheets`, async (req, res, next) => {
+  try {
+    const { integrationId } = req.params;
+
+    const integration = await prisma.integration.findFirst({
+      where: { id: integrationId, userId: req.user.id, type: "google_sheets" },
+    });
+
+    if (!integration) {
+      return res.status(404).json({ error: "Google Sheets integration not found" });
+    }
+
+    const spreadsheets = await sheetsProvider.listSpreadsheets(integration.id, integration.config);
+    res.json({ spreadsheets });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── File browsing ────────────────────────────────────────────────────
 
 /**

@@ -17,8 +17,9 @@ import { encryptToken, decryptToken } from "../../../lib/tokenCrypto.js";
 import { prisma } from "../../../prisma.js";
 
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
+const DRIVE_API = "https://www.googleapis.com/drive/v3";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
+const SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.metadata.readonly";
 
 /**
  * Build the OAuth2 authorization URL for Google Sheets.
@@ -128,6 +129,37 @@ async function getAccessToken(integrationId, config) {
   }
 
   return refreshAccessToken(integrationId, config);
+}
+
+/**
+ * List spreadsheets accessible by the authenticated user.
+ */
+export async function listSpreadsheets(integrationId, config) {
+  const token = await getAccessToken(integrationId, config);
+
+  const params = new URLSearchParams({
+    q: "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+    fields: "files(id,name,modifiedTime)",
+    orderBy: "modifiedTime desc",
+    pageSize: "50",
+  });
+
+  const res = await fetch(`${DRIVE_API}/files?${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Drive list spreadsheets failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  return (data.files || []).map((f) => ({
+    id: f.id,
+    name: f.name,
+    modifiedAt: f.modifiedTime,
+  }));
 }
 
 /**
