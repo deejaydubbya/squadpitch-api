@@ -7,12 +7,8 @@
 // YouTube only supports video uploads via the API — text-only or image-only
 // posts are not possible, so we reject those early in validation.
 //
-// Google access tokens expire after 1 hour, so we auto-refresh using the
-// stored refresh token before each publish attempt.
-
-import { env } from "../../../../config/env.js";
-import { prisma } from "../../../../prisma.js";
-import { encryptToken } from "../../../../lib/tokenCrypto.js";
+// Token refresh is handled by the centralized tokenRefreshService before
+// the adapter is called — the adapter receives an already-valid token.
 
 const YT_TITLE_MAX = 100;
 const YT_DESCRIPTION_MAX = 5000;
@@ -25,60 +21,6 @@ class YouTubePublishError extends Error {
     this.code = code ?? "YOUTUBE_PUBLISH_FAILED";
     this.youtubeError = youtubeError ?? null;
   }
-}
-
-/**
- * Refresh a Google access token using the stored refresh token.
- * Updates the encrypted token in DB and returns the new plaintext access token.
- */
-async function ensureFreshToken(connection) {
-  // If token is still valid (with 60s buffer), use it as-is
-  if (
-    connection.tokenExpiresAt &&
-    new Date(connection.tokenExpiresAt) > new Date(Date.now() + 60_000)
-  ) {
-    return connection.accessToken;
-  }
-
-  if (!connection.refreshToken) {
-    throw new YouTubePublishError(
-      "YouTube connection has no refresh token — user must re-authenticate",
-      { status: 401, code: "YOUTUBE_NO_REFRESH_TOKEN" }
-    );
-  }
-
-  const resp = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: env.YOUTUBE_CLIENT_ID,
-      client_secret: env.YOUTUBE_CLIENT_SECRET,
-      refresh_token: connection.refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) {
-    throw new YouTubePublishError(
-      data?.error_description ?? "YouTube token refresh failed",
-      { status: 401, code: "YOUTUBE_TOKEN_REFRESH_FAILED", youtubeError: data }
-    );
-  }
-
-  const newAccessToken = data.access_token;
-  const expiresIn = Number(data.expires_in) || 3600;
-  const tokenExpiresAt = new Date(Date.now() + expiresIn * 1000);
-
-  // Persist refreshed token (encrypted)
-  await prisma.channelConnection.updateMany({
-    where: { id: connection.id },
-    data: {
-      accessToken: encryptToken(newAccessToken),
-      tokenExpiresAt,
-    },
-  });
-
-  return newAccessToken;
 }
 
 /**
@@ -144,8 +86,8 @@ export const youtubeAdapter = {
       );
     }
 
-    // Refresh token if needed
-    const accessToken = await ensureFreshToken(connection);
+    // Token is already refreshed by the service layer (ensureValidAccessToken)
+    const accessToken = connection.accessToken;
 
     // 1. Fetch the video binary
     const videoRes = await fetch(mediaUrl);

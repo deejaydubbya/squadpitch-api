@@ -20,6 +20,7 @@ import {
 import { formatDraft } from "../draft.service.js";
 import { getAdapterForChannel } from "./channelAdapters/index.js";
 import { enqueueNotification } from "../../notifications/notification.service.js";
+import { ensureValidAccessToken } from "../tokenRefreshService.js";
 
 // Narrow mediaProfile select: the Instagram adapter only needs
 // assetLibraryJson[0].url as a fallback media source, so avoid pulling the
@@ -108,10 +109,20 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
   }
 
   // Resolve the connection (decrypted tokens for adapter use)
-  const connection = await getConnectionForAdapter(
+  let connection = await getConnectionForAdapter(
     workingDraft.clientId,
     workingDraft.channel
   );
+
+  // Auto-refresh token if near expiry
+  if (connection) {
+    try {
+      connection = await ensureValidAccessToken(connection);
+    } catch {
+      // Token refresh failed — connection is now NEEDS_RECONNECT.
+      // Fall through to the existing status !== CONNECTED check below.
+    }
+  }
 
   // LOCAL FALLBACK: no connection -> Phase 1 behavior with a warning
   if (!connection || connection.status !== "CONNECTED") {

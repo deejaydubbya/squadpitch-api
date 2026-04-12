@@ -11,6 +11,7 @@ import { getRedisConnection } from "../redis.js";
 import { prisma } from "../prisma.js";
 import { submitGeneration } from "../lib/fal.js";
 import { getImageStorageService } from "../services/storage/imageStorage.js";
+import { recordActivity } from "../domains/notifications/notification.service.js";
 
 async function setStage(assetId, stage) {
   await prisma.mediaAsset.update({
@@ -116,6 +117,22 @@ async function processJob(assetId, overrides) {
           data: { mediaUrl: updated.url },
         });
       }
+    }
+
+    // 6. Record activity (resolve auth0Sub → userId)
+    const creator = await prisma.user.findUnique({
+      where: { auth0Sub: asset.createdBy },
+      select: { id: true },
+    });
+    if (creator) {
+      recordActivity({
+        userId: creator.id,
+        clientId: asset.clientId,
+        eventType: "MEDIA_GENERATED",
+        payload: { assetType: "image", clientId: asset.clientId },
+        resourceType: "asset",
+        resourceId: updated.id,
+      }).catch(() => {});
     }
 
     return { assetId: updated.id };

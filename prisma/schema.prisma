@@ -58,6 +58,7 @@ enum DraftStatus {
 
 enum ConnectionStatus {
   CONNECTED
+  NEEDS_RECONNECT
   EXPIRED
   REVOKED
   ERROR
@@ -255,6 +256,8 @@ model ChannelConnection {
   status            ConnectionStatus @default(CONNECTED)
   lastValidatedAt   DateTime?
   lastError         String?          @db.Text
+  lastRefreshAt     DateTime?
+  refreshFailedAt   DateTime?
   createdBy         String
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
@@ -415,12 +418,29 @@ model NotificationPreference {
   userId          String   @unique
   emailEnabled    Boolean  @default(true)
   smsEnabled      Boolean  @default(false)
+  pushEnabled     Boolean  @default(false)
+  digestEnabled   Boolean  @default(true)
   phoneNumber     String?
   preferencesJson Json     @default("{\"POST_PUBLISHED\":true,\"POST_FAILED\":true,\"USAGE_LIMIT_NEARING\":true,\"CONNECTION_EXPIRED\":true,\"BATCH_COMPLETE\":true}")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@map("notification_preferences")
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @db.Text
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, endpoint])
+  @@index([userId])
+  @@map("push_subscriptions")
 }
 
 model NotificationLog {
@@ -440,4 +460,126 @@ model NotificationLog {
   @@index([userId, eventType])
   @@index([userId, eventType, resourceId])
   @@map("notification_logs")
+}
+
+// ── In-App Notifications ────────────────────────────────────────────
+
+model Notification {
+  id           String   @id @default(cuid())
+  userId       String
+  eventType    String
+  title        String
+  message      String   @db.Text
+  linkUrl      String?
+  resourceType String?
+  resourceId   String?
+  read         Boolean  @default(false)
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([userId, read, createdAt])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model ActivityEvent {
+  id           String   @id @default(cuid())
+  userId       String
+  clientId     String?
+  eventType    String
+  title        String
+  description  String?  @db.Text
+  icon         String?
+  linkUrl      String?
+  resourceType String?
+  resourceId   String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, clientId, createdAt])
+  @@map("activity_events")
+}
+
+// ── Slack Integration ─────────────────────────────────────────────────
+
+model SlackConnection {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  webhookUrl       String   @db.Text
+  channelName      String?
+  isActive         Boolean  @default(true)
+  subscribedEvents Json     @default("[\"POST_FAILED\",\"POST_PUBLISHED\",\"BATCH_COMPLETE\",\"CONNECTION_EXPIRED\"]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("slack_connections")
+}
+
+// ── Outbound Webhooks ─────────────────────────────────────────────────
+
+model OutboundWebhook {
+  id               String   @id @default(cuid())
+  userId           String
+  targetUrl        String   @db.Text
+  secret           String
+  subscribedEvents Json     @default("[\"POST_PUBLISHED\",\"POST_FAILED\",\"BATCH_COMPLETE\",\"CONNECTION_EXPIRED\"]")
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  deliveryLogs     WebhookDeliveryLog[]
+
+  @@index([userId])
+  @@map("outbound_webhooks")
+}
+
+model WebhookDeliveryLog {
+  id             String   @id @default(cuid())
+  webhookId      String
+  eventType      String
+  requestBody    Json
+  responseStatus Int?
+  responseBody   String?  @db.Text
+  status         String   @default("pending") // pending | success | failed
+  attemptCount   Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  webhook        OutboundWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId, createdAt])
+  @@map("webhook_delivery_logs")
+}
+
+// ── Generic Integrations ────────────────────────────────────────────
+
+model Integration {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // "slack" | "webhook" | "notion" | "google_sheets"
+  name      String
+  config    Json     @default("{}")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  logs IntegrationLog[]
+
+  @@index([userId, type])
+  @@map("integrations")
+}
+
+model IntegrationLog {
+  id            String   @id @default(cuid())
+  integrationId String
+  eventType     String
+  status        String   @default("pending") // "pending" | "success" | "failed"
+  responseData  Json?
+  errorMessage  String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([integrationId, createdAt])
+  @@map("integration_logs")
 }

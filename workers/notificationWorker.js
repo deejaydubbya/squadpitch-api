@@ -2,9 +2,14 @@
 //
 // Queue: "sp-notification", concurrency: 5.
 //
-// Handles two job types:
-//   send-notification-email  → Postmark
-//   send-notification-sms    → Twilio
+// Handles seven job types:
+//   send-notification-email    → Postmark
+//   send-notification-sms      → Twilio
+//   send-notification-push     → Web Push (VAPID)
+//   send-notification-slack    → Slack incoming webhook
+//   send-notification-webhook  → Outbound webhook (HMAC-signed)
+//   send-integration-notion    → Notion page creation
+//   send-integration-sheets    → Google Sheets row append
 //
 // On success: updates notification_logs status → "sent", stores providerMessageId.
 // On failure: updates notification_logs status → "failed", stores errorMessage.
@@ -14,7 +19,12 @@ import { getRedisConnection } from "../redis.js";
 import { prisma } from "../prisma.js";
 import { sendEmail } from "../domains/notifications/providers/postmarkEmailProvider.js";
 import { sendSms } from "../domains/notifications/providers/twilioSmsProvider.js";
+import { sendPush } from "../domains/notifications/providers/webPushProvider.js";
+import { sendSlackNotification } from "../domains/notifications/providers/slackWebhookProvider.js";
+import { deliverWebhook } from "../domains/notifications/providers/webhookProvider.js";
 import { templates, smsTemplates } from "../domains/notifications/emailTemplates.js";
+import { createNotionPage } from "../domains/integrations/providers/notionProvider.js";
+import { appendSheetRow } from "../domains/integrations/providers/sheetsProvider.js";
 
 async function processJob(job) {
   const { name, data } = job;
@@ -25,6 +35,26 @@ async function processJob(job) {
 
   if (name === "send-notification-sms") {
     return processSmsJob(data);
+  }
+
+  if (name === "send-notification-push") {
+    return processPushJob(data);
+  }
+
+  if (name === "send-notification-slack") {
+    return processSlackJob(data);
+  }
+
+  if (name === "send-notification-webhook") {
+    return processWebhookJob(data);
+  }
+
+  if (name === "send-integration-notion") {
+    return processNotionJob(data);
+  }
+
+  if (name === "send-integration-sheets") {
+    return processSheetsJob(data);
   }
 
   throw new Error(`Unknown notification job type: ${name}`);
@@ -78,6 +108,134 @@ async function processSmsJob({ logId, phoneNumber, eventType, payload }) {
   } catch (err) {
     await markFailed(logId, err?.message ?? "SMS send failed");
     throw err;
+  }
+}
+
+async function processPushJob({ endpoint, p256dh, auth, title, body, url }) {
+  try {
+    await sendPush({ endpoint, p256dh, auth, title, body, url });
+    return { sent: true };
+  } catch (err) {
+    const statusCode = err?.statusCode ?? err?.status;
+    // 410 Gone or 404 = subscription expired or unsubscribed — clean up
+    if (statusCode === 410 || statusCode === 404) {
+      try {
+        await prisma.pushSubscription.deleteMany({ where: { endpoint } });
+        console.log(`[WORKER] Removed expired push subscription: ${endpoint.slice(0, 60)}…`);
+      } catch {
+        // Best-effort cleanup
+      }
+      return { expired: true };
+    }
+    // Other errors — re-throw for BullMQ retry
+    throw err;
+  }
+}
+
+async function processSlackJob({ webhookUrl, eventType, payload }) {
+  try {
+    await sendSlackNotification(webhookUrl, eventType, payload);
+    return { sent: true };
+  } catch (err) {
+    // Re-throw for BullMQ retry on transient failures
+    throw err;
+  }
+}
+
+async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payload, userId }) {
+  // Create delivery log
+  let logId;
+  try {
+    const log = await prisma.webhookDeliveryLog.create({
+      data: {
+        webhookId,
+        eventType,
+        requestBody: payload,
+        status: "pending",
+      },
+    });
+    logId = log.id;
+  } catch {
+    // Best-effort logging
+  }
+
+  try {
+    const { responseStatus, responseBody } = await deliverWebhook({
+      targetUrl,
+      secret,
+      eventType,
+      payload,
+      userId,
+    });
+
+    const success = responseStatus >= 200 && responseStatus < 300;
+
+    if (logId) {
+      await prisma.webhookDeliveryLog.update({
+        where: { id: logId },
+        data: {
+          responseStatus,
+          responseBody,
+          status: success ? "success" : "failed",
+          attemptCount: { increment: 1 },
+        },
+      }).catch(() => {});
+    }
+
+    if (!success) {
+      throw new Error(`Webhook returned ${responseStatus}`);
+    }
+
+    return { sent: true, responseStatus };
+  } catch (err) {
+    if (logId) {
+      await prisma.webhookDeliveryLog.update({
+        where: { id: logId },
+        data: {
+          status: "failed",
+          attemptCount: { increment: 1 },
+        },
+      }).catch(() => {});
+    }
+    throw err; // Re-throw for retry
+  }
+}
+
+async function processNotionJob({ integrationId, config, eventType, payload }) {
+  try {
+    const result = await createNotionPage(config, eventType, payload);
+    await updateIntegrationLog(integrationId, eventType, "success", result);
+    return { sent: true, pageId: result.pageId };
+  } catch (err) {
+    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    throw err; // Re-throw for BullMQ retry
+  }
+}
+
+async function processSheetsJob({ integrationId, config, eventType, payload }) {
+  try {
+    const result = await appendSheetRow(config, eventType, payload);
+    await updateIntegrationLog(integrationId, eventType, "success", result);
+    return { sent: true, updatedRange: result.updatedRange };
+  } catch (err) {
+    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    throw err; // Re-throw for BullMQ retry
+  }
+}
+
+async function updateIntegrationLog(integrationId, eventType, status, responseData, errorMessage) {
+  try {
+    await prisma.integrationLog.create({
+      data: {
+        integrationId,
+        eventType,
+        status,
+        responseData: responseData ?? null,
+        errorMessage: errorMessage ?? null,
+      },
+    });
+  } catch {
+    // Best-effort — don't crash if log write fails.
   }
 }
 

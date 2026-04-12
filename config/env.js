@@ -59,6 +59,8 @@ export const env = {
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
   TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
+  VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY,
+  VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
   APP_URL: process.env.APP_URL ?? "https://squadpitch-web.fly.dev",
 
   // Stripe billing
@@ -102,5 +104,8 @@ export function bootEnvWarnings() {
   }
   if (!env.STRIPE_SECRET_KEY) {
     console.warn("[BOOT] STRIPE_SECRET_KEY missing; billing features disabled");
+  }
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
+    console.warn("[BOOT] VAPID keys missing; web push notifications disabled");
   }
 }

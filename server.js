@@ -12,7 +12,10 @@ import { getRedis } from "./redis.js";
 // Domain routers
 import { studioRouter } from "./domains/studio/studio.routes.js";
 import { billingRouter } from "./domains/billing/billing.routes.js";
-import { notificationRouter } from "./domains/notifications/notification.routes.js";
+import { notificationRouter, notificationPublicRouter } from "./domains/notifications/notification.routes.js";
+import { slackRouter } from "./domains/notifications/slack.routes.js";
+import { webhookRouter } from "./domains/notifications/webhook.routes.js";
+import { integrationRouter } from "./domains/integrations/integration.routes.js";
 
 import { sendError, validationError } from "./lib/apiErrors.js";
 import { requireAuth } from "./middleware/auth.js";
@@ -105,6 +108,9 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "squadpitch-api" });
 });
 
+// Public notification routes (no auth) — VAPID key
+app.use(notificationPublicRouter);
+
 // Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
 app.use("/api", (req, res, next) => {
   if (req.path === "/v1/billing/webhook") return next("route");
@@ -122,6 +128,11 @@ app.use(billingRouter);
 
 // Notifications domain
 app.use(notificationRouter);
+
+// Integrations (Slack, Webhooks, generic)
+app.use(slackRouter);
+app.use(webhookRouter);
+app.use(integrationRouter);
 
 // ===== Error handling =====
 app.use((req, res) => {
@@ -152,6 +163,7 @@ let scheduledPublishWorker;
 let mediaGenWorker;
 let videoGenWorker;
 let notificationWorker;
+let weeklyDigestWorker;
 
 let server;
 (async () => {
@@ -180,6 +192,11 @@ let server;
         "./workers/notificationWorker.js"
       );
       notificationWorker = startNotificationWorker();
+
+      const { startWeeklyDigestWorker } = await import(
+        "./workers/weeklyDigestWorker.js"
+      );
+      weeklyDigestWorker = startWeeklyDigestWorker();
     }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
@@ -193,6 +210,7 @@ const shutdown = (sig) => async () => {
   try { if (mediaGenWorker) await mediaGenWorker.close(); } catch {}
   try { if (videoGenWorker) await videoGenWorker.close(); } catch {}
   try { if (notificationWorker) await notificationWorker.close(); } catch {}
+  try { if (weeklyDigestWorker) await weeklyDigestWorker.close(); } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
   } catch {}

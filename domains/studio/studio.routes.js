@@ -31,7 +31,7 @@ import {
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
 import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } from "../billing/billing.service.js";
-import { enqueueNotification } from "../notifications/notification.service.js";
+import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 
 export const studioRouter = express.Router();
 
@@ -254,6 +254,16 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
     await incrementUsage(req.user.id, "posts");
 
+    // Fire-and-forget: record activity
+    recordActivity({
+      userId: req.user.id,
+      clientId: parsed.data.clientId,
+      eventType: "DRAFT_CREATED",
+      payload: { channel: draft.channel, clientId: parsed.data.clientId },
+      resourceType: "draft",
+      resourceId: draft.id,
+    }).catch(() => {});
+
     // Fire-and-forget: check if usage is nearing limit
     checkUsageNearing(req.user.id, "posts").then((info) => {
       if (info) enqueueNotification({
@@ -372,6 +382,16 @@ studioRouter.post(`${BASE}/drafts/:id/approve`, async (req, res, next) => {
   try {
     const actorSub = getAuth0Sub(req);
     const draft = await service.approveDraft(req.params.id, actorSub);
+
+    recordActivity({
+      userId: req.user.id,
+      clientId: draft.clientId,
+      eventType: "DRAFT_APPROVED",
+      payload: { channel: draft.channel, clientId: draft.clientId },
+      resourceType: "draft",
+      resourceId: draft.id,
+    }).catch(() => {});
+
     res.json(service.formatDraft(draft));
   } catch (err) {
     next(err);
@@ -388,6 +408,16 @@ studioRouter.post(`${BASE}/drafts/:id/reject`, async (req, res, next) => {
       parsed.data.reason,
       actorSub
     );
+
+    recordActivity({
+      userId: req.user.id,
+      clientId: draft.clientId,
+      eventType: "DRAFT_REJECTED",
+      payload: { channel: draft.channel, reason: parsed.data.reason, clientId: draft.clientId },
+      resourceType: "draft",
+      resourceId: draft.id,
+    }).catch(() => {});
+
     res.json(service.formatDraft(draft));
   } catch (err) {
     next(err);
@@ -404,6 +434,16 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
       parsed.data.scheduledFor,
       actorSub
     );
+
+    recordActivity({
+      userId: req.user.id,
+      clientId: draft.clientId,
+      eventType: "DRAFT_SCHEDULED",
+      payload: { channel: draft.channel, scheduledFor: parsed.data.scheduledFor, clientId: draft.clientId },
+      resourceType: "draft",
+      resourceId: draft.id,
+    }).catch(() => {});
+
     res.json(service.formatDraft(draft));
   } catch (err) {
     next(err);
@@ -805,6 +845,15 @@ studioRouter.post(
         displayName: tokenBundle.displayName,
         createdBy: actorSub,
       });
+
+      recordActivity({
+        userId: req.user.id,
+        clientId,
+        eventType: "CONNECTION_CONNECTED",
+        payload: { channel, clientId },
+        resourceType: "connection",
+        resourceId: row.id,
+      }).catch(() => {});
 
       res.json({ connection: service.formatConnection(row) });
     } catch (err) {
