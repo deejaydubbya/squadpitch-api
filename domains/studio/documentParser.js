@@ -2,8 +2,13 @@
 //
 // Extracts text from PDF, DOCX, TXT, and CSV files.
 
-import pdf from "pdf-parse";
+import { createRequire } from "module";
 import mammoth from "mammoth";
+
+// pdf-parse v1 is CJS and tries to load a test file on import.
+// Using createRequire + direct lib path avoids both issues.
+const require = createRequire(import.meta.url);
+const pdf = require("pdf-parse/lib/pdf-parse.js");
 
 const SUPPORTED_TYPES = new Map([
   ["application/pdf", "pdf"],
