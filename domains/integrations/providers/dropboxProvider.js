@@ -221,6 +221,54 @@ export async function downloadFile(integrationId, config, filePath) {
   };
 }
 
+/**
+ * Upload a file to Dropbox.
+ *
+ * @param {string} integrationId
+ * @param {object} config
+ * @param {Buffer} buffer
+ * @param {string} filename
+ * @param {string} _mimeType — unused by Dropbox API but kept for provider interface consistency
+ * @param {string} [folderPath] — optional destination path (e.g. "/exports")
+ * @returns {{ id: string, name: string, path: string, size: number }}
+ */
+export async function uploadFile(integrationId, config, buffer, filename, _mimeType, folderPath) {
+  const token = await getAccessToken(integrationId, config);
+
+  const destPath = folderPath
+    ? `${folderPath.replace(/\/$/, "")}/${filename}`
+    : `/${filename}`;
+
+  const res = await fetch(`${CONTENT_BASE}/files/upload`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/octet-stream",
+      "Dropbox-API-Arg": JSON.stringify({
+        path: destPath,
+        mode: "add",
+        autorename: true,
+        mute: false,
+      }),
+    },
+    body: buffer,
+    signal: AbortSignal.timeout(120_000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Dropbox upload failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+
+  const data = await res.json();
+  return {
+    id: data.id,
+    name: data.name,
+    path: data.path_display,
+    size: data.size,
+  };
+}
+
 function guessMimeType(filename) {
   const ext = (filename || "").split(".").pop()?.toLowerCase();
   const map = {

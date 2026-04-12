@@ -76,19 +76,19 @@ export const templates = {
     };
   },
 
-  USAGE_LIMIT_NEARING({ field, current, limit, tier }) {
-    const pct = Math.round((current / limit) * 100);
+  USAGE_LIMIT_NEARING({ metric, used, limit, tier }) {
+    const pct = Math.round((used / limit) * 100);
     return {
       subject: "You're close to your Squadpitch limit",
       html: wrap("Usage Alert", `
         <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0 0 8px">
-          You've used <strong style="color:#fff">${pct}%</strong> of your monthly <strong style="color:#fff">${field}</strong> on the <strong style="color:#fff">${tier}</strong> plan.
+          You've used <strong style="color:#fff">${pct}%</strong> of your monthly <strong style="color:#fff">${metric}</strong> on the <strong style="color:#fff">${tier}</strong> plan.
         </p>
         <div style="background:#111318;border-radius:8px;padding:16px;margin:16px 0">
           <div style="background:#333;border-radius:4px;height:8px;overflow:hidden">
             <div style="background:${pct >= 90 ? "#f87171" : "#fbbf24"};height:100%;width:${pct}%;border-radius:4px"></div>
           </div>
-          <p style="color:#999;font-size:12px;margin:8px 0 0">${current} / ${limit} ${field} used</p>
+          <p style="color:#999;font-size:12px;margin:8px 0 0">${used} / ${limit} ${metric} used</p>
         </div>
         ${btn("Upgrade Plan", `${APP}/pricing`)}
       `),

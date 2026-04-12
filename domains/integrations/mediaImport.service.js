@@ -106,3 +106,64 @@ export async function importFile(userId, integrationId, fileRef, clientId) {
 
   return asset;
 }
+
+/**
+ * Export a MediaAsset to a connected cloud provider (Google Drive / Dropbox).
+ *
+ * @param {string} userId
+ * @param {string} integrationId
+ * @param {string} assetId — MediaAsset id
+ * @param {string} [folderRef] — optional target folder (Drive folder ID or Dropbox path)
+ * @returns {object} Provider-specific upload result
+ */
+export async function exportFile(userId, integrationId, assetId, folderRef) {
+  const integration = await prisma.integration.findFirst({
+    where: { id: integrationId, userId, isActive: true },
+  });
+  if (!integration) throw Object.assign(new Error("Integration not found"), { status: 404 });
+
+  const provider = providers[integration.type];
+  if (!provider?.uploadFile) {
+    throw Object.assign(new Error(`Provider ${integration.type} does not support export`), { status: 400 });
+  }
+
+  // Look up the asset
+  const asset = await prisma.mediaAsset.findUnique({ where: { id: assetId } });
+  if (!asset) throw Object.assign(new Error("Asset not found"), { status: 404 });
+  if (!asset.url) throw Object.assign(new Error("Asset has no URL"), { status: 400 });
+
+  // Download asset from Cloudinary URL
+  const dlRes = await fetch(asset.url, { signal: AbortSignal.timeout(60_000) });
+  if (!dlRes.ok) throw new Error(`Failed to download asset (${dlRes.status})`);
+  const arrayBuf = await dlRes.arrayBuffer();
+  const buffer = Buffer.from(arrayBuf);
+
+  const filename = asset.filename || `asset-${asset.id}.${asset.mimeType?.split("/")[1] || "png"}`;
+  const mimeType = asset.mimeType || "application/octet-stream";
+
+  // Upload to provider
+  const result = await provider.uploadFile(
+    integrationId,
+    integration.config,
+    buffer,
+    filename,
+    mimeType,
+    folderRef
+  );
+
+  // Log the export
+  try {
+    await prisma.integrationLog.create({
+      data: {
+        integrationId,
+        eventType: "FILE_EXPORTED",
+        status: "success",
+        responseData: { assetId, filename, provider: integration.type, result },
+      },
+    });
+  } catch {
+    // Best-effort logging
+  }
+
+  return result;
+}

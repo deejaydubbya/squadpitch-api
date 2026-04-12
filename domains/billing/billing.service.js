@@ -128,7 +128,7 @@ export async function incrementUsage(userId, field) {
 
 /**
  * Check if usage just crossed the 80% threshold for a field.
- * Returns { nearing: true, field, current, limit, tier } or null.
+ * Returns { nearing: true, metric, used, limit, tier } or null.
  */
 export async function checkUsageNearing(userId, field) {
   const { usage, limits, tier } = await getUsage(userId);
@@ -138,7 +138,7 @@ export async function checkUsageNearing(userId, field) {
   const pct = current / limit;
   // Fire at exactly 80% or 90% thresholds
   if (pct >= 0.8) {
-    return { nearing: true, field, current, limit, tier };
+    return { nearing: true, metric: field, used: current, limit, tier };
   }
   return null;
 }

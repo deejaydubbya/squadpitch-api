@@ -11,7 +11,7 @@ import { redisSet, redisGet, redisDel } from "../../redis.js";
 import * as driveProvider from "./providers/driveProvider.js";
 import * as dropboxProvider from "./providers/dropboxProvider.js";
 import * as sheetsProvider from "./providers/sheetsProvider.js";
-import { listFiles, importFile } from "./mediaImport.service.js";
+import { listFiles, importFile, exportFile } from "./mediaImport.service.js";
 
 export const mediaImportRouter = express.Router();
 const BASE = "/api/v1/integrations/media-import";
@@ -215,6 +215,27 @@ mediaImportRouter.post(`${BASE}/:integrationId/import`, async (req, res, next) =
 
     const asset = await importFile(req.user.id, integrationId, fileRef, clientId);
     res.status(201).json({ asset });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/integrations/media-import/:integrationId/export
+ * Body: { assetId, folderRef? }
+ * Downloads asset from Cloudinary → uploads to Drive/Dropbox.
+ */
+mediaImportRouter.post(`${BASE}/:integrationId/export`, async (req, res, next) => {
+  try {
+    const { integrationId } = req.params;
+    const { assetId, folderRef } = req.body;
+
+    if (!assetId) {
+      return res.status(400).json({ error: "assetId is required" });
+    }
+
+    const result = await exportFile(req.user.id, integrationId, assetId, folderRef);
+    res.json({ ok: true, result });
   } catch (err) {
     next(err);
   }

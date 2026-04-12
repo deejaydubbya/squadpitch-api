@@ -16,7 +16,7 @@ import { prisma } from "../../../prisma.js";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
-const SCOPES = "https://www.googleapis.com/auth/drive.readonly";
+const SCOPES = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly";
 
 /**
  * Build the OAuth2 authorization URL for Google Drive.
@@ -207,4 +207,58 @@ export async function downloadFile(integrationId, config, fileId) {
     mimeType: meta.mimeType,
     filename: meta.name,
   };
+}
+
+/**
+ * Upload a file to Google Drive.
+ *
+ * @param {string} integrationId
+ * @param {object} config
+ * @param {Buffer} buffer
+ * @param {string} filename
+ * @param {string} mimeType
+ * @param {string} [folderId] — optional parent folder ID
+ * @returns {{ id: string, name: string, webViewLink: string }}
+ */
+export async function uploadFile(integrationId, config, buffer, filename, mimeType, folderId) {
+  const token = await getAccessToken(integrationId, config);
+
+  // Use multipart upload: metadata + file content
+  const boundary = "squadpitch_upload_boundary";
+
+  const metadata = {
+    name: filename,
+    ...(folderId ? { parents: [folderId] } : {}),
+  };
+
+  const metadataStr = JSON.stringify(metadata);
+
+  // Build multipart body
+  const preamble = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadataStr}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`;
+  const epilogue = `\r\n--${boundary}--`;
+
+  const preambleBuf = Buffer.from(preamble, "utf-8");
+  const epilogueBuf = Buffer.from(epilogue, "utf-8");
+  const body = Buffer.concat([preambleBuf, buffer, epilogueBuf]);
+
+  const res = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+        "Content-Length": String(body.length),
+      },
+      body,
+      signal: AbortSignal.timeout(120_000),
+    }
+  );
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Drive upload failed (${res.status}): ${text.slice(0, 300)}`);
+  }
+
+  return res.json();
 }
