@@ -8,6 +8,7 @@
 import OpenAI from "openai";
 import { env } from "../../../config/env.js";
 import { selectModel } from "../../billing/aiModelRouter.js";
+import { recordServiceSuccess, recordServiceFailure } from "../../billing/serviceHealth.service.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -85,18 +86,21 @@ export async function generateStructuredContent({
   } catch (err) {
     clearTimeout(timer);
     if (err?.name === "AbortError") {
+      recordServiceFailure("openai").catch(() => {});
       throw new OpenAIProviderError(
         `OpenAI request timed out after ${timeoutMs ?? DEFAULT_TIMEOUT_MS}ms`,
         { code: "OPENAI_TIMEOUT", cause: err }
       );
     }
     if (err instanceof OpenAIProviderError) throw err;
+    recordServiceFailure("openai").catch(() => {});
     throw new OpenAIProviderError(
       `OpenAI request failed: ${err?.message ?? String(err)}`,
       { code: "OPENAI_REQUEST_FAILED", status: err?.status, cause: err }
     );
   }
   clearTimeout(timer);
+  recordServiceSuccess("openai").catch(() => {});
 
   const choice = completion?.choices?.[0];
   const content = choice?.message?.content;

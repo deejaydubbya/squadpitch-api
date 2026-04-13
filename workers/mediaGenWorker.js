@@ -12,6 +12,7 @@ import { prisma } from "../prisma.js";
 import { submitGeneration } from "../lib/fal.js";
 import { getImageStorageService } from "../services/storage/imageStorage.js";
 import { recordActivity } from "../domains/notifications/notification.service.js";
+import { recordServiceSuccess, recordServiceFailure } from "../domains/billing/serviceHealth.service.js";
 
 async function setStage(assetId, stage) {
   await prisma.mediaAsset.update({
@@ -68,6 +69,8 @@ async function processJob(assetId, overrides) {
       modelId: asset.falModelId,
       input,
     });
+
+    recordServiceSuccess("fal").catch(() => {});
 
     const firstImage = result.images?.[0];
     if (!firstImage?.url) {
@@ -137,6 +140,7 @@ async function processJob(assetId, overrides) {
 
     return { assetId: updated.id };
   } catch (err) {
+    recordServiceFailure("fal").catch(() => {});
     await prisma.mediaAsset.update({
       where: { id: assetId },
       data: {

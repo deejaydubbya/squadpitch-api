@@ -4,7 +4,9 @@ import { env } from "../../config/env.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
 import * as billingService from "./billing.service.js";
 import { getUsageForPeriod, getAiCostBreakdown } from "./aiUsageTracking.service.js";
+import { getAllServicesHealth, checkBudgetStatus, getThrottlePolicy, setAdminFlag, clearAdminFlag } from "./serviceHealth.service.js";
 import { CreateCheckoutSchema, CreatePortalSchema, ChangePlanSchema } from "./billing.schemas.js";
+import { requireAdmin } from "../../middleware/requireAdmin.js";
 
 export const billingRouter = express.Router();
 
@@ -116,6 +118,73 @@ billingRouter.get(`${BASE}/ai-cost-breakdown`, async (req, res, next) => {
     const to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const breakdown = await getAiCostBreakdown(req.user.id, from, to);
     res.json({ period: { start: from, end: to }, breakdown });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── System Health ───────────────────────────────────────────────────────
+
+billingRouter.get(`${BASE}/system-health`, async (req, res, next) => {
+  try {
+    const [services, openai, fal] = await Promise.all([
+      getAllServicesHealth(),
+      checkBudgetStatus("openai"),
+      checkBudgetStatus("fal"),
+    ]);
+    res.json({ services, budget: { openai, fal } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Admin Controls ──────────────────────────────────────────────────────
+
+billingRouter.post(`${BASE}/admin/pause-ai`, requireAdmin, async (req, res, next) => {
+  try {
+    await setAdminFlag("sp:admin:pause_ai");
+    res.json({ ok: true, flag: "pause_ai", value: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+billingRouter.post(`${BASE}/admin/resume-ai`, requireAdmin, async (req, res, next) => {
+  try {
+    await clearAdminFlag("sp:admin:pause_ai");
+    res.json({ ok: true, flag: "pause_ai", value: false });
+  } catch (err) {
+    next(err);
+  }
+});
+
+billingRouter.post(`${BASE}/admin/disable-video`, requireAdmin, async (req, res, next) => {
+  try {
+    await setAdminFlag("sp:admin:disable_video");
+    res.json({ ok: true, flag: "disable_video", value: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+billingRouter.post(`${BASE}/admin/enable-video`, requireAdmin, async (req, res, next) => {
+  try {
+    await clearAdminFlag("sp:admin:disable_video");
+    res.json({ ok: true, flag: "disable_video", value: false });
+  } catch (err) {
+    next(err);
+  }
+});
+
+billingRouter.get(`${BASE}/admin/status`, requireAdmin, async (req, res, next) => {
+  try {
+    const [services, openai, fal, throttle] = await Promise.all([
+      getAllServicesHealth(),
+      checkBudgetStatus("openai"),
+      checkBudgetStatus("fal"),
+      getThrottlePolicy(),
+    ]);
+    res.json({ services, budget: { openai, fal }, throttle });
   } catch (err) {
     next(err);
   }

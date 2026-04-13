@@ -6,6 +6,7 @@
 
 import { prisma } from "../../prisma.js";
 import { getVideoGenQueue } from "../../lib/queues.js";
+import { getJobPriorityForUser } from "../billing/billing.service.js";
 
 /** Map channels to Fal aspect ratio strings. */
 const VIDEO_CHANNEL_ASPECT_RATIOS = {
@@ -26,6 +27,7 @@ export async function enqueueVideoGeneration({
   draftId,
   channel,
   createdBy,
+  userId,
 }) {
   const modelId = DEFAULT_VIDEO_MODEL;
 
@@ -46,12 +48,15 @@ export async function enqueueVideoGeneration({
   const aspectRatio = (channel ? VIDEO_CHANNEL_ASPECT_RATIOS[channel] : null) ?? "16:9";
 
   const queue = getVideoGenQueue();
+  let queued = false;
   if (queue) {
+    const priority = userId ? await getJobPriorityForUser(userId) : 5;
     await queue.add("generate-video", {
       assetId: asset.id,
       aspectRatio,
-    });
+    }, { priority });
+    queued = true;
   }
 
-  return asset;
+  return { ...asset, queued };
 }

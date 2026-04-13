@@ -12,6 +12,7 @@ import { prisma } from "../prisma.js";
 import { submitGeneration } from "../lib/fal.js";
 import { getVideoStorageService } from "../services/storage/imageStorage.js";
 import { recordActivity } from "../domains/notifications/notification.service.js";
+import { recordServiceSuccess, recordServiceFailure } from "../domains/billing/serviceHealth.service.js";
 
 async function setStage(assetId, stage) {
   await prisma.mediaAsset.update({
@@ -62,6 +63,8 @@ async function processJob(assetId, aspectRatio) {
         }
       },
     });
+
+    recordServiceSuccess("fal").catch(() => {});
 
     const videoUrl = result.video?.url;
     if (!videoUrl) {
@@ -132,6 +135,7 @@ async function processJob(assetId, aspectRatio) {
 
     return { assetId: updated.id };
   } catch (err) {
+    recordServiceFailure("fal").catch(() => {});
     await prisma.mediaAsset.update({
       where: { id: assetId },
       data: {

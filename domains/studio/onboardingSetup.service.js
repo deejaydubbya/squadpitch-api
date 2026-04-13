@@ -7,6 +7,7 @@ import { generateStructuredContent } from "./generation/openai.provider.js";
 import { scrapeUrl } from "./scrapeUrl.js";
 import { crawlWebsite } from "./crawlWebsite.js";
 import { parseToStructuredData } from "./dataExtraction.service.js";
+import { getExtractionHints } from "../industry/industry.service.js";
 
 const MAX_TEXT_LENGTH = 500_000;
 const EXTRACTION_TIMEOUT_MS = 60_000;
@@ -112,13 +113,13 @@ export async function scrapeWebsite(url) {
  *
  * Proportional budget: website 60%, documents 30%, text 10%.
  */
-export async function crawlAndCombine({ url, text, documentTexts = [] }) {
+export async function crawlAndCombine({ url, text, documentTexts = [], onProgress }) {
   const sections = [];
   let images = [];
 
   // Website content
   if (url) {
-    const crawled = await crawlWebsite(url);
+    const crawled = await crawlWebsite(url, { onProgress });
     images = crawled.pages.flatMap((p) => p.images || []);
     for (const page of crawled.pages) {
       sections.push({
@@ -174,9 +175,14 @@ export async function crawlAndCombine({ url, text, documentTexts = [] }) {
 /**
  * Extract brand data from scraped website content via AI.
  */
-export async function extractBrandData(content, { url } = {}) {
+export async function extractBrandData(content, { url, industryKey } = {}) {
   let userPrompt = `Analyze the following website content and extract brand profile data:\n\n${content.slice(0, MAX_TEXT_LENGTH)}`;
   if (url) userPrompt += `\n\nSource URL: ${url}`;
+
+  const industryHints = getExtractionHints(industryKey);
+  if (industryHints) {
+    userPrompt += `\n\nNote: This business is in the ${industryKey.replace(/_/g, " ")} industry. Ensure your extraction reflects this.`;
+  }
 
   const result = await generateStructuredContent({
     systemPrompt: BRAND_EXTRACTION_SYSTEM_PROMPT,
@@ -193,8 +199,13 @@ export async function extractBrandData(content, { url } = {}) {
 /**
  * Extract brand data from a text description via AI.
  */
-export async function extractBrandFromText(description) {
-  const userPrompt = `Analyze the following business description and extract brand profile data:\n\n${description.slice(0, MAX_TEXT_LENGTH)}`;
+export async function extractBrandFromText(description, { industryKey } = {}) {
+  let userPrompt = `Analyze the following business description and extract brand profile data:\n\n${description.slice(0, MAX_TEXT_LENGTH)}`;
+
+  const industryHints = getExtractionHints(industryKey);
+  if (industryHints) {
+    userPrompt += `\n\nNote: This business is in the ${industryKey.replace(/_/g, " ")} industry. Ensure your extraction reflects this.`;
+  }
 
   const result = await generateStructuredContent({
     systemPrompt: BRAND_EXTRACTION_SYSTEM_PROMPT,
@@ -214,9 +225,16 @@ export async function extractBrandFromText(description) {
  * Extract structured data items (products, testimonials, FAQs, etc.)
  * from scraped content using the existing AI extraction pipeline.
  */
-export async function extractDataItems(combinedText, { url, images } = {}) {
+export async function extractDataItems(combinedText, { url, images, industryKey } = {}) {
+  let hint = "Extract all products, inventory, services, testimonials, team members, FAQs, and any other structured business data";
+
+  const industryHints = getExtractionHints(industryKey);
+  if (industryHints) {
+    hint += `\n\nIndustry-specific extraction focus (${industryKey}): ${industryHints.hints}`;
+  }
+
   return parseToStructuredData(combinedText, {
-    hint: "Extract all products, inventory, services, testimonials, team members, FAQs, and any other structured business data",
+    hint,
     sourceUrl: url,
     images,
   });

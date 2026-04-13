@@ -134,14 +134,15 @@ model User {
 // ── Client ─────────────────────────────────────────────────────────────
 
 model Client {
-  id        String       @id @default(cuid())
-  name      String
-  slug      String       @unique
-  status    ClientStatus @default(ACTIVE)
-  logoUrl   String?
-  createdBy String
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  status      ClientStatus @default(ACTIVE)
+  logoUrl     String?
+  industryKey String?
+  createdBy   String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
   brandProfile      BrandProfile?
   voiceProfile      VoiceProfile?

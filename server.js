@@ -17,6 +17,7 @@ import { slackRouter } from "./domains/notifications/slack.routes.js";
 import { webhookRouter } from "./domains/notifications/webhook.routes.js";
 import { integrationRouter } from "./domains/integrations/integration.routes.js";
 import { mediaImportRouter } from "./domains/integrations/mediaImport.routes.js";
+import { industryRouter } from "./domains/industry/industry.routes.js";
 
 import { sendError, validationError } from "./lib/apiErrors.js";
 import { requireAuth } from "./middleware/auth.js";
@@ -135,6 +136,7 @@ app.use(slackRouter);
 app.use(webhookRouter);
 app.use(integrationRouter);
 app.use(mediaImportRouter);
+app.use(industryRouter);
 
 // ===== Error handling =====
 app.use((req, res) => {

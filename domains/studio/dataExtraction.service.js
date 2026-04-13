@@ -6,7 +6,7 @@
 
 import { generateStructuredContent } from "./generation/openai.provider.js";
 
-const MAX_INPUT_BYTES = 500_000; // 500KB
+const MAX_INPUT_BYTES = 80_000; // ~20K tokens — fits within gpt-4o-mini context with room for output
 const EXTRACTION_TIMEOUT_MS = 120_000;
 const EXTRACTION_TEMPERATURE = 0.3;
 
@@ -121,24 +121,49 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
     userPrompt += `\n\nImage URLs found on this page (associate with relevant items in dataJson.imageUrl):\n${images.slice(0, 30).join("\n")}`;
   }
 
-  const result = await generateStructuredContent({
-    systemPrompt: SYSTEM_PROMPT,
-    userPrompt,
-    responseFormat: RESPONSE_FORMAT,
-    taskType: "parsing",
-    temperature: EXTRACTION_TEMPERATURE,
-    timeoutMs: EXTRACTION_TIMEOUT_MS,
-  });
+  let result;
+  try {
+    result = await generateStructuredContent({
+      systemPrompt: SYSTEM_PROMPT,
+      userPrompt,
+      responseFormat: RESPONSE_FORMAT,
+      taskType: "parsing",
+      temperature: EXTRACTION_TEMPERATURE,
+      timeoutMs: EXTRACTION_TIMEOUT_MS,
+    });
+  } catch (err) {
+    console.error("[dataExtraction] OpenAI call failed:", err.code, err.message, err.cause?.message);
+    return [];
+  }
 
-  const items = result.parsed?.items;
-  if (!Array.isArray(items)) return [];
+  const parsed = result.parsed;
+
+  // The model should return { items: [...] } but may use different keys
+  let items = parsed?.items;
+  if (!Array.isArray(items)) {
+    items = parsed?.data || parsed?.results || parsed?.entries;
+  }
+  if (!Array.isArray(items) && Array.isArray(parsed)) {
+    items = parsed;
+  }
+
+  if (!Array.isArray(items)) {
+    console.warn(
+      "[dataExtraction] No items array in OpenAI response. Keys:",
+      Object.keys(parsed ?? {}),
+      "| input length:", truncated.length,
+    );
+    return [];
+  }
+
+  console.log("[dataExtraction] Extracted", items.length, "raw items from", truncated.length, "bytes of input");
 
   // Post-process: validate and clamp values
   return items
-    .filter((item) => item.title && item.type)
+    .filter((item) => item.title || item.name || item.heading)
     .map((item) => ({
       type: VALID_TYPES.has(item.type) ? item.type : "CUSTOM",
-      title: String(item.title).slice(0, 200),
+      title: String(item.title || item.name || item.heading).slice(0, 200),
       summary: item.summary ? String(item.summary).slice(0, 2000) : null,
       dataJson: item.dataJson && typeof item.dataJson === "object" ? item.dataJson : {},
       tags: Array.isArray(item.tags) ? item.tags.slice(0, 10).map((t) => String(t).slice(0, 100)) : [],

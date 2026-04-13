@@ -81,6 +81,7 @@ export async function loadClientGenerationContext(clientId) {
 
   const ctx = {
     client,
+    industryKey: client.industryKey ?? null,
     brand: client.brandProfile ?? null,
     voice: client.voiceProfile ?? null,
     media: client.mediaProfile ?? null,

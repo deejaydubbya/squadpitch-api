@@ -191,6 +191,41 @@ export async function getRemainingUsage(userId) {
   };
 }
 
+// ── Job Priority ────────────────────────────────────────────────────────
+
+/**
+ * Get BullMQ job priority for a user based on their tier.
+ * Onboarding (0 clients) = 1, Paid = 5, Free = 10.
+ * Fail-open: returns 5 on any error.
+ */
+export async function getJobPriorityForUser(userId) {
+  try {
+    const sub = await prisma.subscription.findUnique({ where: { userId } });
+    const tier = sub?.tier ?? "FREE";
+
+    // Paid users get priority 5
+    if (tier !== "FREE") return 5;
+
+    // Check if onboarding (0 active clients)
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { auth0Sub: true },
+    });
+    if (user) {
+      const clientCount = await prisma.client.count({
+        where: { createdBy: user.auth0Sub, status: { not: "ARCHIVED" } },
+      });
+      if (clientCount === 0) return 1;
+    }
+
+    // Free user with clients
+    return 10;
+  } catch (err) {
+    console.error("[BILLING] getJobPriorityForUser failed:", err.message);
+    return 5; // Fail-open
+  }
+}
+
 // ── Plan Change (Upgrade / Downgrade) ───────────────────────────────────
 
 /**

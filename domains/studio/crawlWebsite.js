@@ -38,11 +38,15 @@ const PRIORITY_PATTERNS = [
  * @param {{ maxPages?: number }} options
  * @returns {Promise<{ pages: Array<{ url: string, text: string, title: string, images: string[] }>, totalPages: number, failedPages: number }>}
  */
-export async function crawlWebsite(rootUrl, { maxPages = MAX_PAGES } = {}) {
+export async function crawlWebsite(rootUrl, { maxPages = MAX_PAGES, onProgress } = {}) {
   const origin = new URL(rootUrl).origin;
 
   // 1. Scrape root page (with link extraction)
   const rootResult = await scrapeUrl(rootUrl, { extractLinks: true });
+
+  if (onProgress) {
+    onProgress({ event: "crawl:page", url: rootUrl, title: rootResult.title, pageNum: 1, totalExpected: 1 });
+  }
 
   // 2. Discover subpage URLs from sitemap + root page links
   const [sitemapUrls, linkUrls] = await Promise.all([
@@ -76,8 +80,19 @@ export async function crawlWebsite(rootUrl, { maxPages = MAX_PAGES } = {}) {
   // 4. Take top N-1 subpages (root counts as 1)
   const subpageUrls = candidates.slice(0, maxPages - 1);
 
+  const totalExpected = 1 + subpageUrls.length;
+  if (onProgress && subpageUrls.length > 0) {
+    onProgress({ event: "crawl:discovered", totalExpected });
+  }
+
   // 5. Scrape subpages in parallel with concurrency limit
-  const subpageResults = await scrapeWithConcurrency(subpageUrls, CONCURRENCY);
+  let pageNum = 1; // root was 1
+  const subpageResults = await scrapeWithConcurrency(subpageUrls, CONCURRENCY, (page) => {
+    pageNum++;
+    if (onProgress) {
+      onProgress({ event: "crawl:page", url: page.url, title: page.title, pageNum, totalExpected });
+    }
+  });
 
   // 6. Assemble results
   const pages = [
@@ -157,7 +172,7 @@ function scorePath(url) {
   return 0;
 }
 
-async function scrapeWithConcurrency(urls, concurrency) {
+async function scrapeWithConcurrency(urls, concurrency, onPageDone) {
   const results = [];
   let index = 0;
 
@@ -167,7 +182,9 @@ async function scrapeWithConcurrency(urls, concurrency) {
       const url = urls[i];
       try {
         const scraped = await scrapeUrl(url);
-        results[i] = { status: "fulfilled", value: { url, text: scraped.text, title: scraped.title, images: scraped.images } };
+        const page = { url, text: scraped.text, title: scraped.title, images: scraped.images };
+        results[i] = { status: "fulfilled", value: page };
+        if (onPageDone) onPageDone(page);
       } catch {
         results[i] = { status: "rejected", reason: `Failed to scrape ${url}` };
       }

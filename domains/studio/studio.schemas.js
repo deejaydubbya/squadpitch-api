@@ -56,6 +56,7 @@ export const CreateClientSchema = z.object({
   }),
   logoUrl: z.string().url().nullable().optional(),
   status: ClientStatusEnum.optional(),
+  industryKey: z.string().max(40).optional(),
 });
 
 export const UpdateClientSchema = z.object({
@@ -63,6 +64,7 @@ export const UpdateClientSchema = z.object({
   slug: z.string().min(1).max(64).regex(SLUG_PATTERN).optional(),
   logoUrl: z.string().url().nullable().optional(),
   status: ClientStatusEnum.optional(),
+  industryKey: z.string().max(40).nullable().optional(),
 });
 
 // ── Brand profile ───────────────────────────────────────────────────────
@@ -460,6 +462,7 @@ export const OnboardingAnalyzeSchema = z
     input: z.string().max(5000).optional().default(""),
     inputType: z.enum(["url", "text"]),
     documentTexts: z.array(z.string().max(200000)).max(5).optional().default([]),
+    industryKey: z.string().max(40).optional(),
   })
   .refine(
     (d) => d.input.length >= 3 || (d.documentTexts && d.documentTexts.length > 0),

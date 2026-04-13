@@ -81,6 +81,14 @@ export const env = {
   DROPBOX_APP_SECRET: process.env.DROPBOX_APP_SECRET,
   DROPBOX_REDIRECT_URI: process.env.DROPBOX_REDIRECT_URI,
 
+  // Admin
+  ADMIN_USER_IDS: process.env.ADMIN_USER_IDS ?? "",
+
+  // Global AI budget caps (cents per month)
+  OPENAI_MONTHLY_BUDGET_CENTS: parseInt(process.env.OPENAI_MONTHLY_BUDGET_CENTS, 10) || 2000,
+  FAL_MONTHLY_BUDGET_CENTS: parseInt(process.env.FAL_MONTHLY_BUDGET_CENTS, 10) || 1000,
+  BUDGET_WARNING_THRESHOLD: parseFloat(process.env.BUDGET_WARNING_THRESHOLD) || 0.8,
+
   // Stripe billing
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,

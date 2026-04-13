@@ -10,6 +10,7 @@ import { prisma } from "../../prisma.js";
 import { getImageStorageService, getVideoStorageService, validateVideoBuffer } from "../../services/storage/imageStorage.js";
 import { loadClientGenerationContext } from "./generation/clientOrchestrator.js";
 import { getMediaGenQueue } from "../../lib/queues.js";
+import { getJobPriorityForUser } from "../billing/billing.service.js";
 
 // ── List / Get ──────────────────────────────────────────────────────────
 
@@ -224,6 +225,7 @@ export async function enqueueGeneration({
   channel,
   overrides,
   createdBy,
+  userId,
 }) {
   const ctx = await loadClientGenerationContext(clientId);
   const mediaProfile = ctx.media;
@@ -258,14 +260,17 @@ export async function enqueueGeneration({
   };
 
   const queue = getMediaGenQueue();
+  let queued = false;
   if (queue) {
+    const priority = userId ? await getJobPriorityForUser(userId) : 5;
     await queue.add("generate", {
       assetId: asset.id,
       overrides: Object.keys(mergedOverrides).length > 0 ? mergedOverrides : null,
-    });
+    }, { priority });
+    queued = true;
   }
 
-  return asset;
+  return { ...asset, queued };
 }
 
 // ── Prompt building (pure) ──────────────────────────────────────────────

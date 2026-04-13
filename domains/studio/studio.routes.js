@@ -61,13 +61,16 @@ import { getDashboardRecommendations, getDashboardActions } from "./dashboard.se
 import { getUnusedData, getDataSuggestions } from "./dataUsage.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
-import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } from "../billing/billing.service.js";
+import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit, getSubscription } from "../billing/billing.service.js";
+import { getLimitsForTier } from "../billing/billing.constants.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
+import { isProviderBudgetExceeded, getServiceStatus, getThrottlePolicy } from "../billing/serviceHealth.service.js";
 import { redisGet, redisSet } from "../../redis.js";
 import crypto from "crypto";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
+import { getStarterAngles } from "../industry/industry.service.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
 
@@ -450,10 +453,23 @@ studioRouter.post(
       const parsed = BulkGenerateSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
+      // Service health pre-flight
+      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+      const throttle = await getThrottlePolicy();
+      if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
+
+      // Batch size cap based on throttle policy
+      const originalCount = parsed.data.items.length;
+      const items = parsed.data.items.slice(0, throttle.maxBatchSize);
+      const maxBatchApplied = items.length < originalCount;
+
+      // Global budget check
+      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+
       const actorSub = getAuth0Sub(req);
       const results = [];
 
-      for (const item of parsed.data.items) {
+      for (const item of items) {
         try {
           const allowed = await checkUsageLimit(req.user.id, "posts");
           if (!allowed) {
@@ -483,6 +499,7 @@ studioRouter.post(
         results,
         generated: results.filter((r) => r.status === "success").length,
         total: results.length,
+        ...(maxBatchApplied && { maxBatchApplied: true, originalCount }),
       });
     } catch (err) {
       next(err);
@@ -632,7 +649,7 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
     const parsed = OnboardingAnalyzeSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
-    const { input, inputType, documentTexts } = parsed.data;
+    const { input, inputType, documentTexts, industryKey } = parsed.data;
     let brandData;
     let dataItems = [];
     let images = [];
@@ -650,23 +667,25 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
       });
       images = crawledImages;
 
-      // Run brand extraction and data extraction in parallel
-      const [brand, items] = await Promise.all([
-        onboardingService.extractBrandData(combinedText, {
-          url: hasUrl ? input : undefined,
-        }),
-        onboardingService.extractDataItems(combinedText, {
+      // Extract sequentially: brand first, then data.
+      // Running both in parallel can trigger OpenAI rate limits.
+      brandData = await onboardingService.extractBrandData(combinedText, {
+        url: hasUrl ? input : undefined,
+        industryKey,
+      });
+
+      try {
+        dataItems = await onboardingService.extractDataItems(combinedText, {
           url: hasUrl ? input : undefined,
           images: crawledImages,
-        }).catch((err) => {
-          console.error("[onboarding] Data extraction failed:", err.message || err);
-          return [];
-        }),
-      ]);
-      brandData = brand;
-      dataItems = items;
+          industryKey,
+        });
+      } catch (err) {
+        console.error("[onboarding] Data extraction failed:", err.message || err);
+        dataItems = [];
+      }
     } else {
-      brandData = await onboardingService.extractBrandFromText(input);
+      brandData = await onboardingService.extractBrandFromText(input, { industryKey });
     }
 
     // Fire-and-forget: track onboarding AI usage
@@ -678,6 +697,8 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
       completionTokens: 0,
       metadata: { inputType },
     });
+
+    const starterAngles = getStarterAngles(industryKey) || [];
 
     res.json({
       brandData: {
@@ -699,6 +720,7 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
       suggestedChannels: brandData.suggestedChannels,
       images,
       dataItems,
+      starterAngles,
     });
   } catch (err) {
     if (err.status === 400 || err.status === 408 || err.status === 422) {
@@ -712,6 +734,122 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
     }
     next(err);
   }
+});
+
+// ── Onboarding Analyze (SSE streaming) ───────────────────────────────
+
+studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
+  // SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // disable Fly proxy buffering
+  res.flushHeaders();
+
+  const sendEvent = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (typeof res.flush === "function") res.flush();
+  };
+
+  try {
+    const parsed = OnboardingAnalyzeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendEvent({ event: "error", message: "Invalid input" });
+      return res.end();
+    }
+
+    const { input, inputType, documentTexts = [], industryKey } = parsed.data;
+    const hasUrl = inputType === "url" && input.length >= 3;
+    const hasText = inputType === "text" && input.length >= 3;
+    const hasDocs = documentTexts.length > 0;
+
+    let brandData;
+    let dataItems = [];
+    let images = [];
+
+    if (hasUrl || hasDocs || hasText) {
+      // Crawl with live progress
+      sendEvent({ event: "crawl:start", url: hasUrl ? input : null });
+
+      const { combinedText, images: crawledImages } = await onboardingService.crawlAndCombine({
+        url: hasUrl ? input : null,
+        text: hasText ? input : null,
+        documentTexts,
+        onProgress: (p) => sendEvent(p),
+      });
+      images = crawledImages;
+      sendEvent({ event: "crawl:done" });
+
+      // Extract sequentially: brand first, then data.
+      // Running both in parallel can trigger OpenAI rate limits.
+      sendEvent({ event: "extract:start" });
+
+      brandData = await onboardingService.extractBrandData(combinedText, {
+        url: hasUrl ? input : undefined,
+        industryKey,
+      });
+      sendEvent({ event: "brand:done", brandData });
+
+      try {
+        dataItems = await onboardingService.extractDataItems(combinedText, {
+          url: hasUrl ? input : undefined,
+          images: crawledImages,
+          industryKey,
+        });
+        sendEvent({ event: "data:done", items: dataItems, count: dataItems.length });
+      } catch (err) {
+        console.error("[onboarding-stream] Data extraction failed:", err.message || err);
+        sendEvent({ event: "data:done", items: [], count: 0 });
+      }
+    } else {
+      sendEvent({ event: "crawl:start", url: null });
+      brandData = await onboardingService.extractBrandFromText(input, { industryKey });
+      sendEvent({ event: "brand:done", brandData });
+      sendEvent({ event: "data:done", items: [], count: 0 });
+    }
+
+    // Fire-and-forget: track onboarding AI usage
+    trackAiUsage({
+      userId: req.user.id,
+      actionType: "ONBOARDING",
+      model: "gpt-4o",
+      promptTokens: 0,
+      completionTokens: 0,
+      metadata: { inputType },
+    });
+
+    const starterAngles = getStarterAngles(industryKey) || [];
+
+    // Final complete event with full payload (same shape as the non-stream endpoint)
+    sendEvent({
+      event: "done",
+      brandData: {
+        name: brandData.name,
+        description: brandData.description,
+        industry: brandData.industry,
+        audience: brandData.audience,
+        offers: brandData.offers,
+        competitors: brandData.competitors,
+        website: hasUrl ? input : undefined,
+      },
+      voiceData: {
+        tone: brandData.suggestedTone,
+        doRules: brandData.voiceRules.do,
+        dontRules: brandData.voiceRules.dont,
+        contentBuckets: brandData.contentBuckets,
+      },
+      suggestedGoal: brandData.suggestedGoal,
+      suggestedChannels: brandData.suggestedChannels,
+      images,
+      dataItems,
+      starterAngles,
+    });
+  } catch (err) {
+    console.error("[onboarding-stream] Error:", err.message || err);
+    sendEvent({ event: "error", message: "Analysis failed. Please try again." });
+  }
+
+  res.end();
 });
 
 // ── Data Import ──────────────────────────────────────────────────────
@@ -913,6 +1051,14 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     const parsed = GenerateContentSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
+    // Service health pre-flight
+    if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+    const throttle = await getThrottlePolicy();
+    if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
+
+    // Global budget check
+    if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+
     // Idempotency: reject duplicate requests within 10s window
     const canProceed = await acquireDedup(req.user.id, "generate", parsed.data);
     if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "A generation is already in progress. Please wait.");
@@ -964,6 +1110,13 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
 studioRouter.post(`${BASE}/clients/:id/ideas`, requireClientOwner, async (req, res, next) => {
   try {
+    // Service health pre-flight
+    if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+    { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
+
+    // Global budget check
+    if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+
     const canProceed = await acquireDedup(req.user.id, "ideas", { clientId: req.params.id });
     if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "Idea generation is already in progress. Please wait.");
 
@@ -1018,6 +1171,13 @@ studioRouter.post(
     try {
       const parsed = AutopilotExecuteSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      // Service health pre-flight
+      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+      { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
+
+      // Global budget check
+      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
 
       const actorSub = getAuth0Sub(req);
       const result = await executeAutopilot(req.params.id, actorSub, {
@@ -1370,6 +1530,13 @@ studioRouter.post(
       const parsed = GenerateMediaSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
+      // Service health pre-flight
+      if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily limited. Please try again in a few minutes.");
+      { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
+
+      // Global budget check
+      if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI image generation is temporarily unavailable due to budget limits. Please try again later.");
+
       const canProceed = await acquireDedup(req.user.id, "image", parsed.data);
       if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "An image generation is already in progress. Please wait.");
 
@@ -1381,6 +1548,7 @@ studioRouter.post(
       const asset = await service.enqueueGeneration({
         ...parsed.data,
         createdBy: actorSub,
+        userId: req.user.id,
       });
 
       await incrementUsage(req.user.id, "images");
@@ -1404,7 +1572,9 @@ studioRouter.post(
         });
       }).catch(() => {});
 
-      res.status(201).json(service.formatAsset(asset));
+      const response = service.formatAsset(asset);
+      if (asset.queued === false) response.processingNote = "Processing delayed — your content is being generated";
+      res.status(201).json(response);
     } catch (err) {
       next(err);
     }
@@ -1418,6 +1588,23 @@ studioRouter.post(
       const parsed = GenerateVideoSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
+      // Service health pre-flight
+      if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Video generation temporarily limited. Please try again in a few minutes.");
+      const throttle = await getThrottlePolicy();
+      if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
+
+      // Explicit tier gate — FREE/STARTER have 0 videos
+      const sub = await getSubscription(req.user.id);
+      const tier = sub?.tier ?? "FREE";
+      const tierLimits = getLimitsForTier(tier);
+      if (tierLimits.videos === 0) return sendError(res, 402, "TIER_LIMIT", "Video generation is not available on your plan. Upgrade to Pro or higher.");
+
+      // Video throttle — disabled when fal budget at warning+
+      if (throttle.videoDisabled) return sendError(res, 503, "FEATURE_THROTTLED", "Video generation is temporarily limited to manage costs. Please try again later.");
+
+      // Global budget check
+      if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI video generation is temporarily unavailable due to budget limits. Please try again later.");
+
       const canProceed = await acquireDedup(req.user.id, "video", parsed.data);
       if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "A video generation is already in progress. Please wait.");
 
@@ -1429,6 +1616,7 @@ studioRouter.post(
       const asset = await service.enqueueVideoGeneration({
         ...parsed.data,
         createdBy: actorSub,
+        userId: req.user.id,
       });
 
       await incrementUsage(req.user.id, "videos");
@@ -1452,7 +1640,9 @@ studioRouter.post(
         });
       }).catch(() => {});
 
-      res.status(201).json(service.formatAsset(asset));
+      const response = service.formatAsset(asset);
+      if (asset.queued === false) response.processingNote = "Processing delayed — your content is being generated";
+      res.status(201).json(response);
     } catch (err) {
       next(err);
     }
