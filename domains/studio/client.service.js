@@ -53,10 +53,25 @@ function forbidden() {
 }
 
 export async function createClient(data, createdBy) {
+  const baseSlug = data.slug;
+  let slug = baseSlug;
+
+  // If slug already exists (including archived clients), append a numeric suffix
+  const existing = await prisma.client.findUnique({ where: { slug } });
+  if (existing) {
+    let suffix = 2;
+    while (true) {
+      slug = `${baseSlug}-${suffix}`;
+      const taken = await prisma.client.findUnique({ where: { slug } });
+      if (!taken) break;
+      suffix++;
+    }
+  }
+
   return prisma.client.create({
     data: {
       name: data.name,
-      slug: data.slug,
+      slug,
       logoUrl: data.logoUrl ?? null,
       status: data.status ?? "ACTIVE",
       createdBy,
