@@ -118,6 +118,7 @@ export async function executeAutopilot(
         createdBy: actorSub,
         dataItemId: suggestion.dataItem.id,
         blueprintId: suggestion.blueprint.id,
+        userId,
       });
 
       await incrementUsage(userId, "posts");

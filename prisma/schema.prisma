@@ -413,6 +413,17 @@ enum PlanTier {
   STARTER
   GROWTH
   PRO
+  AGENCY
+}
+
+enum AiActionType {
+  GENERATE_POST
+  REGENERATE
+  PARSE
+  IMAGE
+  VIDEO
+  IDEAS
+  ONBOARDING
 }
 
 enum SubscriptionStatus {
@@ -450,6 +461,23 @@ model UsageRecord {
 
   @@unique([userId, periodStart])
   @@map("usage_records")
+}
+
+model AiUsageLog {
+  id                 String       @id @default(cuid())
+  userId             String
+  clientId           String?
+  actionType         AiActionType
+  model              String
+  promptTokens       Int          @default(0)
+  completionTokens   Int          @default(0)
+  estimatedCostCents Float        @default(0)
+  metadata           Json?
+  createdAt          DateTime     @default(now())
+
+  @@index([userId, createdAt])
+  @@index([clientId, createdAt])
+  @@map("ai_usage_logs")
 }
 
 // ── Post Metrics ───────────────────────────────────────────────────────

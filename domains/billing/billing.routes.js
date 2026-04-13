@@ -3,7 +3,8 @@ import Stripe from "stripe";
 import { env } from "../../config/env.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
 import * as billingService from "./billing.service.js";
-import { CreateCheckoutSchema, CreatePortalSchema } from "./billing.schemas.js";
+import { getUsageForPeriod, getAiCostBreakdown } from "./aiUsageTracking.service.js";
+import { CreateCheckoutSchema, CreatePortalSchema, ChangePlanSchema } from "./billing.schemas.js";
 
 export const billingRouter = express.Router();
 
@@ -61,6 +62,60 @@ billingRouter.post(`${BASE}/portal-session`, async (req, res, next) => {
       ...parsed.data,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Change Plan (Upgrade / Downgrade) ───────────────────────────────────
+
+billingRouter.post(`${BASE}/change-plan`, async (req, res, next) => {
+  try {
+    const parsed = ChangePlanSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const result = await billingService.changePlan({
+      userId: req.user.id,
+      newTier: parsed.data.tier,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Remaining usage ─────────────────────────────────────────────────────
+
+billingRouter.get(`${BASE}/remaining`, async (req, res, next) => {
+  try {
+    const remaining = await billingService.getRemainingUsage(req.user.id);
+    res.json(remaining);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── AI Usage Analytics ──────────────────────────────────────────────────
+
+billingRouter.get(`${BASE}/ai-usage`, async (req, res, next) => {
+  try {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth(), 1);
+    const to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const usage = await getUsageForPeriod(req.user.id, from, to);
+    res.json({ period: { start: from, end: to }, usage });
+  } catch (err) {
+    next(err);
+  }
+});
+
+billingRouter.get(`${BASE}/ai-cost-breakdown`, async (req, res, next) => {
+  try {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth(), 1);
+    const to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const breakdown = await getAiCostBreakdown(req.user.id, from, to);
+    res.json({ period: { start: from, end: to }, breakdown });
   } catch (err) {
     next(err);
   }

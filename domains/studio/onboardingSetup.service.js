@@ -6,6 +6,7 @@
 import { generateStructuredContent } from "./generation/openai.provider.js";
 import { scrapeUrl } from "./scrapeUrl.js";
 import { crawlWebsite } from "./crawlWebsite.js";
+import { parseToStructuredData } from "./dataExtraction.service.js";
 
 const MAX_TEXT_LENGTH = 500_000;
 const EXTRACTION_TIMEOUT_MS = 60_000;
@@ -181,6 +182,7 @@ export async function extractBrandData(content, { url } = {}) {
     systemPrompt: BRAND_EXTRACTION_SYSTEM_PROMPT,
     userPrompt,
     responseFormat: BRAND_EXTRACTION_FORMAT,
+    taskType: "parsing",
     temperature: EXTRACTION_TEMPERATURE,
     timeoutMs: EXTRACTION_TIMEOUT_MS,
   });
@@ -198,11 +200,26 @@ export async function extractBrandFromText(description) {
     systemPrompt: BRAND_EXTRACTION_SYSTEM_PROMPT,
     userPrompt,
     responseFormat: BRAND_EXTRACTION_FORMAT,
+    taskType: "parsing",
     temperature: EXTRACTION_TEMPERATURE,
     timeoutMs: EXTRACTION_TIMEOUT_MS,
   });
 
   return postProcess(result.parsed);
+}
+
+// ── Data Item Extraction ────────────────────────────────────────────────
+
+/**
+ * Extract structured data items (products, testimonials, FAQs, etc.)
+ * from scraped content using the existing AI extraction pipeline.
+ */
+export async function extractDataItems(combinedText, { url, images } = {}) {
+  return parseToStructuredData(combinedText, {
+    hint: "Extract all products, inventory, services, testimonials, team members, FAQs, and any other structured business data",
+    sourceUrl: url,
+    images,
+  });
 }
 
 // ── Post-processing ────────────────────────────────────────────────────

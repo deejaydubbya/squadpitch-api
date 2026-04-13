@@ -3,6 +3,7 @@
 import { loadClientGenerationContext } from "./clientOrchestrator.js";
 import { buildSystemPrompt } from "./promptBuilder.js";
 import { generateStructuredContent } from "./openai.provider.js";
+import { trackAiUsage } from "../../billing/aiUsageTracking.service.js";
 
 const IDEAS_OUTPUT_SCHEMA = {
   name: "content_ideas",
@@ -31,7 +32,7 @@ const IDEAS_OUTPUT_SCHEMA = {
   },
 };
 
-export async function generateContentIdeas(clientId) {
+export async function generateContentIdeas(clientId, { userId } = {}) {
   const ctx = await loadClientGenerationContext(clientId);
   const systemPrompt = buildSystemPrompt(ctx);
 
@@ -52,8 +53,21 @@ Respond with JSON matching the content_ideas schema.`;
     systemPrompt,
     userPrompt,
     responseFormat,
+    taskType: "lightweight",
     temperature: 0.9,
   });
+
+  // Fire-and-forget: track AI usage
+  if (userId) {
+    trackAiUsage({
+      userId,
+      clientId,
+      actionType: "IDEAS",
+      model: result.model,
+      promptTokens: result.usage?.prompt_tokens ?? 0,
+      completionTokens: result.usage?.completion_tokens ?? 0,
+    });
+  }
 
   const parsed = result.parsed;
   return Array.isArray(parsed?.ideas) ? parsed.ideas : [];

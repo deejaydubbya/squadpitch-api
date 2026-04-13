@@ -62,6 +62,9 @@ import { getUnusedData, getDataSuggestions } from "./dataUsage.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
 import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit } from "../billing/billing.service.js";
+import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
+import { redisGet, redisSet } from "../../redis.js";
+import crypto from "crypto";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
@@ -71,6 +74,20 @@ import { parseDocument, isAcceptedFile } from "./documentParser.js";
 export const studioRouter = express.Router();
 
 const BASE = "/api/v1";
+const DEDUP_TTL = 10; // seconds — prevents double-click duplicate AI calls
+
+/**
+ * Acquire a short-lived Redis lock to prevent duplicate AI calls.
+ * Returns true if the lock was acquired (proceed), false if already in-flight.
+ */
+async function acquireDedup(userId, action, body) {
+  const hash = crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 16);
+  const key = `sp:dedup:${userId}:${action}:${hash}`;
+  const existing = await redisGet(key);
+  if (existing) return false;
+  await redisSet(key, "1", DEDUP_TTL);
+  return true;
+}
 
 // Ownership middleware: verifies the client belongs to the authenticated user.
 async function requireClientOwner(req, res, next) {
@@ -452,6 +469,7 @@ studioRouter.post(
             createdBy: actorSub,
             dataItemId: item.dataItemId,
             blueprintId: item.blueprintId,
+            userId: req.user.id,
           });
 
           await incrementUsage(req.user.id, "posts");
@@ -616,6 +634,7 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
 
     const { input, inputType, documentTexts } = parsed.data;
     let brandData;
+    let dataItems = [];
     let images = [];
 
     const hasUrl = inputType === "url" && input.length >= 3;
@@ -630,12 +649,35 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
         documentTexts,
       });
       images = crawledImages;
-      brandData = await onboardingService.extractBrandData(combinedText, {
-        url: hasUrl ? input : undefined,
-      });
+
+      // Run brand extraction and data extraction in parallel
+      const [brand, items] = await Promise.all([
+        onboardingService.extractBrandData(combinedText, {
+          url: hasUrl ? input : undefined,
+        }),
+        onboardingService.extractDataItems(combinedText, {
+          url: hasUrl ? input : undefined,
+          images: crawledImages,
+        }).catch((err) => {
+          console.error("[onboarding] Data extraction failed:", err.message || err);
+          return [];
+        }),
+      ]);
+      brandData = brand;
+      dataItems = items;
     } else {
       brandData = await onboardingService.extractBrandFromText(input);
     }
+
+    // Fire-and-forget: track onboarding AI usage
+    trackAiUsage({
+      userId: req.user.id,
+      actionType: "ONBOARDING",
+      model: "gpt-4o-mini",
+      promptTokens: 0,
+      completionTokens: 0,
+      metadata: { inputType },
+    });
 
     res.json({
       brandData: {
@@ -656,6 +698,7 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
       suggestedGoal: brandData.suggestedGoal,
       suggestedChannels: brandData.suggestedChannels,
       images,
+      dataItems,
     });
   } catch (err) {
     if (err.status === 400 || err.status === 408 || err.status === 422) {
@@ -870,6 +913,10 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     const parsed = GenerateContentSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
+    // Idempotency: reject duplicate requests within 10s window
+    const canProceed = await acquireDedup(req.user.id, "generate", parsed.data);
+    if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "A generation is already in progress. Please wait.");
+
     // Usage limit check
     const allowed = await checkUsageLimit(req.user.id, "posts");
     if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more.");
@@ -881,6 +928,7 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
       createdBy: actorSub,
       dataItemId,
       blueprintId,
+      userId: req.user.id,
     });
 
     await incrementUsage(req.user.id, "posts");
@@ -916,7 +964,10 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
 studioRouter.post(`${BASE}/clients/:id/ideas`, requireClientOwner, async (req, res, next) => {
   try {
-    const ideas = await service.generateContentIdeas(req.params.id);
+    const canProceed = await acquireDedup(req.user.id, "ideas", { clientId: req.params.id });
+    if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "Idea generation is already in progress. Please wait.");
+
+    const ideas = await service.generateContentIdeas(req.params.id, { userId: req.user.id });
     res.json({ ideas });
   } catch (err) {
     next(err);
@@ -1319,6 +1370,9 @@ studioRouter.post(
       const parsed = GenerateMediaSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
+      const canProceed = await acquireDedup(req.user.id, "image", parsed.data);
+      if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "An image generation is already in progress. Please wait.");
+
       // Usage limit check
       const allowed = await checkUsageLimit(req.user.id, "images");
       if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly image generation limit. Upgrade your plan for more.");
@@ -1330,6 +1384,15 @@ studioRouter.post(
       });
 
       await incrementUsage(req.user.id, "images");
+
+      trackAiUsage({
+        userId: req.user.id,
+        clientId: parsed.data.clientId,
+        actionType: "IMAGE",
+        model: parsed.data.model ?? "fal-ai/flux/dev",
+        promptTokens: 0,
+        completionTokens: 0,
+      });
 
       checkUsageNearing(req.user.id, "images").then((info) => {
         if (info) enqueueNotification({
@@ -1355,6 +1418,9 @@ studioRouter.post(
       const parsed = GenerateVideoSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
+      const canProceed = await acquireDedup(req.user.id, "video", parsed.data);
+      if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "A video generation is already in progress. Please wait.");
+
       // Usage limit check
       const allowed = await checkUsageLimit(req.user.id, "videos");
       if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly video generation limit. Upgrade your plan for more.");
@@ -1366,6 +1432,15 @@ studioRouter.post(
       });
 
       await incrementUsage(req.user.id, "videos");
+
+      trackAiUsage({
+        userId: req.user.id,
+        clientId: parsed.data.clientId,
+        actionType: "VIDEO",
+        model: parsed.data.model ?? "fal-ai/minimax/video-01-live",
+        promptTokens: 0,
+        completionTokens: 0,
+      });
 
       checkUsageNearing(req.user.id, "videos").then((info) => {
         if (info) enqueueNotification({
@@ -1489,6 +1564,7 @@ studioRouter.post(
         channel: parsed.data.channel,
         guidance,
         createdBy: actorSub,
+        userId: req.user.id,
       });
 
       await incrementUsage(req.user.id, "posts");

@@ -7,7 +7,7 @@
 import { generateStructuredContent } from "./generation/openai.provider.js";
 
 const MAX_INPUT_BYTES = 500_000; // 500KB
-const EXTRACTION_TIMEOUT_MS = 90_000;
+const EXTRACTION_TIMEOUT_MS = 120_000;
 const EXTRACTION_TEMPERATURE = 0.3;
 
 const DATA_ITEM_TYPES_DESCRIPTION = `
@@ -69,12 +69,20 @@ Rules:
 - Each item MUST have a type, title, and relevant dataJson fields
 - When the user provides a hint about what to extract, prioritize finding those items
 - Set confidence (0.0-1.0) based on how well the content matches the type
-- Assign relevant tags (1-5 per item)
-- Set priority (0-10) based on usefulness
-- Write concise summaries (1-2 sentences) capturing the key message
-- Titles should be compelling and specific, not generic
 - Do NOT fabricate data — only extract what's present in the content
-- If image URLs are provided, include the most relevant imageUrl in each item's dataJson
+- Titles should be compelling and specific, not generic
+
+REQUIRED fields — every item MUST include ALL of these:
+- summary: A 1-2 sentence description capturing the key selling point or message. NEVER leave this empty.
+- tags: 2-5 relevant keyword tags (e.g. ["sedan", "toyota", "2024", "low-mileage"]). NEVER leave this empty.
+- priority: 0-10 based on usefulness
+- dataJson: Extract ALL available details into dataJson — not just name and price. Include every field present in the content (e.g. descriptions, specs, features, mileage, year, location, dates, quantities, conditions, categories).
+
+Image association (REQUIRED when image URLs are provided):
+- Match each item to its most relevant image URL from the provided list
+- Set dataJson.imageUrl to that URL
+- Use URL patterns, filenames, and proximity in the content to match images to items
+- Every item should have an imageUrl if any plausible match exists
 
 You MUST return a JSON object with an "items" array. Even if the content is unusual, extract what you can.`;
 
@@ -117,6 +125,7 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
     systemPrompt: SYSTEM_PROMPT,
     userPrompt,
     responseFormat: RESPONSE_FORMAT,
+    taskType: "parsing",
     temperature: EXTRACTION_TEMPERATURE,
     timeoutMs: EXTRACTION_TIMEOUT_MS,
   });

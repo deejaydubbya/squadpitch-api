@@ -1,7 +1,7 @@
 import Stripe from "stripe";
 import { env } from "../../config/env.js";
 import { prisma } from "../../prisma.js";
-import { getLimitsForTier } from "./billing.constants.js";
+import { getLimitsForTier, getTierRank } from "./billing.constants.js";
 
 const stripe = env.STRIPE_SECRET_KEY
   ? new Stripe(env.STRIPE_SECRET_KEY)
@@ -14,8 +14,9 @@ function requireStripe() {
 
 const TIER_PRICE_MAP = {
   STARTER: env.STRIPE_STARTER_PRICE_ID,
-  GROWTH: env.STRIPE_GROWTH_PRICE_ID,
   PRO: env.STRIPE_PRO_PRICE_ID,
+  GROWTH: env.STRIPE_GROWTH_PRICE_ID,
+  AGENCY: env.STRIPE_AGENCY_PRICE_ID,
 };
 
 // ── Customer management ──────────────────────────────────────────────────
@@ -172,7 +173,95 @@ export async function checkUsageLimit(userId, field) {
   return current < limit;
 }
 
+/**
+ * Get remaining usage for all fields.
+ */
+export async function getRemainingUsage(userId) {
+  const { usage, limits, tier, period } = await getUsage(userId);
+  return {
+    period,
+    tier,
+    remaining: {
+      posts: Math.max(0, (limits.posts ?? Infinity) - (usage.posts ?? 0)),
+      images: Math.max(0, (limits.images ?? Infinity) - (usage.images ?? 0)),
+      videos: Math.max(0, (limits.videos ?? Infinity) - (usage.videos ?? 0)),
+    },
+    usage,
+    limits,
+  };
+}
+
+// ── Plan Change (Upgrade / Downgrade) ───────────────────────────────────
+
+/**
+ * Change an existing subscription to a new tier via Stripe proration.
+ * NEVER creates a new subscription — always updates the existing one.
+ */
+export async function changePlan({ userId, newTier }) {
+  const s = requireStripe();
+
+  const sub = await prisma.subscription.findUnique({ where: { userId } });
+  if (!sub?.stripeSubscriptionId) {
+    throw Object.assign(new Error("No active subscription to change. Use checkout to subscribe first."), { status: 400 });
+  }
+
+  const newPriceId = TIER_PRICE_MAP[newTier];
+  if (!newPriceId) {
+    throw Object.assign(new Error(`No price configured for tier: ${newTier}`), { status: 400 });
+  }
+
+  // Prevent changing to the same tier
+  if (sub.tier === newTier) {
+    throw Object.assign(new Error("Already on this plan"), { status: 400 });
+  }
+
+  // Get the Stripe subscription to find the subscription item ID
+  const stripeSub = await s.subscriptions.retrieve(sub.stripeSubscriptionId);
+  const subscriptionItemId = stripeSub.items?.data?.[0]?.id;
+  if (!subscriptionItemId) {
+    throw Object.assign(new Error("Could not find subscription item"), { status: 500 });
+  }
+
+  const isUpgrade = getTierRank(newTier) > getTierRank(sub.tier);
+
+  // Update the existing subscription with proration
+  const updated = await s.subscriptions.update(sub.stripeSubscriptionId, {
+    items: [{
+      id: subscriptionItemId,
+      price: newPriceId,
+    }],
+    proration_behavior: "create_prorations",
+    metadata: { tier: newTier },
+  });
+
+  const periodEnd = updated.current_period_end
+    ?? updated.items?.data?.[0]?.current_period_end;
+
+  // Update local DB immediately for upgrades (downgrades confirmed via webhook)
+  await prisma.subscription.update({
+    where: { userId },
+    data: {
+      tier: newTier,
+      ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
+    },
+  });
+
+  return {
+    tier: newTier,
+    previousTier: sub.tier,
+    isUpgrade,
+    currentPeriodEnd: periodEnd ? new Date(periodEnd * 1000) : null,
+  };
+}
+
 // ── Webhook ──────────────────────────────────────────────────────────────
+
+// Reverse-lookup: Stripe price ID → tier name
+const PRICE_TO_TIER = Object.fromEntries(
+  Object.entries(TIER_PRICE_MAP)
+    .filter(([, v]) => v)
+    .map(([k, v]) => [v, k])
+);
 
 export async function handleWebhookEvent(event) {
   switch (event.type) {
@@ -224,10 +313,16 @@ export async function handleWebhookEvent(event) {
       const periodEnd = sub.current_period_end
         ?? sub.items?.data?.[0]?.current_period_end;
 
+      // Sync tier from Stripe price ID (handles plan changes via Stripe dashboard or API)
+      const currentPriceId = sub.items?.data?.[0]?.price?.id;
+      const syncedTier = currentPriceId ? PRICE_TO_TIER[currentPriceId] : null;
+
       await prisma.subscription.update({
         where: { stripeSubscriptionId: sub.id },
         data: {
           status,
+          ...(syncedTier && { tier: syncedTier }),
+          ...(sub.metadata?.tier && !syncedTier && { tier: sub.metadata.tier }),
           ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
           cancelAtPeriodEnd: sub.cancel_at_period_end,
         },
@@ -240,6 +335,32 @@ export async function handleWebhookEvent(event) {
       await prisma.subscription.updateMany({
         where: { stripeSubscriptionId: sub.id },
         data: { status: "CANCELED" },
+      });
+      break;
+    }
+
+    case "invoice.paid": {
+      // Successful payment — ensure subscription is marked ACTIVE
+      const invoice = event.data.object;
+      const subId = invoice.subscription;
+      if (!subId) break;
+
+      await prisma.subscription.updateMany({
+        where: { stripeSubscriptionId: subId },
+        data: { status: "ACTIVE" },
+      });
+      break;
+    }
+
+    case "invoice.payment_failed": {
+      // Payment failed — mark subscription as PAST_DUE
+      const invoice = event.data.object;
+      const subId = invoice.subscription;
+      if (!subId) break;
+
+      await prisma.subscription.updateMany({
+        where: { stripeSubscriptionId: subId },
+        data: { status: "PAST_DUE" },
       });
       break;
     }

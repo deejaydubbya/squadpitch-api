@@ -17,6 +17,7 @@ import {
 } from "./openai.provider.js";
 import { formatDraft } from "../draft.service.js";
 import { incrementDataItemUsage } from "../data.service.js";
+import { trackAiUsage } from "../../billing/aiUsageTracking.service.js";
 
 /**
  * Persist a FAILED draft row when generation fails so operators see the
@@ -120,6 +121,7 @@ export async function generateDraft({
   createdBy,
   dataItemId,
   blueprintId,
+  userId,
 }) {
   const ctx = await loadClientGenerationContext(clientId);
 
@@ -165,6 +167,7 @@ export async function generateDraft({
       systemPrompt,
       userPrompt,
       responseFormat,
+      taskType: "generation",
       temperature: 0.7,
     });
   } catch (err) {
@@ -178,6 +181,18 @@ export async function generateDraft({
       error: err,
     });
     return formatDraft(failed);
+  }
+
+  // Fire-and-forget: track AI usage
+  if (userId) {
+    trackAiUsage({
+      userId,
+      clientId,
+      actionType: "GENERATE_POST",
+      model: result.model,
+      promptTokens: result.usage?.prompt_tokens ?? 0,
+      completionTokens: result.usage?.completion_tokens ?? 0,
+    });
   }
 
   const content = normalizeGeneratedContent(result.parsed);

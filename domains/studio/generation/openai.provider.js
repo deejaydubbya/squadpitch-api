@@ -7,6 +7,7 @@
 
 import OpenAI from "openai";
 import { env } from "../../../config/env.js";
+import { selectModel } from "../../billing/aiModelRouter.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -54,12 +55,13 @@ export async function generateStructuredContent({
   systemPrompt,
   userPrompt,
   model,
+  taskType,
   responseFormat,
   temperature,
   timeoutMs,
 }) {
   const client = getClient();
-  const selectedModel = model ?? env.OPENAI_DEFAULT_MODEL ?? "gpt-4o-mini";
+  const selectedModel = model ?? (taskType ? selectModel(taskType) : null) ?? env.OPENAI_DEFAULT_MODEL ?? "gpt-4o-mini";
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),

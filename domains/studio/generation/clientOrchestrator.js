@@ -2,8 +2,15 @@
 // the normalized GenerationContext consumed by promptBuilder + the
 // aiGenerationService. Keeps the "load client with everything" query
 // in one place so route handlers / services don't reimplement it.
+//
+// Redis cache: generation contexts are cached for 30 minutes to avoid
+// redundant DB reads when users generate multiple posts in a session.
 
 import { prisma } from "../../../prisma.js";
+import { redisGet, redisSet, redisDel } from "../../../redis.js";
+
+const CACHE_TTL = 1800; // 30 minutes
+const CACHE_PREFIX = "sp:client:ctx:";
 
 /**
  * Load a Content Studio client with all profiles and channel settings.
@@ -20,6 +27,23 @@ import { prisma } from "../../../prisma.js";
  * }>}
  */
 export async function loadClientGenerationContext(clientId) {
+  // Try Redis cache first
+  const cacheKey = `${CACHE_PREFIX}${clientId}`;
+  const cached = await redisGet(cacheKey);
+  if (cached) {
+    try {
+      const ctx = JSON.parse(cached);
+      // Validate cached client status
+      if (ctx.client?.status === "ARCHIVED" || ctx.client?.status === "PAUSED") {
+        await redisDel(cacheKey);
+      } else {
+        return ctx;
+      }
+    } catch {
+      // Corrupted cache — fall through to DB
+    }
+  }
+
   const client = await prisma.client.findUnique({
     where: { id: clientId },
     include: {
@@ -55,7 +79,7 @@ export async function loadClientGenerationContext(clientId) {
     ? client.voiceProfile.contentBuckets
     : [];
 
-  return {
+  const ctx = {
     client,
     brand: client.brandProfile ?? null,
     voice: client.voiceProfile ?? null,
@@ -63,4 +87,17 @@ export async function loadClientGenerationContext(clientId) {
     channelSettings: client.channelSettings ?? [],
     contentBuckets,
   };
+
+  // Cache for next request (fire-and-forget)
+  redisSet(cacheKey, JSON.stringify(ctx), CACHE_TTL).catch(() => {});
+
+  return ctx;
+}
+
+/**
+ * Invalidate the cached generation context for a client.
+ * Call this after updating brand/voice/media profiles or channel settings.
+ */
+export async function invalidateClientContext(clientId) {
+  await redisDel(`${CACHE_PREFIX}${clientId}`);
 }

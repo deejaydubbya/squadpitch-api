@@ -5,6 +5,7 @@
 // MediaProfile, and ChannelSettings.
 
 import { prisma } from "../../prisma.js";
+import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 
 // -- Clients -----------------------------------------------------------------
 
@@ -104,7 +105,7 @@ export async function upsertBrandProfile(clientId, data, updatedBy) {
   });
   if (!client) throw notFound();
 
-  return prisma.brandProfile.upsert({
+  const result = await prisma.brandProfile.upsert({
     where: { clientId },
     create: {
       clientId,
@@ -130,6 +131,8 @@ export async function upsertBrandProfile(clientId, data, updatedBy) {
       updatedBy: updatedBy ?? null,
     },
   });
+  invalidateClientContext(clientId).catch(() => {});
+  return result;
 }
 
 // -- Voice profile -----------------------------------------------------------
@@ -160,23 +163,26 @@ export async function upsertVoiceProfile(clientId, data, updatedBy) {
     updatedBy: updatedBy ?? null,
   };
 
+  let result;
   if (existing) {
-    return prisma.voiceProfile.update({
+    result = await prisma.voiceProfile.update({
       where: { clientId },
       data: {
         ...payload,
         version: existing.version + 1,
       },
     });
+  } else {
+    result = await prisma.voiceProfile.create({
+      data: {
+        clientId,
+        ...payload,
+        version: 1,
+      },
+    });
   }
-
-  return prisma.voiceProfile.create({
-    data: {
-      clientId,
-      ...payload,
-      version: 1,
-    },
-  });
+  invalidateClientContext(clientId).catch(() => {});
+  return result;
 }
 
 // -- Media profile -----------------------------------------------------------
@@ -194,7 +200,7 @@ export async function upsertMediaProfile(clientId, data, updatedBy) {
   });
   if (!client) throw notFound();
 
-  return prisma.mediaProfile.upsert({
+  const result = await prisma.mediaProfile.upsert({
     where: { clientId },
     create: {
       clientId,
@@ -220,6 +226,8 @@ export async function upsertMediaProfile(clientId, data, updatedBy) {
       updatedBy: updatedBy ?? null,
     },
   });
+  invalidateClientContext(clientId).catch(() => {});
+  return result;
 }
 
 // -- Channel settings --------------------------------------------------------
@@ -242,7 +250,7 @@ export async function upsertChannelSettings(clientId, items) {
   });
   if (!client) throw notFound();
 
-  return prisma.$transaction(
+  const result = await prisma.$transaction(
     items.map((item) =>
       prisma.channelSettings.upsert({
         where: {
@@ -267,6 +275,8 @@ export async function upsertChannelSettings(clientId, items) {
       })
     )
   );
+  invalidateClientContext(clientId).catch(() => {});
+  return result;
 }
 
 // -- Formatters --------------------------------------------------------------

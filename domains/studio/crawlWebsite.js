@@ -1,12 +1,12 @@
 // Multi-page website crawler for onboarding.
 //
 // Discovers subpages via sitemap.xml + internal links, then scrapes
-// up to 10 pages in parallel for richer brand extraction.
+// up to 20 pages in parallel for richer brand extraction.
 
 import { scrapeUrl } from "./scrapeUrl.js";
 
 const SITEMAP_TIMEOUT_MS = 10_000;
-const MAX_PAGES = 10;
+const MAX_PAGES = 20;
 const CONCURRENCY = 5;
 
 // Paths that tend to have useful brand info, scored by priority.
@@ -14,6 +14,13 @@ const PRIORITY_PATTERNS = [
   /\/about/i,
   /\/services/i,
   /\/products/i,
+  /\/inventory/i,
+  /\/vehicles/i,
+  /\/listings/i,
+  /\/catalog/i,
+  /\/shop/i,
+  /\/store/i,
+  /\/cars/i,
   /\/team/i,
   /\/pricing/i,
   /\/features/i,
