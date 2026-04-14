@@ -137,11 +137,13 @@ export async function resolveRealEstateContext(workspaceId) {
   const viewMap = Object.fromEntries(techStackView.map((i) => [i.providerKey, i]));
 
   // 3. Build data counts map
+  // Source of truth: WorkspaceDataItems (see realEstateAssets.js for data ownership docs)
+  // Listings = CUSTOM type, Reviews = TESTIMONIAL type
   const dataCounts = Object.fromEntries(
     dataItemCounts.map((r) => [r.type, r._count._all]),
   );
-  const listingCount = dataCounts.CUSTOM ?? 0; // listings stored as CUSTOM type
-  const reviewCount = dataCounts.TESTIMONIAL ?? 0; // reviews stored as TESTIMONIAL type
+  const listingCount = dataCounts.CUSTOM ?? 0;
+  const reviewCount = dataCounts.TESTIMONIAL ?? 0;
 
   // 4. Build channel connection ID map
   const channelIdMap = Object.fromEntries(

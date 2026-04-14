@@ -3,8 +3,13 @@
 // and independent of the prompt/AI layer.
 //
 // Consumers: aiGenerationService.js (loads assets), promptBuilder.js (formats them).
+//
+// Data flow: reads listing/review data through the canonical asset access
+// layer (realEstateAssets.js) or directly from WorkspaceDataItems. All
+// content-driving assets live in WorkspaceDataItems — this module never
+// reads raw tech stack connection metadata for content.
 
-import { prisma } from "../../prisma.js";
+import { getRealEstateListings, getRealEstateTestimonials } from "./realEstateAssets.js";
 
 // ── Listing normalization ───────────────────────────────────────────────
 
@@ -132,20 +137,10 @@ export function selectBestListing(normalizedListings) {
  * @returns {Promise<{ bestListing, bestListingSource, reviews, listingCount, reviewCount, businessProfile, rotationApplied }>}
  */
 export async function loadRealEstateGenerationAssets(workspaceId, realEstateContext) {
+  // Read through canonical asset access layer
   const [listingItems, reviewItems] = await Promise.all([
-    prisma.workspaceDataItem.findMany({
-      where: { clientId: workspaceId, type: "CUSTOM", status: "ACTIVE" },
-      orderBy: [
-        { usageCount: "asc" },   // least-used first (rotation)
-        { createdAt: "desc" },    // newest among same usage
-      ],
-      take: 20,
-    }),
-    prisma.workspaceDataItem.findMany({
-      where: { clientId: workspaceId, type: "TESTIMONIAL", status: "ACTIVE" },
-      orderBy: { createdAt: "desc" },
-      take: 10,
-    }),
+    getRealEstateListings(workspaceId, { orderBy: "rotation", limit: 20 }),
+    getRealEstateTestimonials(workspaceId, { limit: 10 }),
   ]);
 
   // Normalize all listings

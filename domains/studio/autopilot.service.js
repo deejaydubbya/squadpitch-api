@@ -19,6 +19,7 @@
 import { prisma } from "../../prisma.js";
 import { resolveRealEstateContext } from "../industry/techStack.service.js";
 import { loadRealEstateGenerationAssets } from "../industry/realEstateGeneration.js";
+import { getRecentAssetCount } from "../industry/realEstateAssets.js";
 import { generateDraft } from "./generation/aiGenerationService.js";
 import { formatDraft } from "./draft.service.js";
 
@@ -93,6 +94,7 @@ async function evaluateTriggers(workspaceId, reAssets, settings) {
   const triggers = [];
 
   // Find most recent autopilot draft and most recent draft overall
+  // Asset counts use canonical access layer (realEstateAssets.js)
   const [lastAutopilotDraft, lastAnyDraft, recentNewListings, recentNewReviews] = await Promise.all([
     prisma.draft.findFirst({
       where: { clientId: workspaceId, createdBy: "system:autopilot" },
@@ -104,24 +106,10 @@ async function evaluateTriggers(workspaceId, reAssets, settings) {
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     }),
-    // Listings added in last 24 hours
-    prisma.workspaceDataItem.count({
-      where: {
-        clientId: workspaceId,
-        type: "CUSTOM",
-        status: "ACTIVE",
-        createdAt: { gte: new Date(Date.now() - DAY_MS) },
-      },
-    }),
-    // Reviews added in last 48 hours
-    prisma.workspaceDataItem.count({
-      where: {
-        clientId: workspaceId,
-        type: "TESTIMONIAL",
-        status: "ACTIVE",
-        createdAt: { gte: new Date(Date.now() - 2 * DAY_MS) },
-      },
-    }),
+    // Listings added in last 24 hours (canonical)
+    getRecentAssetCount(workspaceId, "CUSTOM", DAY_MS),
+    // Reviews added in last 48 hours (canonical)
+    getRecentAssetCount(workspaceId, "TESTIMONIAL", 2 * DAY_MS),
   ]);
 
   // A. new_listing — recent listing imports exist

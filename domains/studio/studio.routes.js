@@ -82,6 +82,7 @@ import {
 } from "../industry/techStack.service.js";
 import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, getAutopilotStatus } from "./autopilot.service.js";
+import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
 
@@ -2157,10 +2158,16 @@ studioRouter.post(
       // Filter to CUSTOM type (listings) and cap at 10
       const listings = allItems.filter((i) => i.type === "CUSTOM").slice(0, 10);
 
+      // Stamp source attribution for provenance tracking
+      const stampedListings = listings.map((item) => ({
+        ...item,
+        dataJson: stampSourceAttribution(item.dataJson || {}, RE_SOURCE_TYPES.LISTING_FEED, { sourceUrl }),
+      }));
+
       // Persist via existing saveImportedItems
-      if (listings.length > 0) {
+      if (stampedListings.length > 0) {
         await importService.saveImportedItems(workspaceId, {
-          items: listings,
+          items: stampedListings,
           sourceType: "URL",
           sourceUrl,
         });
