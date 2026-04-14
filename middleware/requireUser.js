@@ -3,7 +3,7 @@
 
 import { getAuth0Sub } from "./auth.js";
 import { sendError } from "../lib/apiErrors.js";
-import { prisma } from "../prisma.js";
+import { prisma, reconnectPrisma } from "../prisma.js";
 
 export async function requireUser(req, res, next) {
   const sub = getAuth0Sub(req);
@@ -20,7 +20,7 @@ export async function requireUser(req, res, next) {
     req.auth?.payload?.["https://squadpitch.com/name"] ||
     null;
 
-  // Retry once on transient DB connection errors
+  // Retry once — on failure, force-reconnect Prisma pool (stale connections after Fly machine wake)
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const user = await prisma.user.upsert({
@@ -38,11 +38,15 @@ export async function requireUser(req, res, next) {
       return next();
     } catch (err) {
       if (attempt === 0) {
-        console.warn("[requireUser] Upsert failed, retrying:", err.message);
-        await new Promise((r) => setTimeout(r, 200));
+        console.warn("[requireUser] Upsert failed, reconnecting Prisma:", err.message);
+        try {
+          await reconnectPrisma();
+        } catch (reconnectErr) {
+          console.error("[requireUser] Reconnect failed:", reconnectErr.message);
+        }
         continue;
       }
-      console.error("[requireUser] Failed to upsert user after retry:", err.message);
+      console.error("[requireUser] Failed to upsert user after reconnect:", err.message);
       return sendError(res, 500, "INTERNAL", "Failed to resolve user");
     }
   }
