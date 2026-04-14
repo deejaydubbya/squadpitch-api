@@ -235,9 +235,11 @@ export async function generateDraft({
 
   // Auto-attach image from data item if available
   if (dataItem?.dataJson?.imageUrl && !draft.mediaUrl) {
+    draft.mediaUrl = dataItem.dataJson.imageUrl;
+    draft.mediaType = "image";
     await prisma.draft.update({
       where: { id: draft.id },
-      data: { mediaUrl: dataItem.dataJson.imageUrl, mediaType: "image" },
+      data: { mediaUrl: draft.mediaUrl, mediaType: "image" },
     }).catch(() => {});
   }
 
