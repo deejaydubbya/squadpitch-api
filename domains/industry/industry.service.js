@@ -83,3 +83,100 @@ export function getIndustryTechStack(industryKey) {
   const profile = getIndustryProfile(industryKey);
   return profile.techStack ?? [];
 }
+
+// ── Terminology & workflow language ──────────────────────────────────
+
+const DEFAULT_TERMINOLOGY = {
+  item: "product",
+  items: "products",
+  customer: "customer",
+  customers: "customers",
+  service: "service",
+  services: "services",
+  offer: "offer",
+  offers: "offers",
+  contentUnit: "post",
+  contentUnits: "posts",
+  campaign: "campaign",
+  campaigns: "campaigns",
+  primaryAction: "promote",
+};
+
+const DEFAULT_ONBOARDING_STEPS = {
+  explore: "Exploring your website...",
+  understand: "Understanding your brand...",
+  insights: "Discovering business insights...",
+  prepare: "Preparing your workspace...",
+  generate: "Creating your first posts...",
+};
+
+const DEFAULT_BUSINESS_DATA_LABELS = {
+  itemSingular: "Item",
+  itemPlural: "Items",
+  launchLabel: "New Item",
+  categoryLabel: "Category",
+  collectionLabel: "Collection",
+  serviceLabel: "Service",
+  offerLabel: "Offer",
+};
+
+/**
+ * Get industry-specific terminology with defaults.
+ * @param {string | null | undefined} industryKey
+ */
+export function getIndustryTerminology(industryKey) {
+  if (!industryKey) return { ...DEFAULT_TERMINOLOGY };
+  const profile = getIndustryProfile(industryKey);
+  return { ...DEFAULT_TERMINOLOGY, ...profile.terminology };
+}
+
+/**
+ * Get industry-specific onboarding step labels with defaults.
+ * @param {string | null | undefined} industryKey
+ */
+export function getIndustryOnboardingSteps(industryKey) {
+  if (!industryKey) return { ...DEFAULT_ONBOARDING_STEPS };
+  const profile = getIndustryProfile(industryKey);
+  return { ...DEFAULT_ONBOARDING_STEPS, ...profile.onboardingSteps };
+}
+
+/**
+ * Get industry-specific input hints (merged from onboarding config).
+ * @param {string | null | undefined} industryKey
+ */
+export function getIndustryInputHints(industryKey) {
+  if (!industryKey) return {
+    websitePlaceholder: "yourwebsite.com",
+    detailsLabel: "Business description",
+    detailsPlaceholder: "What does your business do? Who do you serve?",
+    detailsHelpText: "No website? No problem — describe your business instead.",
+  };
+  const profile = getIndustryProfile(industryKey);
+  return {
+    websitePlaceholder: profile.onboarding.websitePlaceholder,
+    detailsLabel: profile.onboarding.extraContextLabel,
+    detailsPlaceholder: profile.onboarding.extraContextPlaceholder,
+    detailsHelpText: profile.onboarding.helperText,
+  };
+}
+
+/**
+ * Get industry-specific business data labels with defaults.
+ * @param {string | null | undefined} industryKey
+ */
+export function getIndustryBusinessDataLabels(industryKey) {
+  if (!industryKey) return { ...DEFAULT_BUSINESS_DATA_LABELS };
+  const profile = getIndustryProfile(industryKey);
+  return { ...DEFAULT_BUSINESS_DATA_LABELS, ...profile.businessDataLabels };
+}
+
+/**
+ * Get industry-specific content type labels.
+ * @param {string | null | undefined} industryKey
+ * @returns {Array<{ key: string, label: string }>}
+ */
+export function getIndustryContentTypeLabels(industryKey) {
+  if (!industryKey) return [];
+  const profile = getIndustryProfile(industryKey);
+  return profile.contentTypeLabels ?? [];
+}

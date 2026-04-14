@@ -44,6 +44,10 @@ function formatProfilePublic(profile) {
       // starterAngles omitted — sent via SSE done event, not static endpoint
     },
     integrations: profile.integrations,
+    terminology: profile.terminology ?? null,
+    onboardingSteps: profile.onboardingSteps ?? null,
+    businessDataLabels: profile.businessDataLabels ?? null,
+    contentTypeLabels: profile.contentTypeLabels ?? null,
     ui: profile.ui,
   };
 }
