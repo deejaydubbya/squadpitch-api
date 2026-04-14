@@ -766,18 +766,20 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
     let brandData;
     let dataItems = [];
     let images = [];
+    let logoUrl = "";
 
     if (hasUrl || hasDocs || hasText) {
       // Crawl with live progress
       sendEvent({ event: "crawl:start", url: hasUrl ? input : null });
 
-      const { combinedText, images: crawledImages } = await onboardingService.crawlAndCombine({
+      const { combinedText, images: crawledImages, logoUrl: crawledLogo } = await onboardingService.crawlAndCombine({
         url: hasUrl ? input : null,
         text: hasText ? input : null,
         documentTexts,
         onProgress: (p) => sendEvent(p),
       });
       images = crawledImages;
+      logoUrl = crawledLogo || "";
       sendEvent({ event: "crawl:done" });
 
       // Extract sequentially: brand first, then data.
@@ -788,7 +790,7 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
         url: hasUrl ? input : undefined,
         industryKey,
       });
-      sendEvent({ event: "brand:done", brandData });
+      sendEvent({ event: "brand:done", brandData, logoUrl });
 
       try {
         dataItems = await onboardingService.extractDataItems(combinedText, {
@@ -831,6 +833,7 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
         offers: brandData.offers,
         competitors: brandData.competitors,
         website: hasUrl ? input : undefined,
+        logoUrl: logoUrl || undefined,
       },
       voiceData: {
         tone: brandData.suggestedTone,

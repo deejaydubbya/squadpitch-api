@@ -95,6 +95,7 @@ export async function crawlWebsite(rootUrl, { maxPages = MAX_PAGES, onProgress }
   });
 
   // 6. Assemble results
+  const logoUrl = rootResult.logoUrl || rootResult.ogImage || "";
   const pages = [
     { url: rootUrl, text: rootResult.text, title: rootResult.title, images: rootResult.images },
   ];
@@ -108,7 +109,7 @@ export async function crawlWebsite(rootUrl, { maxPages = MAX_PAGES, onProgress }
     }
   }
 
-  return { pages, totalPages: pages.length, failedPages };
+  return { pages, totalPages: pages.length, failedPages, logoUrl };
 }
 
 // ── Sitemap parsing ───────────────────────────────────────────────────

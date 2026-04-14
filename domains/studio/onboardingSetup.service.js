@@ -116,11 +116,13 @@ export async function scrapeWebsite(url) {
 export async function crawlAndCombine({ url, text, documentTexts = [], onProgress }) {
   const sections = [];
   let images = [];
+  let logoUrl = "";
 
   // Website content
   if (url) {
     const crawled = await crawlWebsite(url, { onProgress });
     images = crawled.pages.flatMap((p) => p.images || []);
+    logoUrl = crawled.logoUrl || "";
     for (const page of crawled.pages) {
       sections.push({
         source: "website",
@@ -174,7 +176,7 @@ export async function crawlAndCombine({ url, text, documentTexts = [], onProgres
     }
   }
 
-  return { combinedText: combinedText.trim(), images };
+  return { combinedText: combinedText.trim(), images, logoUrl };
 }
 
 // ── AI Extraction ──────────────────────────────────────────────────────

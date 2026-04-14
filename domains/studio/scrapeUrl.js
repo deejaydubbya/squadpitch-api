@@ -140,7 +140,7 @@ async function scrapeWithJina(url) {
 
   return {
     ok: true,
-    data: { text, title, metaDescription: "", ogImage, images: images.slice(0, 50) },
+    data: { text, title, metaDescription: "", ogImage, logoUrl: ogImage, images: images.slice(0, 50) },
     rawMarkdown: markdown,
   };
 }
@@ -227,6 +227,18 @@ async function scrapeDirectly(url, { extractLinks = false, origin = null } = {})
     "";
   const ogImage =
     $('meta[property="og:image"]').attr("content")?.trim() || "";
+
+  // Extract logo/icon URL from link tags (best to worst)
+  const resolveHref = (href) => {
+    if (!href) return "";
+    try { return new URL(href, url).toString(); } catch { return ""; }
+  };
+  const appleTouchIcon = resolveHref($('link[rel="apple-touch-icon"]').attr("href"));
+  const iconPng = resolveHref($('link[rel="icon"][type="image/png"]').attr("href"));
+  const iconAny = resolveHref($('link[rel="icon"]').attr("href")) ||
+    resolveHref($('link[rel="shortcut icon"]').attr("href"));
+  const logoUrl = appleTouchIcon || iconPng || iconAny || ogImage || "";
+
   const images = [];
   $("img[src]").each((_, el) => {
     const src = $(el).attr("src");
@@ -245,7 +257,7 @@ async function scrapeDirectly(url, { extractLinks = false, origin = null } = {})
     );
   }
 
-  const result = { text, title, metaDescription, ogImage, images: images.slice(0, 20) };
+  const result = { text, title, metaDescription, ogImage, logoUrl, images: images.slice(0, 20) };
   if (extractLinks) {
     result.links = extractLinksFromCheerio($, origin);
   }
