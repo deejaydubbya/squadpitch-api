@@ -171,13 +171,17 @@ function splitIntoChunks(content, chunkSize, overlap) {
       const searchStart = Math.max(end - 5000, offset);
       const searchRegion = content.slice(searchStart, end);
       const lastBreak = searchRegion.lastIndexOf("\n---");
-      if (lastBreak !== -1) {
+      if (lastBreak > 0) {
         end = searchStart + lastBreak;
       }
     }
 
     chunks.push(content.slice(offset, end));
-    offset = Math.max(offset + 1, end - overlap); // overlap to catch items at boundaries
+
+    // If we reached the end, stop — don't create overlap micro-chunks
+    if (end >= content.length) break;
+
+    offset = end - overlap;
   }
 
   return chunks;
