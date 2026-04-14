@@ -15,6 +15,11 @@
  */
 
 /**
+ * How a tool will eventually be activated from a UX perspective.
+ * @typedef {"oauth" | "manual" | "planned"} ConnectionMode
+ */
+
+/**
  * A recommended tool within an industry's tech stack.
  * @typedef {Object} IndustryTechStackItem
  * @property {string} providerKey - Unique identifier for the provider
@@ -22,6 +27,7 @@
  * @property {TechStackCategory} category - What kind of system this is
  * @property {"core" | "recommended" | "optional"} priority - How important this tool is for the industry
  * @property {"live" | "beta" | "planned"} status - Current implementation status
+ * @property {ConnectionMode} [connectionMode] - How the user will connect this tool (oauth, manual, or planned)
  * @property {string} [description] - What this tool does
  * @property {string[]} [useCases] - Example use cases within Squadpitch
  * @property {IntegrationCapability[]} capabilities - What Squadpitch can do with this tool

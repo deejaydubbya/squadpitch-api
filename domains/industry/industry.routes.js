@@ -49,5 +49,15 @@ function formatProfilePublic(profile) {
     businessDataLabels: profile.businessDataLabels ?? null,
     contentTypeLabels: profile.contentTypeLabels ?? null,
     ui: profile.ui,
+    techStack: (profile.techStack ?? []).map((item) => ({
+      providerKey: item.providerKey,
+      label: item.label,
+      category: item.category,
+      priority: item.priority,
+      status: item.status,
+      connectionMode: item.connectionMode ?? "planned",
+      description: item.description ?? null,
+      capabilities: item.capabilities,
+    })),
   };
 }

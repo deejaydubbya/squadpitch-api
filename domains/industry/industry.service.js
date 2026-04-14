@@ -3,6 +3,7 @@
 import { getIndustryProfile } from "./registry.js";
 
 /** @typedef {import("./techStack.types.js").IndustryTechStackItem} IndustryTechStackItem */
+/** @typedef {import("./techStack.types.js").IntegrationCapability} IntegrationCapability */
 
 /**
  * Get extraction hints for an industry key.
@@ -82,6 +83,135 @@ export function getIndustryTechStack(industryKey) {
   if (!industryKey) return [];
   const profile = getIndustryProfile(industryKey);
   return profile.techStack ?? [];
+}
+
+// ── Tech stack resolvers ────────────────────────────────────────────
+
+/**
+ * Get only core-priority tech stack items for an industry.
+ * @param {string | null | undefined} industryKey
+ * @returns {IndustryTechStackItem[]}
+ */
+export function getCoreTechStackItems(industryKey) {
+  return getIndustryTechStack(industryKey).filter((i) => i.priority === "core");
+}
+
+/**
+ * Get tech stack items that have a specific capability.
+ * @param {string | null | undefined} industryKey
+ * @param {IntegrationCapability} capability
+ * @returns {IndustryTechStackItem[]}
+ */
+export function getTechStackItemsByCapability(industryKey, capability) {
+  return getIndustryTechStack(industryKey).filter((i) =>
+    i.capabilities.includes(capability),
+  );
+}
+
+/**
+ * Get tech stack items that can publish content.
+ * @param {string | null | undefined} industryKey
+ * @returns {IndustryTechStackItem[]}
+ */
+export function getPublishingTechStackItems(industryKey) {
+  return getIndustryTechStack(industryKey).filter((i) =>
+    i.capabilities.includes("publishing") || i.capabilities.includes("scheduling_target"),
+  );
+}
+
+/**
+ * Get tech stack items that can import data into Squadpitch.
+ * @param {string | null | undefined} industryKey
+ * @returns {IndustryTechStackItem[]}
+ */
+export function getImportTechStackItems(industryKey) {
+  return getIndustryTechStack(industryKey).filter((i) =>
+    i.capabilities.includes("imports") || i.capabilities.includes("content_source"),
+  );
+}
+
+// ── Tech stack view model ───────────────────────────────────────────
+
+/**
+ * @typedef {"importData" | "publishContent" | "enhanceWorkflow"} TechStackGroup
+ */
+
+/**
+ * @typedef {Object} TechStackViewItem
+ * @property {string} providerKey
+ * @property {string} label
+ * @property {string} [description]
+ * @property {"core" | "recommended" | "optional"} priority
+ * @property {"live" | "beta" | "planned"} status
+ * @property {string} category
+ * @property {string[]} capabilities
+ * @property {"oauth" | "manual" | "planned"} connectionMode
+ * @property {boolean} isPublishing
+ * @property {boolean} isImportSource
+ * @property {boolean} isWorkflowTool
+ * @property {TechStackGroup} group
+ */
+
+/**
+ * Determine the primary group for a tech stack item based on capabilities.
+ * @param {string[]} capabilities
+ * @returns {TechStackGroup}
+ */
+function resolveTechStackGroup(capabilities) {
+  if (capabilities.includes("publishing") || capabilities.includes("scheduling_target")) {
+    return "publishContent";
+  }
+  if (capabilities.includes("imports") || capabilities.includes("content_source")) {
+    return "importData";
+  }
+  return "enhanceWorkflow";
+}
+
+/**
+ * Transform raw tech stack items into a normalized view model.
+ * Computes boolean flags and group assignment from capabilities.
+ *
+ * @param {string | null | undefined} industryKey
+ * @returns {TechStackViewItem[]}
+ */
+export function getIndustryTechStackView(industryKey) {
+  return getIndustryTechStack(industryKey).map((item) => {
+    const caps = item.capabilities;
+    return {
+      providerKey: item.providerKey,
+      label: item.label,
+      description: item.description,
+      priority: item.priority,
+      status: item.status,
+      category: item.category,
+      capabilities: caps,
+      connectionMode: item.connectionMode ?? "planned",
+      isPublishing: caps.includes("publishing") || caps.includes("scheduling_target"),
+      isImportSource: caps.includes("imports") || caps.includes("content_source"),
+      isWorkflowTool:
+        caps.includes("workflow_trigger") ||
+        caps.includes("document_source") ||
+        caps.includes("client_sync") ||
+        caps.includes("lead_sync"),
+      group: resolveTechStackGroup(caps),
+    };
+  });
+}
+
+/**
+ * Get tech stack view items grouped by their primary function.
+ * Returns an object with arrays for each group.
+ *
+ * @param {string | null | undefined} industryKey
+ * @returns {{ importData: TechStackViewItem[], publishContent: TechStackViewItem[], enhanceWorkflow: TechStackViewItem[] }}
+ */
+export function getGroupedTechStackView(industryKey) {
+  const items = getIndustryTechStackView(industryKey);
+  return {
+    importData: items.filter((i) => i.group === "importData"),
+    publishContent: items.filter((i) => i.group === "publishContent"),
+    enhanceWorkflow: items.filter((i) => i.group === "enhanceWorkflow"),
+  };
 }
 
 // ── Terminology & workflow language ──────────────────────────────────
