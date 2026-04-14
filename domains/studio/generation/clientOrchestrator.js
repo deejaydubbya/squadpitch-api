@@ -9,7 +9,7 @@
 import { prisma } from "../../../prisma.js";
 import { redisGet, redisSet, redisDel } from "../../../redis.js";
 import { getContentContext } from "../../industry/industry.service.js";
-import { buildTechStackContentContext } from "../../industry/techStack.service.js";
+import { buildTechStackContentContext, resolveRealEstateContext } from "../../industry/techStack.service.js";
 
 const CACHE_TTL = 1800; // 30 minutes
 const CACHE_PREFIX = "sp:client:ctx:";
@@ -91,11 +91,22 @@ export async function loadClientGenerationContext(clientId) {
     // Non-critical — generation works without tech stack context
   }
 
+  // Resolve canonical real estate context when applicable
+  let realEstateContext = null;
+  if (client.industryKey === "real_estate") {
+    try {
+      realEstateContext = await resolveRealEstateContext(clientId);
+    } catch {
+      // Non-critical — generation works without canonical context
+    }
+  }
+
   const ctx = {
     client,
     industryKey: client.industryKey ?? null,
     industryContext,
     techStackContext,
+    realEstateContext,
     brand: client.brandProfile ?? null,
     voice: client.voiceProfile ?? null,
     media: client.mediaProfile ?? null,

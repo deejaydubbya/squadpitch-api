@@ -193,6 +193,31 @@ export function buildSystemPrompt(ctx) {
     }
   }
 
+  // Real estate specialization — when canonical context is available.
+  const reCtx = ctx.realEstateContext;
+  if (ctx.industryKey === "real_estate" && reCtx) {
+    lines.push(`\n--- REAL ESTATE SPECIALIZATION ---`);
+    const bp = reCtx.businessProfile;
+    if (bp?.businessName) lines.push(`Business: ${bp.businessName}`);
+    if (bp?.marketArea) lines.push(`Market area: ${bp.marketArea}`);
+    if (bp?.city && bp?.state) lines.push(`Location: ${bp.city}, ${bp.state}`);
+
+    if (reCtx.assets?.listingCount > 0) {
+      lines.push(`Active listings: ${reCtx.assets.listingCount} — use specific listing details when provided. Do not invent property details.`);
+    }
+    if (reCtx.assets?.reviewCount > 0) {
+      lines.push(`Client reviews available: ${reCtx.assets.reviewCount} — weave real client feedback into trust-building content when appropriate.`);
+    }
+
+    lines.push(`\nReal estate content rules:`);
+    lines.push(`- Use specific property details (address, price, beds/baths) when available — never invent them`);
+    lines.push(`- Reference the local market area naturally — sound like a local expert`);
+    lines.push(`- Avoid cliches: "dream home", "don't miss out", "act now", "stunning", "gorgeous"`);
+    lines.push(`- Keep listings grounded — highlight real features, not superlatives`);
+    lines.push(`- Include a soft CTA (schedule a showing, DM for details, link in bio) — never aggressive`);
+    lines.push(`--- END REAL ESTATE SPECIALIZATION ---`);
+  }
+
   // Anti-patterns to reduce generic AI tone.
   lines.push(`
 IMPORTANT — avoid these generic patterns:
@@ -335,11 +360,91 @@ export function formatBlueprintForPrompt(blueprint) {
 }
 
 /**
+ * Format a normalized listing for injection into the user prompt.
+ * Presents only available fields — never invents missing data.
+ */
+function formatListingForPrompt(listing) {
+  if (!listing) return "";
+  const lines = [];
+  lines.push(`\n--- LISTING DATA ---`);
+  if (listing.title) lines.push(`Property: ${listing.title}`);
+  if (listing.address) lines.push(`Address: ${listing.address}`);
+  if (listing.price) lines.push(`Price: $${listing.price.toLocaleString()}`);
+
+  const specs = [];
+  if (listing.beds) specs.push(`${listing.beds} bed`);
+  if (listing.baths) specs.push(`${listing.baths} bath`);
+  if (listing.sqft) specs.push(`${listing.sqft.toLocaleString()} sq ft`);
+  if (specs.length > 0) lines.push(`Specs: ${specs.join(" / ")}`);
+
+  if (listing.locationSummary) lines.push(`Location: ${listing.locationSummary}`);
+
+  if (listing.highlights?.length > 0) {
+    lines.push(`Highlights:\n${listing.highlights.map((h) => `- ${h}`).join("\n")}`);
+  }
+
+  lines.push(`\nUse these listing details naturally — do not dump them as a bullet list. Weave the most compelling details into the post.`);
+  lines.push(`Only mention details listed above. Do not invent or assume any property features not provided.`);
+  lines.push(`--- END LISTING DATA ---`);
+  return lines.join("\n");
+}
+
+/**
+ * Format normalized reviews/trust signals for prompt injection.
+ */
+function formatReviewsForPrompt(reviews) {
+  if (!reviews?.length) return "";
+  const lines = [];
+  lines.push(`\n--- CLIENT REVIEWS ---`);
+  for (const review of reviews.slice(0, 3)) {
+    let entry = `"${review.quote}"`;
+    if (review.author) entry += ` — ${review.author}`;
+    if (review.rating) entry += ` (${review.rating}/5)`;
+    lines.push(entry);
+  }
+  lines.push(`\nUse real client words when building trust-focused content. Quote accurately — do not paraphrase or embellish.`);
+  lines.push(`--- END CLIENT REVIEWS ---`);
+  return lines.join("\n");
+}
+
+/**
+ * Build real estate fallback guidance when listing/review data is missing.
+ */
+function buildRealEstateFallback(reCtx, hasListing, hasReviews) {
+  if (hasListing && hasReviews) return "";
+  const lines = [];
+
+  if (!hasListing) {
+    const bp = reCtx?.businessProfile;
+    lines.push(`\nNo specific listing data is available. Instead, focus on:`);
+    if (bp?.marketArea) {
+      lines.push(`- Local market expertise in ${bp.marketArea}`);
+    } else {
+      lines.push(`- Local market expertise and neighborhood knowledge`);
+    }
+    lines.push(`- The agent's services, experience, and value proposition`);
+    lines.push(`- Educational real estate content (buying tips, market trends, process guides)`);
+    lines.push(`- Community highlights and local insights`);
+    lines.push(`Do not reference hypothetical listings or invent property details.`);
+  }
+
+  if (!hasReviews) {
+    lines.push(`\nNo client reviews are available. Build credibility through:`);
+    lines.push(`- Local market knowledge and specific neighborhood expertise`);
+    lines.push(`- Professional experience and services offered`);
+    lines.push(`- Practical value for buyers and sellers`);
+    lines.push(`Do not invent testimonials or fake client quotes.`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * Build the user prompt. The user prompt encodes WHAT we are asking the
  * system to produce right now — the kind of content, the channel, any
  * matched content bucket template, and the operator's guidance.
  */
-export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templateType, dataItem, blueprint }) {
+export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templateType, dataItem, blueprint, realEstateAssets }) {
   const { contentBuckets, channelSettings } = ctx;
   const lines = [];
 
@@ -403,9 +508,49 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templ
     lines.push(formatBlueprintForPrompt(blueprint));
   }
 
+  // Real estate listing + review context injection
+  const reAssets = realEstateAssets;
+  const isRealEstate = ctx.industryKey === "real_estate";
+  if (isRealEstate && reAssets) {
+    if (reAssets.bestListing && !dataItem) {
+      // Inject best listing when no specific data item was provided
+      lines.push(formatListingForPrompt(reAssets.bestListing));
+    }
+    if (reAssets.reviews?.length > 0) {
+      lines.push(formatReviewsForPrompt(reAssets.reviews));
+    }
+    // Fallback guidance when assets are missing
+    lines.push(buildRealEstateFallback(
+      ctx.realEstateContext,
+      !!(reAssets.bestListing || dataItem),
+      reAssets.reviews?.length > 0,
+    ));
+  }
+
   // Channel-specific style hints based on connected tech stack
   const ts = ctx.techStackContext;
-  if (ts) {
+  if (isRealEstate) {
+    // Real estate channel-aware formatting
+    if (channel === "INSTAGRAM") {
+      lines.push(`\nTarget: Instagram — write punchier, visual-first content.`);
+      lines.push(`- Lead with a scroll-stopping first line (specific detail, not a question)`);
+      lines.push(`- Keep body under 150 words — let the image do the work`);
+      lines.push(`- End with a clear but soft CTA (DM, link in bio, comment)`);
+      lines.push(`- Use line breaks for readability`);
+    } else if (channel === "FACEBOOK") {
+      lines.push(`\nTarget: Facebook — write slightly longer, community-friendly content.`);
+      lines.push(`- Storytelling tone — give context about the neighborhood or market`);
+      lines.push(`- Local references resonate: mention streets, landmarks, school districts if known`);
+      lines.push(`- Good CTA flow: "Comment below", "Share with someone who...", "Message us"`);
+      lines.push(`- 150-250 words is ideal`);
+    } else if (channel === "LINKEDIN") {
+      lines.push(`\nTarget: LinkedIn — professional, market-expert positioning.`);
+      lines.push(`- Lead with a market insight or professional observation`);
+      lines.push(`- More analytical tone — data, trends, expertise`);
+    } else {
+      lines.push(`\nWrite balanced social content — specific enough for engagement, concise enough for any platform.`);
+    }
+  } else if (ts) {
     if (channel === "INSTAGRAM" && ts.hasInstagram) {
       lines.push("\nThis will be published to their connected Instagram account. Use shorter, visual-first language. Lead with a hook that works without an image preview.");
     } else if (channel === "FACEBOOK" && ts.hasFacebook) {

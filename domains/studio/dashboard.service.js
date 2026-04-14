@@ -3,7 +3,8 @@
 
 import { prisma } from "../../prisma.js";
 import { getContentContext, getRecommendationTemplates } from "../industry/industry.service.js";
-import { buildTechStackContentContext } from "../industry/techStack.service.js";
+import { buildTechStackContentContext, resolveRealEstateContext } from "../industry/techStack.service.js";
+import { loadRealEstateGenerationAssets } from "../industry/realEstateGeneration.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -38,6 +39,7 @@ export async function getDashboardRecommendations(clientId) {
     scheduledUpcoming,
     lastAutopilotDraft,
     techStack,
+    lastGeneratedDraft,
   ] = await Promise.all([
     // Business data summary
     prisma.workspaceDataItem.groupBy({
@@ -88,6 +90,12 @@ export async function getDashboardRecommendations(clientId) {
     }),
     // Tech stack context (non-critical)
     buildTechStackContentContext(clientId).catch(() => null),
+    // Most recent generated draft (for cadence awareness)
+    prisma.draft.findFirst({
+      where: { clientId, status: { not: "FAILED" } },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
   ]);
 
   const totalDataItems = dataItemStats.reduce((s, r) => s + r._count._all, 0);
@@ -96,21 +104,41 @@ export async function getDashboardRecommendations(clientId) {
   );
   const enabledChannels = channelSettings.filter((c) => c.isEnabled);
 
+  // Resolve canonical real estate context when applicable
+  let realEstateContext = null;
+  if (industryKey === "real_estate") {
+    realEstateContext = await resolveRealEstateContext(clientId).catch(() => null);
+  }
+
   // Count unused data items (usageCount = 0)
   const unusedDataCount = await prisma.workspaceDataItem.count({
     where: { clientId, status: "ACTIVE", usageCount: 0 },
   });
 
+  // Cadence awareness — days since last generation
+  const lastGeneratedAt = lastGeneratedDraft?.createdAt ?? null;
+  const daysSinceLastGeneration = lastGeneratedAt
+    ? Math.floor((now.getTime() - lastGeneratedAt.getTime()) / DAY_MS)
+    : null;
+  const isInactive = daysSinceLastGeneration !== null && daysSinceLastGeneration >= 3;
+  const generatedRecently = daysSinceLastGeneration !== null && daysSinceLastGeneration < 1;
+
   const recommendations = [];
 
-  // 1. Unused business data → generate content
+  // 1. Unused business data → generate content (listing-aware for real estate)
   if (unusedDataCount > 0) {
+    const reListingCount = realEstateContext?.assets?.listingCount ?? 0;
+    const isRE = industryKey === "real_estate" && reListingCount > 0;
     recommendations.push({
       id: "unused_data",
-      title: `${unusedDataCount} unused data item${unusedDataCount === 1 ? "" : "s"}`,
-      description: `You have business data that hasn't been turned into content yet. Generate posts from your best data.`,
+      title: isRE
+        ? `${reListingCount} listing${reListingCount === 1 ? "" : "s"} ready for content`
+        : `${unusedDataCount} unused data item${unusedDataCount === 1 ? "" : "s"}`,
+      description: isRE
+        ? `You have ${reListingCount} listing${reListingCount === 1 ? "" : "s"} that can power listing posts, open house alerts, and price drop content.`
+        : `You have business data that hasn't been turned into content yet. Generate posts from your best data.`,
       action: "generate_from_data",
-      actionLabel: "Generate from data",
+      actionLabel: isRE ? "Generate listing posts" : "Generate from data",
       priority: 90,
       category: "data",
     });
@@ -201,6 +229,19 @@ export async function getDashboardRecommendations(clientId) {
     });
   }
 
+  // 7. Inactivity trigger — no content generated in 3+ days
+  if (isInactive && enabledChannels.length > 0) {
+    recommendations.push({
+      id: "inactivity",
+      title: `No content in ${daysSinceLastGeneration} day${daysSinceLastGeneration === 1 ? "" : "s"}`,
+      description: "Consistent posting keeps your audience engaged. Generate fresh content to stay visible.",
+      action: "generate_content",
+      actionLabel: "Generate content",
+      priority: 88,
+      category: "cadence",
+    });
+  }
+
   // ── Template-driven content suggestions ──────────────────────────────
   const industryCtx = getContentContext(industryKey);
   const totalPublished = statusMap.PUBLISHED ?? 0;
@@ -271,6 +312,146 @@ export async function getDashboardRecommendations(clientId) {
     }
   }
 
+  // ── Real estate asset-aware recommendations ───────────────────────
+  let reAssets = null;
+  if (industryKey === "real_estate" && realEstateContext) {
+    try {
+      reAssets = await loadRealEstateGenerationAssets(clientId, realEstateContext);
+    } catch {
+      // Non-critical
+    }
+
+    if (reAssets && enabledChannels.length > 0) {
+      const hasFB = enabledChannels.some((c) => c.channel === "FACEBOOK");
+      const hasIG = enabledChannels.some((c) => c.channel === "INSTAGRAM");
+
+      // Listing-based recommendations
+      if (reAssets.bestListing && reAssets.bestListingSource) {
+        const listing = reAssets.bestListing;
+        const listingLabel = listing.title || listing.address || "a property";
+
+        if (hasFB) {
+          recommendations.push({
+            id: "re_listing_facebook",
+            title: `Post ${listingLabel} to Facebook`,
+            description: "Create a listing post with property details for your Facebook audience.",
+            reason: `You have ${reAssets.listingCount} listing${reAssets.listingCount === 1 ? "" : "s"} ready. Facebook is ideal for detailed property posts.`,
+            action: "generate_post",
+            actionLabel: "Create Listing Post",
+            priority: 91,
+            category: "real_estate",
+            metadata: {
+              templateType: "listing_post",
+              channel: "FACEBOOK",
+              dataItemId: reAssets.bestListingSource.id,
+              guidance: "Create a 'just listed' post highlighting this property's best features.",
+              recommendationId: "re_listing_facebook",
+            },
+          });
+        }
+
+        if (hasIG) {
+          recommendations.push({
+            id: "re_listing_instagram",
+            title: `Feature ${listingLabel} on Instagram`,
+            description: "Create a visual-first property post for Instagram.",
+            reason: `Instagram is perfect for showcasing property photos and quick highlights.`,
+            action: "generate_post",
+            actionLabel: "Create Property Post",
+            priority: hasFB ? 86 : 91,
+            category: "real_estate",
+            metadata: {
+              templateType: "featured_property",
+              channel: "INSTAGRAM",
+              dataItemId: reAssets.bestListingSource.id,
+              guidance: "Create an Instagram property feature post — punchy, visual, scroll-stopping.",
+              recommendationId: "re_listing_instagram",
+            },
+          });
+        }
+      }
+
+      // Review-based recommendation
+      if (reAssets.reviewCount > 0) {
+        const targetChannel = hasIG ? "INSTAGRAM" : hasFB ? "FACEBOOK" : enabledChannels[0]?.channel;
+        if (targetChannel) {
+          recommendations.push({
+            id: "re_testimonial_post",
+            title: "Turn a client review into a post",
+            description: `You have ${reAssets.reviewCount} client review${reAssets.reviewCount === 1 ? "" : "s"}. Testimonial posts build trust and credibility.`,
+            reason: "Real client reviews are powerful social proof for real estate.",
+            action: "generate_post",
+            actionLabel: "Create Testimonial Post",
+            priority: 83,
+            category: "real_estate",
+            metadata: {
+              templateType: "client_testimonial",
+              channel: targetChannel,
+              guidance: "Create a testimonial post using a real client review. Quote accurately and build trust.",
+              recommendationId: "re_testimonial_post",
+            },
+          });
+        }
+      }
+
+      // No recent property posts suggestion
+      if (reAssets.listingCount > 0 && recentPublished > 0) {
+        // Check if any recent published drafts were listing posts
+        const recentListingDraft = await prisma.draft.findFirst({
+          where: {
+            clientId,
+            status: "PUBLISHED",
+            publishedAt: { gte: new Date(Date.now() - 14 * DAY_MS) },
+            warnings: { hasSome: ["re_auto_listing"] },
+          },
+        }).catch(() => null);
+
+        if (!recentListingDraft) {
+          recommendations.push({
+            id: "re_no_recent_listing",
+            title: "You haven't posted a property recently",
+            description: `You have ${reAssets.listingCount} listing${reAssets.listingCount === 1 ? "" : "s"} but haven't featured one in a while. Keep listings visible.`,
+            reason: "Regular listing posts keep your properties in front of buyers.",
+            action: "generate_post",
+            actionLabel: "Post a Listing",
+            priority: 80,
+            category: "real_estate",
+            metadata: {
+              templateType: "listing_post",
+              channel: hasFB ? "FACEBOOK" : hasIG ? "INSTAGRAM" : enabledChannels[0]?.channel,
+              guidance: "Create a just-listed or featured property post for one of the available listings.",
+              recommendationId: "re_no_recent_listing",
+            },
+          });
+        }
+      }
+
+      // Listing feed not connected
+      if (!realEstateContext.techStack?.listingFeed || realEstateContext.techStack.listingFeed.status !== "connected") {
+        recommendations.push({
+          id: "re_setup_listing_feed",
+          title: "Add your listings page",
+          description: "Connect your listings page to automatically import properties for content.",
+          reason: "Listing data powers just-listed posts, open house alerts, and price drop content.",
+          action: "setup_tech_stack",
+          actionLabel: "Set Up Listing Feed",
+          priority: 78,
+          category: "real_estate",
+        });
+      }
+    }
+  }
+
+  // Cadence dampening — lower generate-type priorities if content was created recently
+  if (generatedRecently) {
+    const generateActions = new Set(["generate_content", "generate_post", "generate_from_data"]);
+    for (const rec of recommendations) {
+      if (generateActions.has(rec.action)) {
+        rec.priority = Math.max(rec.priority - 15, 10);
+      }
+    }
+  }
+
   recommendations.sort((a, b) => b.priority - a.priority);
 
   // Per-type data item counts for Business Data Snapshot
@@ -278,18 +459,34 @@ export async function getDashboardRecommendations(clientId) {
     dataItemStats.map((r) => [r.type, r._count._all])
   );
 
+  // Build summary with real estate enhancements
+  const summary = {
+    totalDataItems,
+    unusedDataCount,
+    enabledChannels: enabledChannels.length,
+    recentPublished,
+    dataByType,
+    publishedThisWeek,
+    scheduledUpcoming,
+    lastAutopilotAt: lastAutopilotDraft?.createdAt?.toISOString() ?? null,
+    lastGeneratedAt: lastGeneratedAt?.toISOString() ?? null,
+    daysSinceLastGeneration,
+  };
+
+  // Real estate asset summary
+  if (industryKey === "real_estate") {
+    summary.realEstate = {
+      listingCount: reAssets?.listingCount ?? realEstateContext?.assets?.listingCount ?? 0,
+      reviewCount: reAssets?.reviewCount ?? realEstateContext?.assets?.reviewCount ?? 0,
+      listingFeedConnected: realEstateContext?.techStack?.listingFeed?.status === "connected",
+      websiteConnected: realEstateContext?.techStack?.website?.status === "connected",
+      availableChannels: realEstateContext?.publishing?.availableChannels ?? [],
+    };
+  }
+
   return {
-    recommendations: recommendations.slice(0, 5),
-    summary: {
-      totalDataItems,
-      unusedDataCount,
-      enabledChannels: enabledChannels.length,
-      recentPublished,
-      dataByType,
-      publishedThisWeek,
-      scheduledUpcoming,
-      lastAutopilotAt: lastAutopilotDraft?.createdAt?.toISOString() ?? null,
-    },
+    recommendations: recommendations.slice(0, 6),
+    summary,
   };
 }
 

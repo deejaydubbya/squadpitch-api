@@ -18,6 +18,7 @@ import {
 import { formatDraft } from "../draft.service.js";
 import { incrementDataItemUsage } from "../data.service.js";
 import { trackAiUsage } from "../../billing/aiUsageTracking.service.js";
+import { loadRealEstateGenerationAssets } from "../../industry/realEstateGeneration.js";
 
 /**
  * Persist a FAILED draft row when generation fails so operators see the
@@ -123,13 +124,32 @@ export async function generateDraft({
   dataItemId,
   blueprintId,
   userId,
+  recommendationId,
 }) {
   const ctx = await loadClientGenerationContext(clientId);
 
+  // Load real estate generation assets when applicable
+  let realEstateAssets = null;
+  if (ctx.industryKey === "real_estate" && ctx.realEstateContext) {
+    try {
+      realEstateAssets = await loadRealEstateGenerationAssets(clientId, ctx.realEstateContext);
+    } catch {
+      // Non-critical — generation works without RE assets
+    }
+  }
+
   // Load optional business data + blueprint
-  const dataItem = dataItemId
+  let dataItem = dataItemId
     ? await prisma.workspaceDataItem.findUnique({ where: { id: dataItemId } })
     : null;
+
+  // Auto-select best listing for listing-type templates when no dataItem specified
+  const LISTING_TEMPLATE_TYPES = ["listing_post", "just_listed", "featured_property", "open_house", "price_drop_alert"];
+  let autoSelectedListing = false;
+  if (!dataItem && realEstateAssets?.bestListingSource && templateType && LISTING_TEMPLATE_TYPES.includes(templateType)) {
+    dataItem = realEstateAssets.bestListingSource;
+    autoSelectedListing = true;
+  }
 
   // Auto-select best blueprint if data item provided but no blueprint specified
   let resolvedBlueprintId = blueprintId;
@@ -160,6 +180,7 @@ export async function generateDraft({
     templateType,
     dataItem,
     blueprint,
+    realEstateAssets,
   });
   const responseFormat = buildResponseFormat();
 
@@ -218,7 +239,14 @@ export async function generateDraft({
       variations: content.variations.length > 0 ? content.variations : null,
       altText: content.altText,
       imageGuidance: content.imageGuidance,
-      warnings: autoSelectedSlug ? [`auto_blueprint: ${autoSelectedSlug}`] : [],
+      warnings: [
+        ...(autoSelectedSlug ? [`auto_blueprint: ${autoSelectedSlug}`] : []),
+        ...(autoSelectedListing ? [`re_auto_listing: ${dataItem?.title ?? "unknown"}`] : []),
+        ...(realEstateAssets ? [`re_assets: listings=${realEstateAssets.listingCount} reviews=${realEstateAssets.reviewCount}`] : []),
+        ...(realEstateAssets?.rotationApplied ? ["re_rotation: applied"] : []),
+        ...(realEstateAssets && !realEstateAssets.bestListing && !dataItem ? ["re_fallback: no_listing"] : []),
+        ...(recommendationId ? [`recommendation: ${recommendationId}`] : []),
+      ].filter(Boolean),
       createdBy,
     },
   });

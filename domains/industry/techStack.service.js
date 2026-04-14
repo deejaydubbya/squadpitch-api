@@ -7,6 +7,7 @@ import { prisma } from "../../prisma.js";
 import { getIndustryProfile } from "./registry.js";
 import { getIndustryTechStack } from "./industry.service.js";
 import { getConnection } from "../studio/connection.service.js";
+import { RE_CAPABILITY_MAP } from "./realEstateContext.js";
 
 /** @typedef {"not_connected" | "connected" | "pending" | "error"} WorkspaceConnectionStatus */
 
@@ -53,6 +54,57 @@ async function getWorkspaceTechStackConnectionDetailMap(workspaceId) {
     };
   }
   return map;
+}
+
+// ── Status summary helper (real estate) ─────────────────────────────
+
+/**
+ * Build a short human-readable status summary for a real estate tech stack item.
+ * @param {string} providerKey
+ * @param {string} connectionStatus
+ * @param {object | null} metadata
+ * @param {object | null} channelState
+ * @returns {string | undefined}
+ */
+function buildRealEstateStatusSummary(providerKey, connectionStatus, metadata, channelState) {
+  const connected = connectionStatus === "connected";
+
+  switch (providerKey) {
+    case "idx_website":
+      if (connected && metadata?.url) return metadata.url;
+      return "Add your website to enrich content";
+
+    case "listing_feed": {
+      if (!connected) return "Add your listings page URL";
+      const count = metadata?.listingCount;
+      if (count > 0) return `${count} listing${count === 1 ? "" : "s"} ready for content`;
+      return "Connected — refresh to import listings";
+    }
+
+    case "facebook_page":
+      if (connected) return channelState?.displayName
+        ? `${channelState.displayName} — ready for publishing`
+        : "Ready for publishing listing posts";
+      return "Connect to publish listing posts";
+
+    case "instagram_business":
+      if (connected) return channelState?.displayName
+        ? `@${channelState.displayName} — ready for publishing`
+        : "Ready for publishing property content";
+      return "Connect to publish property content";
+
+    case "google_business_profile":
+      if (connected) {
+        const reviews = metadata?.reviewCount;
+        return reviews > 0
+          ? `${reviews} review${reviews === 1 ? "" : "s"} available for content`
+          : "Connected — reviews power trust content";
+      }
+      return "Connect to use reviews for content";
+
+    default:
+      return undefined;
+  }
 }
 
 // ── Merged view ─────────────────────────────────────────────────────
@@ -103,19 +155,59 @@ export async function getWorkspaceTechStackView(workspaceId) {
   /** @type {Record<string, { connectionStatus: WorkspaceConnectionStatus, displayName: string | null }>} */
   const channelStateMap = {};
   for (const item of channelRefItems) {
-    const channelConn = await getConnection(workspaceId, item.channelRef);
-    channelStateMap[item.providerKey] = {
-      connectionStatus: channelConn?.status === "CONNECTED" ? "connected" : "not_connected",
-      displayName: channelConn?.displayName ?? null,
-    };
+    try {
+      const channelConn = await getConnection(workspaceId, item.channelRef);
+      channelStateMap[item.providerKey] = {
+        connectionStatus: channelConn?.status === "CONNECTED" ? "connected" : "not_connected",
+        displayName: channelConn?.displayName ?? null,
+      };
+    } catch {
+      // Channel not yet in enum (e.g. GOOGLE) — treat as not_connected
+      channelStateMap[item.providerKey] = {
+        connectionStatus: "not_connected",
+        displayName: null,
+      };
+    }
   }
 
   // 5. Merge
+  const isRealEstate = client.industryKey === "real_estate";
+
   return items.map((item) => {
     const caps = item.capabilities;
     // For channel-mapped items, derive state from the channel platform
     const channelState = channelStateMap[item.providerKey];
     const conn = connectionDetailMap[item.providerKey];
+    const connectionStatus = channelState?.connectionStatus ?? conn?.connectionStatus ?? "not_connected";
+    const connMode = item.connectionMode ?? "planned";
+
+    // Compute usedFor + nextAction from capability map (real estate only)
+    const capEntry = isRealEstate ? RE_CAPABILITY_MAP[item.providerKey] : null;
+    const usedFor = capEntry?.usedFor ?? undefined;
+
+    let nextAction = undefined;
+    if (connectionStatus !== "connected") {
+      if (connMode === "manual") {
+        nextAction = { label: "Set up", action: "manual_setup" };
+      } else if (connMode === "oauth" && item.status === "live") {
+        nextAction = { label: "Connect", action: "oauth_connect" };
+      } else if (connMode === "oauth" && item.status === "planned") {
+        nextAction = { label: "Coming soon", action: "planned" };
+      } else if (connMode === "planned") {
+        nextAction = { label: "Coming soon", action: "planned" };
+      }
+    }
+
+    // Compute statusSummary — short human-readable state text
+    const metadata = channelState
+      ? (channelState.displayName ? { displayName: channelState.displayName } : null)
+      : (conn?.metadataJson ?? null);
+
+    let statusSummary = undefined;
+    if (isRealEstate) {
+      statusSummary = buildRealEstateStatusSummary(item.providerKey, connectionStatus, metadata, channelState);
+    }
+
     return {
       providerKey: item.providerKey,
       label: item.label,
@@ -124,13 +216,11 @@ export async function getWorkspaceTechStackView(workspaceId) {
       status: item.status,
       category: item.category,
       capabilities: caps,
-      connectionMode: item.connectionMode ?? "planned",
+      connectionMode: connMode,
       manualSetup: item.manualSetup ?? undefined,
       channelRef: item.channelRef ?? undefined,
-      connectionStatus: channelState?.connectionStatus ?? conn?.connectionStatus ?? "not_connected",
-      metadataJson: channelState
-        ? (channelState.displayName ? { displayName: channelState.displayName } : null)
-        : (conn?.metadataJson ?? null),
+      connectionStatus,
+      metadataJson: metadata,
       isPublishing: caps.includes("publishing") || caps.includes("scheduling_target"),
       isImportSource: caps.includes("imports") || caps.includes("content_source"),
       isWorkflowTool:
@@ -138,6 +228,9 @@ export async function getWorkspaceTechStackView(workspaceId) {
         caps.includes("document_source") ||
         caps.includes("client_sync") ||
         caps.includes("lead_sync"),
+      ...(usedFor !== undefined && { usedFor }),
+      ...(nextAction !== undefined && { nextAction }),
+      ...(statusSummary !== undefined && { statusSummary }),
     };
   });
 }
@@ -189,6 +282,9 @@ export async function buildTechStackContentContext(workspaceId) {
     connectedCapabilities: [...capSet],
   };
 }
+
+// ── Real estate canonical context (re-export) ──────────────────────
+export { resolveRealEstateContext } from "./realEstateContext.js";
 
 // ── Mutation helpers ────────────────────────────────────────────────
 

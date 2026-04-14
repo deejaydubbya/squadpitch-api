@@ -264,6 +264,7 @@ export const GenerateContentSchema = z.object({
   templateType: z.string().max(60).optional(),
   dataItemId: z.string().optional(),
   blueprintId: z.string().optional(),
+  recommendationId: z.string().max(60).optional(),
 });
 
 // ── Draft lifecycle ─────────────────────────────────────────────────────
@@ -490,6 +491,14 @@ export const ConfirmImportSchema = z.object({
 });
 
 // ── Tech Stack ────────────────────────────────────────────────────────
+
+export const ListingFeedRefreshSchema = z.object({
+  sourceUrl: z.string().url().optional(),
+}).optional();
+
+export const ListingFeedSettingsSchema = z.object({
+  autoGenerateOnImport: z.boolean(),
+});
 
 export const ManualSetupSchema = z.object({
   metadata: z.record(z.string(), z.string().max(2000)).refine(

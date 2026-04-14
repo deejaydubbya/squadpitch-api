@@ -21,11 +21,6 @@ export default {
       "Share a client success story — how the agent helped a buyer or seller achieve their goal.",
     ],
   },
-  integrations: {
-    supportedCapabilities: ["listing_feed", "crm"],
-    recommendedProviders: ["mls_idx", "follow_up_boss"],
-    starterAutomations: ["new_listing_post", "open_house_post"],
-  },
   terminology: {
     item: "listing",
     items: "listings",
@@ -172,6 +167,27 @@ export default {
             type: "url",
             required: true,
             placeholder: "https://yourrealtybrand.com",
+          },
+        ],
+      },
+    },
+    {
+      providerKey: "listing_feed",
+      label: "Listing Feed",
+      category: "data_source",
+      priority: "core",
+      status: "live",
+      connectionMode: "manual",
+      description: "Import property listings from your website or IDX page to power listing posts, open house alerts, and price drop content.",
+      capabilities: ["imports", "content_source", "data_enrichment"],
+      manualSetup: {
+        fields: [
+          {
+            key: "sourceUrl",
+            label: "Listings Page URL",
+            type: "url",
+            required: true,
+            placeholder: "https://yoursite.com/listings",
           },
         ],
       },

@@ -49,6 +49,8 @@ import {
   ConfirmImportSchema,
   OnboardingAnalyzeSchema,
   ManualSetupSchema,
+  ListingFeedRefreshSchema,
+  ListingFeedSettingsSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import * as dataService from "./data.service.js";
@@ -72,6 +74,7 @@ import { enqueueNotification, recordActivity } from "../notifications/notificati
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
 import { getStarterAngles, getIndustryTechStack, getRecommendationTemplates } from "../industry/industry.service.js";
+import { RE_CAPABILITY_MAP } from "../industry/realEstateContext.js";
 import {
   getWorkspaceTechStackView,
   upsertWorkspaceTechStackConnection,
@@ -721,6 +724,18 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
       .slice(0, 3)
       .map(({ type, title, guidance }) => ({ type, title, guidance }));
 
+    // Compute real estate capabilities summary for Phase B readiness
+    let realEstateCapabilities;
+    if (industryKey === "real_estate") {
+      const liveItems = getIndustryTechStack("real_estate").filter((i) => i.status === "live");
+      const capSet = new Set();
+      for (const item of liveItems) {
+        const mapped = RE_CAPABILITY_MAP[item.providerKey];
+        if (mapped) for (const cap of mapped.capabilities) capSet.add(cap);
+      }
+      realEstateCapabilities = [...capSet];
+    }
+
     res.json({
       brandData: {
         name: brandData.name,
@@ -743,6 +758,7 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
       dataItems,
       starterAngles,
       coreTemplates,
+      ...(realEstateCapabilities && { realEstateCapabilities }),
     });
   } catch (err) {
     if (err.status === 400 || err.status === 408 || err.status === 422) {
@@ -860,6 +876,18 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       .slice(0, 3)
       .map(({ type, title, guidance }) => ({ type, title, guidance }));
 
+    // Compute real estate capabilities summary for Phase B readiness
+    let realEstateCapabilities;
+    if (industryKey === "real_estate") {
+      const liveItems = getIndustryTechStack("real_estate").filter((i) => i.status === "live");
+      const capSet = new Set();
+      for (const item of liveItems) {
+        const mapped = RE_CAPABILITY_MAP[item.providerKey];
+        if (mapped) for (const cap of mapped.capabilities) capSet.add(cap);
+      }
+      realEstateCapabilities = [...capSet];
+    }
+
     // Final complete event with full payload (same shape as the non-stream endpoint)
     sendEvent({
       event: "done",
@@ -885,6 +913,7 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       dataItems,
       starterAngles,
       coreTemplates,
+      ...(realEstateCapabilities && { realEstateCapabilities }),
     });
   } catch (err) {
     console.error("[onboarding-stream] Error:", err.message || err);
@@ -2079,6 +2108,142 @@ studioRouter.put(
       invalidateClientContext(req.params.id).catch(() => {});
 
       res.json({ connection });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/tech-stack/listing_feed/refresh
+ * Extract listings from the stored sourceUrl and save as WorkspaceDataItems.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/tech-stack/listing_feed/refresh`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const workspaceId = req.params.id;
+
+      // Validate workspace is real_estate industry
+      const client = await prisma.client.findUnique({
+        where: { id: workspaceId },
+        select: { industryKey: true },
+      });
+      if (!client || client.industryKey !== "real_estate") {
+        return sendError(res, 400, "WRONG_INDUSTRY", "Listing feed is only available for real estate workspaces.");
+      }
+
+      // Parse optional body override
+      const parsed = ListingFeedRefreshSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      // Get stored connection for sourceUrl
+      const existing = await prisma.workspaceTechStackConnection.findUnique({
+        where: { workspaceId_providerKey: { workspaceId, providerKey: "listing_feed" } },
+      });
+
+      const sourceUrl = parsed.data?.sourceUrl || existing?.metadataJson?.sourceUrl;
+      if (!sourceUrl) {
+        return sendError(res, 400, "NO_SOURCE_URL", "No listings page URL configured. Set one up first via tech stack.");
+      }
+
+      // Extract listings using existing AI pipeline
+      const hint = "Extract property listings from this page. For each listing, extract: title/address, price, bedrooms, bathrooms, square footage, and image URL. Focus only on real estate property listings.";
+      const { items: allItems } = await importService.extractFromUrl(sourceUrl, { hint });
+
+      // Filter to CUSTOM type (listings) and cap at 10
+      const listings = allItems.filter((i) => i.type === "CUSTOM").slice(0, 10);
+
+      // Persist via existing saveImportedItems
+      if (listings.length > 0) {
+        await importService.saveImportedItems(workspaceId, {
+          items: listings,
+          sourceType: "URL",
+          sourceUrl,
+        });
+      }
+
+      // Update connection metadata with sync info
+      const lastSyncedAt = new Date().toISOString();
+      await upsertWorkspaceTechStackConnection(workspaceId, "listing_feed", "connected", {
+        metadataJson: {
+          ...(existing?.metadataJson ?? {}),
+          sourceUrl,
+          lastSyncedAt,
+          listingCount: listings.length,
+        },
+      });
+
+      // Invalidate context cache
+      invalidateClientContext(workspaceId).catch(() => {});
+
+      // Auto-generate draft for newest listing if opt-in enabled
+      let autoGenerated = false;
+      if (
+        listings.length > 0 &&
+        existing?.metadataJson?.autoGenerateOnImport === true
+      ) {
+        // Pick best channel: prefer FACEBOOK > INSTAGRAM > first enabled
+        const channels = await prisma.channelSettings.findMany({
+          where: { clientId: workspaceId, isEnabled: true },
+          select: { channel: true },
+        });
+        const channelOrder = ["FACEBOOK", "INSTAGRAM", "LINKEDIN", "X"];
+        const channel = channelOrder.find((c) =>
+          channels.some((ch) => ch.channel === c)
+        ) ?? channels[0]?.channel;
+
+        if (channel) {
+          // Fire-and-forget — do not block the response
+          const firstListing = listings[0];
+          service.generateDraft({
+            clientId: workspaceId,
+            kind: "POST",
+            channel,
+            guidance: `Write a listing post for: ${firstListing.title}`,
+            templateType: "listing_post",
+            createdBy: "system:auto_generate",
+          }).catch(() => {});
+          autoGenerated = true;
+        }
+      }
+
+      res.json({ listings: listings.length, lastSyncedAt, autoGenerated });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/workspaces/:id/tech-stack/listing_feed/settings
+ * Update listing feed settings (e.g. autoGenerateOnImport).
+ */
+studioRouter.patch(
+  `${BASE}/workspaces/:id/tech-stack/listing_feed/settings`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const workspaceId = req.params.id;
+      const parsed = ListingFeedSettingsSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const existing = await prisma.workspaceTechStackConnection.findUnique({
+        where: { workspaceId_providerKey: { workspaceId, providerKey: "listing_feed" } },
+      });
+      if (!existing) {
+        return sendError(res, 404, "NOT_FOUND", "Listing feed not configured yet.");
+      }
+
+      const updated = await upsertWorkspaceTechStackConnection(workspaceId, "listing_feed", existing.connectionStatus, {
+        metadataJson: {
+          ...(existing.metadataJson ?? {}),
+          autoGenerateOnImport: parsed.data.autoGenerateOnImport,
+        },
+      });
+
+      res.json({ settings: { autoGenerateOnImport: parsed.data.autoGenerateOnImport } });
     } catch (err) {
       next(err);
     }

@@ -55,11 +55,17 @@ function transformRealEstate(item) {
   const baths = d.bathrooms || d.baths;
   const city = d.city || d.location || "";
   const state = d.state || "";
-  const location = [city, state].filter(Boolean).join(", ");
+  const neighborhood = d.neighborhood || "";
+  const locationParts = [neighborhood, city, state].filter(Boolean);
+  const location = locationParts.join(", ");
+
+  const address = d.address || d.street || null;
 
   const headline = beds && baths
     ? `${beds} Bed / ${baths} Bath Home${location ? ` in ${location}` : ""}`
-    : item.title;
+    : address && location
+      ? `${address}, ${location}`
+      : item.title;
 
   const highlights = [];
   if (d.sqft) highlights.push(`${Number(d.sqft).toLocaleString()} sq ft`);
@@ -71,14 +77,21 @@ function transformRealEstate(item) {
     highlights.push(...extractHighlights(d.description, 3));
   }
 
+  // Trust signals from listing data
+  const trustSignals = [];
+  if (d.daysOnMarket != null) trustSignals.push(`${d.daysOnMarket} days on market`);
+  if (d.agent || d.listedBy) trustSignals.push(`Listed by ${d.agent || d.listedBy}`);
+  if (d.broker || d.brokerage) trustSignals.push(d.broker || d.brokerage);
+
   return {
     headline,
     highlights: highlights.slice(0, 5),
     emotionalHook: d.description
       ? extractHook(d.description)
-      : "Your next chapter starts here",
+      : undefined,
     pricePoint: formatPrice(d.price),
     location: location || undefined,
+    ...(trustSignals.length > 0 && { trustSignals }),
   };
 }
 
