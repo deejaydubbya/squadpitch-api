@@ -4,6 +4,7 @@ import { loadClientGenerationContext } from "./clientOrchestrator.js";
 import { buildSystemPrompt } from "./promptBuilder.js";
 import { generateStructuredContent } from "./openai.provider.js";
 import { trackAiUsage } from "../../billing/aiUsageTracking.service.js";
+import { prisma } from "../../../prisma.js";
 
 const IDEAS_OUTPUT_SCHEMA = {
   name: "content_ideas",
@@ -36,16 +37,45 @@ export async function generateContentIdeas(clientId, { userId } = {}) {
   const ctx = await loadClientGenerationContext(clientId);
   const systemPrompt = buildSystemPrompt(ctx);
 
-  const userPrompt = `Generate 10 diverse content ideas for this brand's social media. Each idea should be:
+  // Fetch available data item types so ideas reference actual business data
+  const dataItemCounts = await prisma.workspaceDataItem.groupBy({
+    by: ["type"],
+    where: { clientId },
+    _count: true,
+  }).catch(() => []);
+
+  const promptParts = [];
+  promptParts.push(`Generate 10 diverse content ideas for this brand's social media. Each idea should be:
 - Specific and actionable (not generic)
 - Varied across categories: educational, promotional, storytelling, engagement, trending
 - Appropriate for the brand's voice and audience
-- Ready to be turned into a post with one click
+- Ready to be turned into a post with one click`);
 
-Consider current social media trends, the brand's industry, and their target audience.
+  // Inject industry context
+  const industry = ctx.industryContext;
+  if (industry) {
+    promptParts.push(`\nThis is a ${industry.label} business. Tailor ideas to this industry's audience and content traditions.`);
+    if (industry.contentAngles?.length > 0) {
+      promptParts.push(`Industry-proven angles to draw from:`);
+      industry.contentAngles.forEach((a) => promptParts.push(`- ${a}`));
+    }
+  }
+
+  // Inject available data item types
+  if (dataItemCounts.length > 0) {
+    const summary = dataItemCounts
+      .map((r) => `${r.type.replace(/_/g, " ")}: ${r._count}`)
+      .join(", ");
+    promptParts.push(`\nAvailable business data the user has uploaded: ${summary}`);
+    promptParts.push(`At least 3 ideas should reference this existing data (e.g. "Share one of your ${dataItemCounts[0]?.type.replace(/_/g, " ").toLowerCase()}s").`);
+  }
+
+  promptParts.push(`\nConsider current social media trends, the brand's industry, and their target audience.
 Suggest the best platform for each idea (Instagram, TikTok, LinkedIn, X, Facebook, or YouTube).
 
-Respond with JSON matching the content_ideas schema.`;
+Respond with JSON matching the content_ideas schema.`);
+
+  const userPrompt = promptParts.join("\n");
 
   const responseFormat = { type: "json_schema", json_schema: IDEAS_OUTPUT_SCHEMA };
 

@@ -152,6 +152,17 @@ export function buildSystemPrompt(ctx) {
     }
   }
 
+  // Industry-specific content guidance — enriches output quality.
+  const industry = ctx.industryContext;
+  if (industry) {
+    lines.push(`\nIndustry specialization: ${industry.label}`);
+    lines.push(`Industry context: ${industry.description}`);
+    if (industry.contentAngles?.length > 0) {
+      lines.push(`\nIndustry-recommended content angles (use these as inspiration, not templates):`);
+      industry.contentAngles.forEach((angle) => lines.push(`- ${angle}`));
+    }
+  }
+
   // Example posts — show the model what good output looks like.
   const examples = brand?.examplePosts;
   if (Array.isArray(examples) && examples.length > 0) {
@@ -322,6 +333,11 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, dataI
   // Business data injection
   if (dataItem) {
     lines.push(formatBusinessDataForPrompt(dataItem));
+    // Add industry-aware framing when both data item and industry context are present
+    const industry = ctx.industryContext;
+    if (industry) {
+      lines.push(`\nUse this data to create content specific to the ${industry.label} industry. Reference actual details from the data above — do not generalize.`);
+    }
   }
 
   // Blueprint angle injection

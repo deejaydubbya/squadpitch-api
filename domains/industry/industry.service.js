@@ -34,6 +34,25 @@ export function getStarterAngles(industryKey) {
 }
 
 /**
+ * Get content context for an industry key — used in generation prompts
+ * to provide industry-aware guidance beyond onboarding.
+ *
+ * @param {string | null | undefined} industryKey
+ * @returns {{ label: string, description: string, contentAngles: string[], priorityDataTypes: string[], starterChannels: string[] } | null}
+ */
+export function getContentContext(industryKey) {
+  if (!industryKey) return null;
+  const profile = getIndustryProfile(industryKey);
+  return {
+    label: profile.label,
+    description: profile.description,
+    contentAngles: profile.content.starterAngles,
+    priorityDataTypes: profile.extraction.priorityDataTypes,
+    starterChannels: profile.content.starterChannels,
+  };
+}
+
+/**
  * Resolve starter blueprint slugs for an industry key.
  * Returns the recommended blueprint slugs and channels,
  * or null if no industry key is provided.

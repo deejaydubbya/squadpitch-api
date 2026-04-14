@@ -8,6 +8,7 @@
 
 import { prisma } from "../../../prisma.js";
 import { redisGet, redisSet, redisDel } from "../../../redis.js";
+import { getContentContext } from "../../industry/industry.service.js";
 
 const CACHE_TTL = 1800; // 30 minutes
 const CACHE_PREFIX = "sp:client:ctx:";
@@ -79,9 +80,12 @@ export async function loadClientGenerationContext(clientId) {
     ? client.voiceProfile.contentBuckets
     : [];
 
+  const industryContext = getContentContext(client.industryKey);
+
   const ctx = {
     client,
     industryKey: client.industryKey ?? null,
+    industryContext,
     brand: client.brandProfile ?? null,
     voice: client.voiceProfile ?? null,
     media: client.mediaProfile ?? null,
