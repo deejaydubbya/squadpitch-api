@@ -33,6 +33,11 @@
  * @property {IntegrationCapability[]} capabilities - What Squadpitch can do with this tool
  */
 
+/**
+ * Per-workspace connection state for a tech stack item.
+ * @typedef {"not_connected" | "connected" | "pending" | "error"} WorkspaceConnectionStatus
+ */
+
 /** @type {TechStackCategory[]} */
 export const TECH_STACK_CATEGORIES = [
   "data_source",
