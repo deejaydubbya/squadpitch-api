@@ -160,6 +160,7 @@ model Client {
   analyticsSnapshots AnalyticsSnapshot[]
   dataSources        WorkspaceDataSource[]
   dataItems          WorkspaceDataItem[]
+  techStackConnections WorkspaceTechStackConnection[]
 
   @@index([status])
   @@map("clients")
@@ -898,4 +899,24 @@ model BlueprintPerformance {
   blueprint ContentBlueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
 
   @@map("blueprint_performance")
+}
+
+// ── Tech Stack Connections ────────────────────────────────────────────
+
+model WorkspaceTechStackConnection {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  providerKey      String
+  connectionStatus String    @default("not_connected")
+  metadataJson     Json?
+  lastError        String?
+  connectedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  workspace Client @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, providerKey])
+  @@index([workspaceId])
+  @@map("workspace_tech_stack_connections")
 }
