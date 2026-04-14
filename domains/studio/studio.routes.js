@@ -705,8 +705,20 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
     });
 
     const starterAngles = getStarterAngles(industryKey) || [];
+    const hasImportedData = dataItems && dataItems.length > 0;
     const coreTemplates = getRecommendationTemplates(industryKey)
       .filter((t) => t.tier === "core")
+      .sort((a, b) => {
+        const aNeeds = a.conditions?.hasData ?? false;
+        const bNeeds = b.conditions?.hasData ?? false;
+        if (hasImportedData) {
+          // Data available — prefer data-dependent templates (richer output)
+          return (bNeeds ? 1 : 0) - (aNeeds ? 1 : 0);
+        }
+        // No data — prefer non-conditional templates first
+        return (aNeeds ? 1 : 0) - (bNeeds ? 1 : 0);
+      })
+      .slice(0, 3)
       .map(({ type, title, guidance }) => ({ type, title, guidance }));
 
     res.json({
@@ -834,8 +846,18 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
     });
 
     const starterAngles = getStarterAngles(industryKey) || [];
+    const hasImportedData = dataItems && dataItems.length > 0;
     const coreTemplates = getRecommendationTemplates(industryKey)
       .filter((t) => t.tier === "core")
+      .sort((a, b) => {
+        const aNeeds = a.conditions?.hasData ?? false;
+        const bNeeds = b.conditions?.hasData ?? false;
+        if (hasImportedData) {
+          return (bNeeds ? 1 : 0) - (aNeeds ? 1 : 0);
+        }
+        return (aNeeds ? 1 : 0) - (bNeeds ? 1 : 0);
+      })
+      .slice(0, 3)
       .map(({ type, title, guidance }) => ({ type, title, guidance }));
 
     // Final complete event with full payload (same shape as the non-stream endpoint)
