@@ -5,6 +5,8 @@
 // details. This module is the single place content prompts are composed;
 // routes and services must NEVER assemble prompts inline.
 
+import { buildContentContext } from "../../industry/contentContextBuilder.js";
+
 /**
  * JSON schema consumed by OpenAI's response_format: { type: "json_schema" }.
  * This is the authoritative shape that drafts are persisted in.
@@ -274,6 +276,34 @@ export function formatBusinessDataForPrompt(dataItem) {
 }
 
 /**
+ * Format structured content context for injection into the user prompt.
+ * This is the industry-transformed version of business data — structured
+ * fields the AI can use directly instead of parsing raw key/value pairs.
+ */
+export function formatContentContextForPrompt(context) {
+  if (!context) return "";
+  const lines = [];
+  lines.push(`\n--- CONTENT CONTEXT ---`);
+  lines.push(`Headline: ${context.headline}`);
+  if (context.highlights?.length > 0) {
+    lines.push(`Key highlights:\n${context.highlights.map((h) => `- ${h}`).join("\n")}`);
+  }
+  if (context.emotionalHook) lines.push(`Emotional hook: ${context.emotionalHook}`);
+  if (context.pricePoint) lines.push(`Price: ${context.pricePoint}`);
+  if (context.location) lines.push(`Location: ${context.location}`);
+  if (context.urgency) lines.push(`Urgency angle: ${context.urgency}`);
+  if (context.authorityTopics?.length > 0) {
+    lines.push(`Authority topics:\n${context.authorityTopics.map((t) => `- ${t}`).join("\n")}`);
+  }
+  if (context.trustSignals?.length > 0) {
+    lines.push(`Trust signals:\n${context.trustSignals.map((s) => `- ${s}`).join("\n")}`);
+  }
+  lines.push(`Use the structured fields above as the primary source for your content. Weave in the headline, highlights, and emotional hook naturally.`);
+  lines.push(`--- END CONTENT CONTEXT ---`);
+  return lines.join("\n");
+}
+
+/**
  * Format a content blueprint angle for injection into the user prompt.
  */
 export function formatBlueprintForPrompt(blueprint) {
@@ -330,13 +360,16 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, dataI
     }
   }
 
-  // Business data injection
+  // Business data injection — with industry-aware transformation when available
   if (dataItem) {
+    const contentContext = buildContentContext(dataItem, ctx.industryKey);
+    if (contentContext) {
+      lines.push(formatContentContextForPrompt(contentContext));
+    }
+    // Always include raw data as reference
     lines.push(formatBusinessDataForPrompt(dataItem));
-    // Add industry-aware framing when both data item and industry context are present
-    const industry = ctx.industryContext;
-    if (industry) {
-      lines.push(`\nUse this data to create content specific to the ${industry.label} industry. Reference actual details from the data above — do not generalize.`);
+    if (ctx.industryContext) {
+      lines.push(`\nUse this data to create content specific to the ${ctx.industryContext.label} industry. Reference actual details — do not generalize.`);
     }
   }
 
