@@ -483,7 +483,7 @@ export const ConfirmImportSchema = z.object({
       })
     )
     .min(1)
-    .max(100),
+    .max(200),
   sourceType: DataSourceTypeEnum,
   sourceUrl: z.string().url().optional(),
 });

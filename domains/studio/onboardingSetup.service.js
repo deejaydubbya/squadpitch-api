@@ -94,7 +94,7 @@ const BRAND_EXTRACTION_FORMAT = {
   },
 };
 
-const MAX_COMBINED_LENGTH = 600_000;
+const MAX_COMBINED_LENGTH = 2_000_000;
 
 // ── Scrape ──────────────────────────────────────────────────────────────
 
@@ -235,7 +235,7 @@ export async function extractBrandFromText(description, { industryKey } = {}) {
  * from scraped content using the existing AI extraction pipeline.
  */
 export async function extractDataItems(combinedText, { url, images, industryKey } = {}) {
-  let hint = "Extract all products, inventory, services, testimonials, team members, FAQs, and any other structured business data";
+  let hint = "Extract ALL products, inventory items, vehicles, services, testimonials, team member spotlights, FAQs, and any other structured business data. Do not stop early — extract every distinct item present.";
 
   const industryHints = getExtractionHints(industryKey);
   if (industryHints) {

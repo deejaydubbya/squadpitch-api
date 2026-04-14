@@ -22,12 +22,17 @@ const PRIORITY_PATTERNS = [
   /\/store/i,
   /\/cars/i,
   /\/team/i,
+  /\/staff/i,
   /\/pricing/i,
   /\/features/i,
   /\/solutions/i,
   /\/who-we-are/i,
   /\/what-we-do/i,
   /\/our-story/i,
+  /\/testimonials/i,
+  /\/reviews/i,
+  /\/customers/i,
+  /\/success/i,
 ];
 
 /**

@@ -6,7 +6,7 @@
 
 import { generateStructuredContent } from "./generation/openai.provider.js";
 
-const MAX_INPUT_BYTES = 200_000; // ~50K tokens — gpt-4o-mini has 128K context, leaves room for prompt + output
+const MAX_INPUT_BYTES = 400_000; // ~100K tokens — gpt-4o-mini has 128K context, leaves room for prompt + output
 const EXTRACTION_TIMEOUT_MS = 120_000;
 const EXTRACTION_TEMPERATURE = 0.3;
 
@@ -65,7 +65,7 @@ Type classification guidelines — ALWAYS prefer a specific type over CUSTOM:
 - ONLY use CUSTOM when none of the above types apply (e.g. real estate listings, job postings, recipes, directory entries)
 
 Rules:
-- Extract as many distinct data items as the content supports (1-50 items)
+- Extract ALL distinct data items from the content — do not stop early. Extract every product, vehicle, listing, testimonial, team member, FAQ, etc.
 - Each item MUST have a type, title, and relevant dataJson fields
 - When the user provides a hint about what to extract, prioritize finding those items
 - Set confidence (0.0-1.0) based on how well the content matches the type
