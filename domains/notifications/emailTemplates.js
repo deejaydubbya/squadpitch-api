@@ -16,7 +16,7 @@ function wrap(title, bodyHtml) {
 ${bodyHtml}
 </div>
 <p style="text-align:center;color:#666;font-size:11px;margin-top:24px">
-Squadpitch &middot; <a href="${APP}/clients" style="color:#4ade80">Open Dashboard</a>
+Squadpitch &middot; <a href="${APP}/workspaces" style="color:#4ade80">Open Dashboard</a>
 </p>
 </div>
 </body>
@@ -46,7 +46,7 @@ export const templates = {
         <div style="background:#111318;border-radius:8px;padding:16px;margin:16px 0;border-left:3px solid #4ade80">
           <p style="color:#aaa;font-size:13px;margin:0;line-height:1.5">${preview}${body?.length > 200 ? "..." : ""}</p>
         </div>
-        ${externalPostUrl ? btn("View Post", externalPostUrl) : btn("Open Dashboard", `${APP}/clients/${clientId}`)}
+        ${externalPostUrl ? btn("View Post", externalPostUrl) : btn("Open Dashboard", `${APP}/workspaces/${clientId}`)}
       `),
     };
   },
@@ -68,9 +68,9 @@ export const templates = {
         </div>
         <p style="color:#999;font-size:13px;margin:8px 0 0">Check your channel connections and try again.</p>
         <div style="margin-top:16px">
-          ${btn("Reconnect Account", `${APP}/clients/${clientId}/settings/channels`)}
+          ${btn("Reconnect Account", `${APP}/workspaces/${clientId}/settings/channels`)}
           <span style="display:inline-block;width:8px"></span>
-          ${btn("Go to Dashboard", `${APP}/clients/${clientId}`)}
+          ${btn("Go to Dashboard", `${APP}/workspaces/${clientId}`)}
         </div>
       `),
     };
@@ -103,7 +103,7 @@ export const templates = {
           Your <strong style="color:#fff">${channel}</strong> connection has expired.
           Please reconnect to continue publishing.
         </p>
-        ${btn("Reconnect", `${APP}/clients/${clientId}/settings/channels`)}
+        ${btn("Reconnect", `${APP}/workspaces/${clientId}/settings/channels`)}
       `),
     };
   },
@@ -115,7 +115,7 @@ export const templates = {
         <p style="color:#ccc;font-size:14px;line-height:1.6;margin:0 0 8px">
           <strong style="color:#fff">${count}</strong> post${count !== 1 ? "s have" : " has"} been generated and ${count !== 1 ? "are" : "is"} ready for review.
         </p>
-        ${btn("Review Content", `${APP}/clients/${clientId}/planner`)}
+        ${btn("Review Content", `${APP}/workspaces/${clientId}/planner`)}
       `),
     };
   },

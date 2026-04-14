@@ -11,7 +11,7 @@ export const inAppTemplates = {
     return {
       title: "Post published",
       message: `Your ${channel || "social"} post is live: "${preview}${body?.length > 120 ? "…" : ""}"`,
-      linkUrl: `${APP}/clients/${clientId}`,
+      linkUrl: `${APP}/workspaces/${clientId}`,
     };
   },
 
@@ -19,7 +19,7 @@ export const inAppTemplates = {
     return {
       title: "Post failed to publish",
       message: `Your ${channel || "social"} post failed: ${publishError || "unknown error"}`,
-      linkUrl: draftId ? `${APP}/clients/${clientId}/library` : `${APP}/clients/${clientId}`,
+      linkUrl: draftId ? `${APP}/workspaces/${clientId}/library` : `${APP}/workspaces/${clientId}`,
     };
   },
 
@@ -36,7 +36,7 @@ export const inAppTemplates = {
     return {
       title: "Channel disconnected",
       message: `Your ${channel || "social"} connection has expired. Reconnect to keep publishing.`,
-      linkUrl: `${APP}/clients/${clientId}/settings/channels`,
+      linkUrl: `${APP}/workspaces/${clientId}/settings/channels`,
     };
   },
 
@@ -44,7 +44,7 @@ export const inAppTemplates = {
     return {
       title: "Batch generation complete",
       message: `${count} ${count === 1 ? "draft" : "drafts"} have been generated and are ready for review.`,
-      linkUrl: `${APP}/clients/${clientId}/library`,
+      linkUrl: `${APP}/workspaces/${clientId}/library`,
     };
   },
 };

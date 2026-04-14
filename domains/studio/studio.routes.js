@@ -112,7 +112,7 @@ async function requireClientOwner(req, res, next) {
 
 // ── Clients ─────────────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients`, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces`, async (req, res, next) => {
   try {
     const actorSub = getAuth0Sub(req);
     const clients = await service.listClients(actorSub);
@@ -122,7 +122,7 @@ studioRouter.get(`${BASE}/clients`, async (req, res, next) => {
   }
 });
 
-studioRouter.post(`${BASE}/clients`, async (req, res, next) => {
+studioRouter.post(`${BASE}/workspaces`, async (req, res, next) => {
   try {
     const parsed = CreateClientSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -140,7 +140,7 @@ studioRouter.post(`${BASE}/clients`, async (req, res, next) => {
   }
 });
 
-studioRouter.get(`${BASE}/clients/:id`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id`, requireClientOwner, async (req, res, next) => {
   try {
     const actorSub = getAuth0Sub(req);
     const client = await service.getClient(req.params.id, actorSub);
@@ -151,7 +151,7 @@ studioRouter.get(`${BASE}/clients/:id`, requireClientOwner, async (req, res, nex
   }
 });
 
-studioRouter.patch(`${BASE}/clients/:id`, requireClientOwner, async (req, res, next) => {
+studioRouter.patch(`${BASE}/workspaces/:id`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpdateClientSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -163,7 +163,7 @@ studioRouter.patch(`${BASE}/clients/:id`, requireClientOwner, async (req, res, n
   }
 });
 
-studioRouter.delete(`${BASE}/clients/:id`, requireClientOwner, async (req, res, next) => {
+studioRouter.delete(`${BASE}/workspaces/:id`, requireClientOwner, async (req, res, next) => {
   try {
     const actorSub = getAuth0Sub(req);
     const client = await service.archiveClient(req.params.id, actorSub);
@@ -175,7 +175,7 @@ studioRouter.delete(`${BASE}/clients/:id`, requireClientOwner, async (req, res, 
 
 // ── Brand profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/brand`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/brand`, requireClientOwner, async (req, res, next) => {
   try {
     const brand = await service.getBrandProfile(req.params.id);
     res.json({ brand: service.formatBrandProfile(brand) });
@@ -184,7 +184,7 @@ studioRouter.get(`${BASE}/clients/:id/brand`, requireClientOwner, async (req, re
   }
 });
 
-studioRouter.put(`${BASE}/clients/:id/brand`, requireClientOwner, async (req, res, next) => {
+studioRouter.put(`${BASE}/workspaces/:id/brand`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpsertBrandProfileSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -202,7 +202,7 @@ studioRouter.put(`${BASE}/clients/:id/brand`, requireClientOwner, async (req, re
 
 // ── Voice profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/voice`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/voice`, requireClientOwner, async (req, res, next) => {
   try {
     const voice = await service.getVoiceProfile(req.params.id);
     res.json({ voice: service.formatVoiceProfile(voice) });
@@ -211,7 +211,7 @@ studioRouter.get(`${BASE}/clients/:id/voice`, requireClientOwner, async (req, re
   }
 });
 
-studioRouter.put(`${BASE}/clients/:id/voice`, requireClientOwner, async (req, res, next) => {
+studioRouter.put(`${BASE}/workspaces/:id/voice`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpsertVoiceProfileSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -229,7 +229,7 @@ studioRouter.put(`${BASE}/clients/:id/voice`, requireClientOwner, async (req, re
 
 // ── Media profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/media`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/media`, requireClientOwner, async (req, res, next) => {
   try {
     const media = await service.getMediaProfile(req.params.id);
     res.json({ media: service.formatMediaProfile(media) });
@@ -238,7 +238,7 @@ studioRouter.get(`${BASE}/clients/:id/media`, requireClientOwner, async (req, re
   }
 });
 
-studioRouter.put(`${BASE}/clients/:id/media`, requireClientOwner, async (req, res, next) => {
+studioRouter.put(`${BASE}/workspaces/:id/media`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpsertMediaProfileSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -256,7 +256,7 @@ studioRouter.put(`${BASE}/clients/:id/media`, requireClientOwner, async (req, re
 
 // ── Channel settings ────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/channels`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/channels`, requireClientOwner, async (req, res, next) => {
   try {
     const channels = await service.listChannelSettings(req.params.id);
     res.json({ channels: channels.map(service.formatChannelSettings) });
@@ -265,7 +265,7 @@ studioRouter.get(`${BASE}/clients/:id/channels`, requireClientOwner, async (req,
   }
 });
 
-studioRouter.put(`${BASE}/clients/:id/channels`, requireClientOwner, async (req, res, next) => {
+studioRouter.put(`${BASE}/workspaces/:id/channels`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = UpsertChannelSettingsSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -282,7 +282,7 @@ studioRouter.put(`${BASE}/clients/:id/channels`, requireClientOwner, async (req,
 // ── Business Data ──────────────────────────────────────────────────────
 
 studioRouter.get(
-  `${BASE}/clients/:id/data-sources`,
+  `${BASE}/workspaces/:id/data-sources`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -295,7 +295,7 @@ studioRouter.get(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/data-sources`,
+  `${BASE}/workspaces/:id/data-sources`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -310,7 +310,7 @@ studioRouter.post(
 );
 
 studioRouter.get(
-  `${BASE}/clients/:id/business-data`,
+  `${BASE}/workspaces/:id/business-data`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -325,7 +325,7 @@ studioRouter.get(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/business-data`,
+  `${BASE}/workspaces/:id/business-data`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -410,7 +410,7 @@ studioRouter.get(`${BASE}/content-blueprints/:id`, async (req, res, next) => {
 // ── Content Opportunities ──────────────────────────────────────────────
 
 studioRouter.get(
-  `${BASE}/clients/:id/content-opportunities`,
+  `${BASE}/workspaces/:id/content-opportunities`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -446,7 +446,7 @@ studioRouter.get(
 // ── Bulk Generate ──────────────────────────────────────────────────────
 
 studioRouter.post(
-  `${BASE}/clients/:id/business-data/bulk-generate`,
+  `${BASE}/workspaces/:id/business-data/bulk-generate`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -510,7 +510,7 @@ studioRouter.post(
 // ── Data Performance ─────────────────────────────────────────────────────
 
 studioRouter.get(
-  `${BASE}/clients/:id/business-data/top-performing`,
+  `${BASE}/workspaces/:id/business-data/top-performing`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -528,7 +528,7 @@ studioRouter.get(
 );
 
 studioRouter.get(
-  `${BASE}/clients/:id/business-data/best-blueprints`,
+  `${BASE}/workspaces/:id/business-data/best-blueprints`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -546,7 +546,7 @@ studioRouter.get(
 );
 
 studioRouter.get(
-  `${BASE}/clients/:id/business-data/best-platform/:dataType`,
+  `${BASE}/workspaces/:id/business-data/best-platform/:dataType`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -562,7 +562,7 @@ studioRouter.get(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/business-data/recalculate`,
+  `${BASE}/workspaces/:id/business-data/recalculate`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -577,7 +577,7 @@ studioRouter.post(
 // ── Data Usage & Suggestions ─────────────────────────────────────────
 
 studioRouter.get(
-  `${BASE}/clients/:id/business-data/unused`,
+  `${BASE}/workspaces/:id/business-data/unused`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -590,7 +590,7 @@ studioRouter.get(
 );
 
 studioRouter.get(
-  `${BASE}/clients/:id/business-data/suggestions`,
+  `${BASE}/workspaces/:id/business-data/suggestions`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -858,7 +858,7 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
 // ── Data Import ──────────────────────────────────────────────────────
 
 studioRouter.post(
-  `${BASE}/clients/:id/data-import/url`,
+  `${BASE}/workspaces/:id/data-import/url`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -874,7 +874,7 @@ studioRouter.post(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/data-import/text`,
+  `${BASE}/workspaces/:id/data-import/text`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -890,7 +890,7 @@ studioRouter.post(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/data-import/csv/preview`,
+  `${BASE}/workspaces/:id/data-import/csv/preview`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -906,7 +906,7 @@ studioRouter.post(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/data-import/csv/extract`,
+  `${BASE}/workspaces/:id/data-import/csv/extract`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -925,7 +925,7 @@ studioRouter.post(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/data-import/sheets`,
+  `${BASE}/workspaces/:id/data-import/sheets`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -945,7 +945,7 @@ studioRouter.post(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/data-import/notion`,
+  `${BASE}/workspaces/:id/data-import/notion`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -963,7 +963,7 @@ studioRouter.post(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/data-import/confirm`,
+  `${BASE}/workspaces/:id/data-import/confirm`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -984,7 +984,7 @@ studioRouter.post(
 
 // ── Dashboard ──────────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/dashboard/recommendations`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/dashboard/recommendations`, requireClientOwner, async (req, res, next) => {
   try {
     const result = await getDashboardRecommendations(req.params.id);
     res.json(result);
@@ -993,7 +993,7 @@ studioRouter.get(`${BASE}/clients/:id/dashboard/recommendations`, requireClientO
   }
 });
 
-studioRouter.get(`${BASE}/clients/:id/dashboard/actions`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/dashboard/actions`, requireClientOwner, async (req, res, next) => {
   try {
     const result = await getDashboardActions(req.params.id);
     res.json(result);
@@ -1004,7 +1004,7 @@ studioRouter.get(`${BASE}/clients/:id/dashboard/actions`, requireClientOwner, as
 
 // ── Analytics ───────────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/clients/:id/analytics`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/analytics`, requireClientOwner, async (req, res, next) => {
   try {
     const analytics = await service.getClientAnalytics(req.params.id);
     res.json(analytics);
@@ -1013,7 +1013,7 @@ studioRouter.get(`${BASE}/clients/:id/analytics`, requireClientOwner, async (req
   }
 });
 
-studioRouter.get(`${BASE}/clients/:id/analytics/overview`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/analytics/overview`, requireClientOwner, async (req, res, next) => {
   try {
     const parsed = AnalyticsOverviewQuerySchema.safeParse(req.query);
     if (!parsed.success) return validationError(res, parsed.error);
@@ -1024,7 +1024,7 @@ studioRouter.get(`${BASE}/clients/:id/analytics/overview`, requireClientOwner, a
   }
 });
 
-studioRouter.get(`${BASE}/clients/:id/analytics/posts/:postId`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/analytics/posts/:postId`, requireClientOwner, async (req, res, next) => {
   try {
     const detail = await getPostDetail(req.params.id, req.params.postId);
     if (!detail) return sendError(res, 404, "NOT_FOUND", "Post not found");
@@ -1034,7 +1034,7 @@ studioRouter.get(`${BASE}/clients/:id/analytics/posts/:postId`, requireClientOwn
   }
 });
 
-studioRouter.get(`${BASE}/clients/:id/analytics/insights`, requireClientOwner, async (req, res, next) => {
+studioRouter.get(`${BASE}/workspaces/:id/analytics/insights`, requireClientOwner, async (req, res, next) => {
   try {
     const range = req.query.range || '30d';
     const [insights, recResult] = await Promise.all([
@@ -1111,7 +1111,7 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
 // ── Content Ideas ──────────────────────────────────────────────────────
 
-studioRouter.post(`${BASE}/clients/:id/ideas`, requireClientOwner, async (req, res, next) => {
+studioRouter.post(`${BASE}/workspaces/:id/ideas`, requireClientOwner, async (req, res, next) => {
   try {
     // Service health pre-flight
     if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
@@ -1132,7 +1132,7 @@ studioRouter.post(`${BASE}/clients/:id/ideas`, requireClientOwner, async (req, r
 
 // ── Batch-complete notification ──────────────────────────────────────────
 
-studioRouter.post(`${BASE}/clients/:id/batch-complete`, requireClientOwner, async (req, res, next) => {
+studioRouter.post(`${BASE}/workspaces/:id/batch-complete`, requireClientOwner, async (req, res, next) => {
   try {
     const count = parseInt(req.body.count) || 0;
     if (count > 0) {
@@ -1153,7 +1153,7 @@ studioRouter.post(`${BASE}/clients/:id/batch-complete`, requireClientOwner, asyn
 // ── Autopilot ──────────────────────────────────────────────────────────
 
 studioRouter.post(
-  `${BASE}/clients/:id/autopilot/preview`,
+  `${BASE}/workspaces/:id/autopilot/preview`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1168,7 +1168,7 @@ studioRouter.post(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/autopilot/execute`,
+  `${BASE}/workspaces/:id/autopilot/execute`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1269,7 +1269,7 @@ studioRouter.delete(`${BASE}/drafts/:id`, async (req, res, next) => {
 });
 
 studioRouter.delete(
-  `${BASE}/clients/:id/drafts`,
+  `${BASE}/workspaces/:id/drafts`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1364,7 +1364,7 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
 });
 
 // Auto-schedule: distribute drafts across upcoming days
-studioRouter.post(`${BASE}/clients/:id/auto-schedule`, requireClientOwner, async (req, res, next) => {
+studioRouter.post(`${BASE}/workspaces/:id/auto-schedule`, requireClientOwner, async (req, res, next) => {
   try {
     const { draftIds } = req.body;
     if (!Array.isArray(draftIds) || draftIds.length === 0) {
@@ -1434,7 +1434,7 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
 // ── Media assets ───────────────────────────────────────────────────────
 
 studioRouter.get(
-  `${BASE}/clients/:id/assets`,
+  `${BASE}/workspaces/:id/assets`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1462,7 +1462,7 @@ studioRouter.get(`${BASE}/assets/:assetId`, async (req, res, next) => {
 });
 
 studioRouter.post(
-  `${BASE}/clients/:id/assets/upload`,
+  `${BASE}/workspaces/:id/assets/upload`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1787,7 +1787,7 @@ studioRouter.get(
 );
 
 studioRouter.get(
-  `${BASE}/clients/:id/metrics`,
+  `${BASE}/workspaces/:id/metrics`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1817,7 +1817,7 @@ studioRouter.post(
 );
 
 studioRouter.get(
-  `${BASE}/clients/:id/metrics/sync-status`,
+  `${BASE}/workspaces/:id/metrics/sync-status`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1832,7 +1832,7 @@ studioRouter.get(
 // ── Connection validation ──────────────────────────────────────────────
 
 studioRouter.post(
-  `${BASE}/clients/:id/connections/:channel/validate`,
+  `${BASE}/workspaces/:id/connections/:channel/validate`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1855,7 +1855,7 @@ studioRouter.post(
 // ── Channel connections ─────────────────────────────────────────────────
 
 studioRouter.get(
-  `${BASE}/clients/:id/connections`,
+  `${BASE}/workspaces/:id/connections`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1868,7 +1868,7 @@ studioRouter.get(
 );
 
 studioRouter.post(
-  `${BASE}/clients/:id/connections/:channel/oauth/start`,
+  `${BASE}/workspaces/:id/connections/:channel/oauth/start`,
   requireClientOwner,
   async (req, res, next) => {
     try {
@@ -1934,7 +1934,7 @@ studioRouter.post(
 );
 
 studioRouter.delete(
-  `${BASE}/clients/:id/connections/:channel`,
+  `${BASE}/workspaces/:id/connections/:channel`,
   requireClientOwner,
   async (req, res, next) => {
     try {

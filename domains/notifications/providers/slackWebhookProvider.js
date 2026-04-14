@@ -75,7 +75,7 @@ function buildSlackBlocks(eventType, payload = {}) {
         {
           type: "button",
           text: { type: "plain_text", text: "Open Dashboard" },
-          url: `${APP}/clients/${clientId}`,
+          url: `${APP}/workspaces/${clientId}`,
         },
       ],
     });

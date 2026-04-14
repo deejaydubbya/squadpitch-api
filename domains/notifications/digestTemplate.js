@@ -15,7 +15,7 @@ function wrap(title, bodyHtml) {
 ${bodyHtml}
 </div>
 <p style="text-align:center;color:#666;font-size:11px;margin-top:24px">
-Squadpitch &middot; <a href="${APP}/clients" style="color:#4ade80">Open Dashboard</a>
+Squadpitch &middot; <a href="${APP}/workspaces" style="color:#4ade80">Open Dashboard</a>
 </p>
 </div>
 </body>
@@ -60,7 +60,7 @@ export function buildDigestEmail(data) {
   } = data;
 
   const greeting = userName ? `Hi ${userName},` : "Hi,";
-  const dashboardUrl = clientId ? `${APP}/clients/${clientId}` : `${APP}/dashboard`;
+  const dashboardUrl = clientId ? `${APP}/workspaces/${clientId}` : `${APP}/dashboard`;
 
   let statsRow = `<div style="display:flex;background:#111318;border-radius:8px;margin:16px 0">
     ${statCard("Published", postsPublished, "#4ade80")}

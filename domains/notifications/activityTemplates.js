@@ -34,7 +34,7 @@ export const activityTemplates = {
       title: "Post published",
       description: `${channel || "Social"} post went live: "${preview}${body?.length > 80 ? "…" : ""}"`,
       icon: "check-circle",
-      linkUrl: `${APP}/clients/${clientId}`,
+      linkUrl: `${APP}/workspaces/${clientId}`,
     };
   },
 
@@ -43,7 +43,7 @@ export const activityTemplates = {
       title: "Post failed to publish",
       description: `${channel || "Social"} post failed: ${publishError || "unknown error"}`,
       icon: "x-circle",
-      linkUrl: `${APP}/clients/${clientId}`,
+      linkUrl: `${APP}/workspaces/${clientId}`,
     };
   },
 
@@ -62,7 +62,7 @@ export const activityTemplates = {
       title: "Channel disconnected",
       description: `${channel || "Social"} connection expired.`,
       icon: "unplug",
-      linkUrl: `${APP}/clients/${clientId}/settings/channels`,
+      linkUrl: `${APP}/workspaces/${clientId}/settings/channels`,
     };
   },
 
@@ -71,7 +71,7 @@ export const activityTemplates = {
       title: "Batch generation complete",
       description: `${count} ${count === 1 ? "draft" : "drafts"} generated.`,
       icon: "layers",
-      linkUrl: `${APP}/clients/${clientId}/library`,
+      linkUrl: `${APP}/workspaces/${clientId}/library`,
     };
   },
 
@@ -82,7 +82,7 @@ export const activityTemplates = {
       title: "Draft created",
       description: `New ${channel || "social"} draft generated.`,
       icon: "file-plus",
-      linkUrl: `${APP}/clients/${clientId}/library`,
+      linkUrl: `${APP}/workspaces/${clientId}/library`,
     };
   },
 
@@ -91,7 +91,7 @@ export const activityTemplates = {
       title: "Draft approved",
       description: `${channel || "Social"} draft approved and ready to publish.`,
       icon: "thumbs-up",
-      linkUrl: `${APP}/clients/${clientId}/library`,
+      linkUrl: `${APP}/workspaces/${clientId}/library`,
     };
   },
 
@@ -102,7 +102,7 @@ export const activityTemplates = {
         ? `${channel || "Social"} draft rejected: ${reason}`
         : `${channel || "Social"} draft rejected.`,
       icon: "thumbs-down",
-      linkUrl: `${APP}/clients/${clientId}/library`,
+      linkUrl: `${APP}/workspaces/${clientId}/library`,
     };
   },
 
@@ -114,7 +114,7 @@ export const activityTemplates = {
       title: "Draft scheduled",
       description: `${channel || "Social"} draft scheduled for ${when}.`,
       icon: "calendar-clock",
-      linkUrl: `${APP}/clients/${clientId}/planner`,
+      linkUrl: `${APP}/workspaces/${clientId}/planner`,
     };
   },
 
@@ -123,7 +123,7 @@ export const activityTemplates = {
       title: "Media generated",
       description: `AI ${assetType || "image"} generation complete.`,
       icon: "image",
-      linkUrl: `${APP}/clients/${clientId}/assets`,
+      linkUrl: `${APP}/workspaces/${clientId}/assets`,
     };
   },
 
@@ -132,7 +132,7 @@ export const activityTemplates = {
       title: "Channel connected",
       description: `${channel || "Social"} channel connected successfully.`,
       icon: "plug",
-      linkUrl: `${APP}/clients/${clientId}/settings/channels`,
+      linkUrl: `${APP}/workspaces/${clientId}/settings/channels`,
     };
   },
 };
