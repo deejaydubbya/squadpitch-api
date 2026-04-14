@@ -94,7 +94,7 @@ const BRAND_EXTRACTION_FORMAT = {
   },
 };
 
-const MAX_COMBINED_LENGTH = 400_000;
+const MAX_COMBINED_LENGTH = 600_000;
 
 // ── Scrape ──────────────────────────────────────────────────────────────
 
@@ -150,15 +150,22 @@ export async function crawlAndCombine({ url, text, documentTexts = [], onProgres
     });
   }
 
-  // Proportional truncation
-  const budgets = { website: 0.6, document: 0.3, text: 0.1 };
+  // Proportional truncation — redistribute unused budgets to active sources
+  const baseBudgets = { website: 0.6, document: 0.3, text: 0.1 };
   const grouped = { website: [], document: [], text: [] };
   for (const s of sections) grouped[s.source].push(s);
 
+  // Redistribute budget from empty sources to active ones proportionally
+  const activeSources = Object.keys(grouped).filter((k) => grouped[k].length > 0);
+  const totalActiveBase = activeSources.reduce((sum, k) => sum + baseBudgets[k], 0);
+  const budgets = {};
+  for (const source of activeSources) {
+    budgets[source] = baseBudgets[source] / totalActiveBase;
+  }
+
   let combinedText = "";
-  for (const source of ["website", "document", "text"]) {
+  for (const source of activeSources) {
     const group = grouped[source];
-    if (group.length === 0) continue;
     const budget = Math.floor(MAX_COMBINED_LENGTH * budgets[source]);
     const perItem = Math.floor(budget / group.length);
     for (const s of group) {
