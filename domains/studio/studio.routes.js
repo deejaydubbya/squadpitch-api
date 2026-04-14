@@ -48,6 +48,7 @@ import {
   ImportFromNotionSchema,
   ConfirmImportSchema,
   OnboardingAnalyzeSchema,
+  ManualSetupSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import * as dataService from "./data.service.js";
@@ -70,7 +71,11 @@ import crypto from "crypto";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
-import { getStarterAngles } from "../industry/industry.service.js";
+import { getStarterAngles, getIndustryTechStack } from "../industry/industry.service.js";
+import {
+  getWorkspaceTechStackView,
+  upsertWorkspaceTechStackConnection,
+} from "../industry/techStack.service.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
 
@@ -1948,6 +1953,98 @@ studioRouter.delete(
         return validationError(res, paramCheck.error.issues);
       await service.deleteConnection(req.params.id, paramCheck.data.channel);
       res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Tech Stack ────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/workspaces/:id/tech-stack
+ * Returns the merged tech stack view (industry config + workspace connection state).
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/tech-stack`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const items = await getWorkspaceTechStackView(req.params.id);
+      res.json({ techStack: items });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/workspaces/:id/tech-stack/:providerKey
+ * Save metadata for a manual tech stack item and mark it as connected.
+ */
+studioRouter.put(
+  `${BASE}/workspaces/:id/tech-stack/:providerKey`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { providerKey } = req.params;
+
+      // Look up workspace's industry to validate the item exists and is manual
+      const client = await prisma.client.findUnique({
+        where: { id: req.params.id },
+        select: { industryKey: true },
+      });
+      if (!client?.industryKey) {
+        return sendError(res, 404, "NOT_FOUND", "Workspace not found.");
+      }
+
+      const items = getIndustryTechStack(client.industryKey);
+      const item = items.find((i) => i.providerKey === providerKey);
+      if (!item) {
+        return sendError(res, 404, "NOT_FOUND", `Tech stack item "${providerKey}" not found.`);
+      }
+      if (item.connectionMode !== "manual") {
+        return sendError(res, 400, "NOT_MANUAL", "This item does not support manual setup.");
+      }
+      if (!item.manualSetup?.fields?.length) {
+        return sendError(res, 400, "NO_SETUP_CONFIG", "This item has no manual setup config.");
+      }
+
+      const parsed = ManualSetupSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      // Validate required fields and normalize values
+      const metadata = { ...parsed.data.metadata };
+      for (const field of item.manualSetup.fields) {
+        let value = (metadata[field.key] ?? "").trim();
+
+        if (field.required && !value) {
+          return sendError(res, 400, "VALIDATION", `${field.label} is required.`);
+        }
+
+        // URL normalization for url-type fields
+        if (field.type === "url" && value) {
+          if (!/^https?:\/\//i.test(value)) {
+            value = `https://${value}`;
+          }
+          try {
+            new URL(value);
+          } catch {
+            return sendError(res, 400, "INVALID_URL", `${field.label}: please enter a valid URL.`);
+          }
+        }
+
+        metadata[field.key] = value;
+      }
+
+      const connection = await upsertWorkspaceTechStackConnection(
+        req.params.id,
+        providerKey,
+        "connected",
+        { metadataJson: metadata },
+      );
+
+      res.json({ connection });
     } catch (err) {
       next(err);
     }

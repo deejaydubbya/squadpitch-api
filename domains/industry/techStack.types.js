@@ -20,6 +20,22 @@
  */
 
 /**
+ * A single field in a manual setup form.
+ * @typedef {Object} ManualSetupField
+ * @property {string} key - Field key stored in metadataJson
+ * @property {string} label - Display label
+ * @property {"url" | "text"} type - Input type
+ * @property {boolean} required - Whether the field is required
+ * @property {string} [placeholder] - Input placeholder text
+ */
+
+/**
+ * Configuration for manual tech stack item setup.
+ * @typedef {Object} ManualSetupConfig
+ * @property {ManualSetupField[]} fields - Form fields to collect
+ */
+
+/**
  * A recommended tool within an industry's tech stack.
  * @typedef {Object} IndustryTechStackItem
  * @property {string} providerKey - Unique identifier for the provider
@@ -31,6 +47,8 @@
  * @property {string} [description] - What this tool does
  * @property {string[]} [useCases] - Example use cases within Squadpitch
  * @property {IntegrationCapability[]} capabilities - What Squadpitch can do with this tool
+ * @property {ManualSetupConfig} [manualSetup] - Config for manual setup flow (only for connectionMode: "manual")
+ * @property {string} [channelRef] - Maps to an existing channel platform channel (e.g. "FACEBOOK"). When set, connection state is derived from the channel platform instead of workspace tech stack records.
  */
 
 /**

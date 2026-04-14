@@ -487,3 +487,12 @@ export const ConfirmImportSchema = z.object({
   sourceType: DataSourceTypeEnum,
   sourceUrl: z.string().url().optional(),
 });
+
+// ── Tech Stack ────────────────────────────────────────────────────────
+
+export const ManualSetupSchema = z.object({
+  metadata: z.record(z.string(), z.string().max(2000)).refine(
+    (obj) => Object.keys(obj).length > 0,
+    { message: "At least one field is required" },
+  ),
+});

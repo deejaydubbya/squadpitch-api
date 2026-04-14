@@ -58,6 +58,8 @@ function formatProfilePublic(profile) {
       connectionMode: item.connectionMode ?? "planned",
       description: item.description ?? null,
       capabilities: item.capabilities,
+      ...(item.manualSetup && { manualSetup: item.manualSetup }),
+      ...(item.channelRef && { channelRef: item.channelRef }),
     })),
   };
 }
