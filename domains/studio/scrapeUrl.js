@@ -138,9 +138,16 @@ async function scrapeWithJina(url) {
   const ogMatch = markdown.match(/og:image[:\s]+(https?:\/\/[^\s]+)/i);
   const ogImage = ogMatch ? ogMatch[1] : "";
 
+  // For Jina path, try to get a real icon since markdown doesn't include link[rel=icon]
+  let logoUrl = ogImage;
+  try {
+    const origin = new URL(url).origin;
+    logoUrl = await fetchBestIcon(origin) || ogImage;
+  } catch {}
+
   return {
     ok: true,
-    data: { text, title, metaDescription: "", ogImage, logoUrl: ogImage, images: images.slice(0, 50) },
+    data: { text, title, metaDescription: "", ogImage, logoUrl, images: images.slice(0, 50) },
     rawMarkdown: markdown,
   };
 }
@@ -262,4 +269,51 @@ async function scrapeDirectly(url, { extractLinks = false, origin = null } = {})
     result.links = extractLinksFromCheerio($, origin);
   }
   return result;
+}
+
+// ── Favicon / icon fetcher ────────────────────────────────────────────────
+
+const ICON_CANDIDATES = [
+  "/apple-touch-icon.png",
+  "/apple-touch-icon-precomposed.png",
+  "/favicon-32x32.png",
+  "/favicon.ico",
+];
+
+async function fetchBestIcon(origin) {
+  // Quick approach: fetch root HTML head and parse link[rel=icon] tags
+  try {
+    const res = await fetch(origin, {
+      headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(5000),
+      redirect: "follow",
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const $ = cheerio.load(html);
+      const resolveHref = (href) => {
+        if (!href) return "";
+        try { return new URL(href, origin).toString(); } catch { return ""; }
+      };
+      const icon =
+        resolveHref($('link[rel="apple-touch-icon"]').attr("href")) ||
+        resolveHref($('link[rel="icon"][type="image/png"]').attr("href")) ||
+        resolveHref($('link[rel="icon"]').attr("href")) ||
+        resolveHref($('link[rel="shortcut icon"]').attr("href"));
+      if (icon) return icon;
+    }
+  } catch {}
+
+  // Fallback: probe well-known paths
+  for (const path of ICON_CANDIDATES) {
+    try {
+      const res = await fetch(`${origin}${path}`, {
+        method: "HEAD",
+        signal: AbortSignal.timeout(3000),
+        redirect: "follow",
+      });
+      if (res.ok) return `${origin}${path}`;
+    } catch {}
+  }
+  return "";
 }
