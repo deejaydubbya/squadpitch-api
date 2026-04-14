@@ -1,20 +1,30 @@
-// Real Estate Autopilot v1.
+// Real Estate Autopilot v2.
 //
-// A controlled system that watches listings, reviews, cadence, and connected
-// channels, then automatically creates ready-to-review drafts when simple
-// rules indicate a good post opportunity.
+// A scheduled, rule-based content coverage system that evaluates real estate
+// assets, connected channels, and recent content history, then creates a small
+// number of ready-to-review drafts to maintain consistent marketing output.
 //
-// What Autopilot v1 does:
-//   - Evaluates triggers (new listing, inactivity, new review, channel gap)
-//   - Makes rule-based decisions (priority-ordered, guardrail-checked)
-//   - Generates DRAFT-status content via the existing generation pipeline
-//   - Labels every draft with transparent metadata (trigger, reason, asset)
+// v1 capabilities (preserved):
+//   - Trigger evaluation (new listing, inactivity, new review, channel gap)
+//   - Single-draft decision engine
+//   - Guardrails (daily/weekly caps, spacing, duplicate prevention)
+//   - Event-driven execution (listing feed refresh)
+//   - Manual run endpoint
 //
-// What Autopilot v1 does NOT do:
+// v2 additions:
+//   - Content coverage evaluation (channel + content type balance)
+//   - Multi-draft planning (max 2 per scheduled run, diversified)
+//   - Channel differentiation (different angles per channel)
+//   - Scheduled execution support (daily evaluation)
+//   - Run history / transparency (mode, drafts created, coverage gaps)
+//   - Asset strategy (_sourceType preference, recent exclusion)
+//
+// What Autopilot does NOT do:
 //   - No auto-publish — all output is DRAFT status
 //   - No black-box strategy engine — every decision is explainable
 //   - No uncontrolled posting — hard weekly/daily limits enforced
-//   - No other industries — real estate only in this version
+//   - No other industries — real estate only
+//   - Not designed for full autonomy — designed for consistency
 
 import { prisma } from "../../prisma.js";
 import { resolveRealEstateContext } from "../industry/techStack.service.js";
@@ -33,6 +43,7 @@ const DEFAULT_SETTINGS = {
   mode: "off",                  // "off" | "draft_assist"
   preferredChannels: [],        // e.g. ["FACEBOOK", "INSTAGRAM"]
   maxDraftsPerWeek: 3,
+  maxDraftsPerScheduledRun: 2,
   minimumHoursBetweenDrafts: 24,
   allowListingPosts: true,
   allowTestimonialPosts: true,
@@ -41,10 +52,7 @@ const DEFAULT_SETTINGS = {
 
 // ── Settings CRUD ────────────────────────────────────────────────────────
 
-/**
- * @param {string} workspaceId
- * @returns {Promise<typeof DEFAULT_SETTINGS>}
- */
+/** @param {string} workspaceId */
 export async function getAutopilotSettings(workspaceId) {
   const row = await prisma.workspaceTechStackConnection.findUnique({
     where: { workspaceId_providerKey: { workspaceId, providerKey: AUTOPILOT_PROVIDER_KEY } },
@@ -52,10 +60,7 @@ export async function getAutopilotSettings(workspaceId) {
   return { ...DEFAULT_SETTINGS, ...(row?.metadataJson ?? {}) };
 }
 
-/**
- * @param {string} workspaceId
- * @param {Partial<typeof DEFAULT_SETTINGS>} patch
- */
+/** @param {string} workspaceId @param {object} patch */
 export async function updateAutopilotSettings(workspaceId, patch) {
   const existing = await prisma.workspaceTechStackConnection.findUnique({
     where: { workspaceId_providerKey: { workspaceId, providerKey: AUTOPILOT_PROVIDER_KEY } },
@@ -76,43 +81,24 @@ export async function updateAutopilotSettings(workspaceId, patch) {
   return merged;
 }
 
-// ── Trigger evaluation ───────────────────────────────────────────────────
+// ── Trigger evaluation (v1, preserved) ───────────────────────────────────
 
-/**
- * @typedef {{ triggerType: string, reason: string, eligible: boolean, supportingData?: object }} TriggerResult
- */
+/** @typedef {{ triggerType: string, reason: string, eligible: boolean, supportingData?: object }} TriggerResult */
 
-/**
- * Evaluate all autopilot triggers for a real estate workspace.
- *
- * @param {string} workspaceId
- * @param {object} reAssets - from loadRealEstateGenerationAssets
- * @param {object} settings - autopilot settings
- * @returns {Promise<TriggerResult[]>}
- */
 async function evaluateTriggers(workspaceId, reAssets, settings) {
   const triggers = [];
 
-  // Find most recent autopilot draft and most recent draft overall
-  // Asset counts use canonical access layer (realEstateAssets.js)
-  const [lastAutopilotDraft, lastAnyDraft, recentNewListings, recentNewReviews] = await Promise.all([
-    prisma.draft.findFirst({
-      where: { clientId: workspaceId, createdBy: "system:autopilot" },
-      orderBy: { createdAt: "desc" },
-      select: { createdAt: true, warnings: true },
-    }),
+  const [lastAnyDraft, recentNewListings, recentNewReviews] = await Promise.all([
     prisma.draft.findFirst({
       where: { clientId: workspaceId, status: { not: "FAILED" } },
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     }),
-    // Listings added in last 24 hours (canonical)
     getRecentAssetCount(workspaceId, "CUSTOM", DAY_MS),
-    // Reviews added in last 48 hours (canonical)
     getRecentAssetCount(workspaceId, "TESTIMONIAL", 2 * DAY_MS),
   ]);
 
-  // A. new_listing — recent listing imports exist
+  // A. new_listing
   if (settings.allowListingPosts && reAssets.listingCount > 0) {
     triggers.push({
       triggerType: "new_listing",
@@ -124,7 +110,7 @@ async function evaluateTriggers(workspaceId, reAssets, settings) {
     });
   }
 
-  // B. inactivity_gap — no content in 3+ days
+  // B. inactivity_gap
   const daysSinceAny = lastAnyDraft
     ? Math.floor((Date.now() - lastAnyDraft.createdAt.getTime()) / DAY_MS)
     : null;
@@ -140,7 +126,7 @@ async function evaluateTriggers(workspaceId, reAssets, settings) {
     supportingData: { daysSinceLastContent: daysSinceAny },
   });
 
-  // C. new_review — recent testimonial/review data added
+  // C. new_review
   if (settings.allowTestimonialPosts && reAssets.reviewCount > 0) {
     triggers.push({
       triggerType: "new_review",
@@ -152,63 +138,116 @@ async function evaluateTriggers(workspaceId, reAssets, settings) {
     });
   }
 
-  // D. channel_gap — a connected channel has no recent autopilot content
-  const enabledChannels = await prisma.channelSettings.findMany({
-    where: { clientId: workspaceId, isEnabled: true },
-    select: { channel: true },
-  });
-  if (enabledChannels.length > 0) {
-    const recentChannelDrafts = await prisma.draft.groupBy({
-      by: ["channel"],
-      where: {
-        clientId: workspaceId,
-        createdAt: { gte: new Date(Date.now() - 7 * DAY_MS) },
-        status: { not: "FAILED" },
-      },
-      _count: { _all: true },
-    });
-    const recentChannelSet = new Set(recentChannelDrafts.map((r) => r.channel));
-    const gapChannels = enabledChannels
-      .map((c) => c.channel)
-      .filter((ch) => !recentChannelSet.has(ch));
+  return triggers;
+}
 
-    if (gapChannels.length > 0) {
-      triggers.push({
-        triggerType: "channel_gap",
-        reason: `${gapChannels.join(", ")} ha${gapChannels.length === 1 ? "s" : "ve"} no content this week`,
-        eligible: true,
-        supportingData: { gapChannels },
-      });
-    }
+// ── Content coverage evaluation (v2) ─────────────────────────────────────
+
+/**
+ * Evaluate content coverage across channels and content types.
+ * Returns a snapshot of what's been covered and what's missing.
+ */
+async function evaluateContentCoverage(workspaceId, enabledChannels, reAssets, settings) {
+  const lookbackMs = 7 * DAY_MS;
+  const since = new Date(Date.now() - lookbackMs);
+
+  // Recent drafts by channel and by content warnings
+  const recentDrafts = await prisma.draft.findMany({
+    where: {
+      clientId: workspaceId,
+      status: { not: "FAILED" },
+      createdAt: { gte: since },
+    },
+    select: { channel: true, warnings: true, createdBy: true, createdAt: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  // Channel coverage
+  const channelCounts = {};
+  for (const ch of enabledChannels) channelCounts[ch] = 0;
+  for (const d of recentDrafts) {
+    if (channelCounts[d.channel] !== undefined) channelCounts[d.channel]++;
+  }
+  const channelsWithContent = Object.keys(channelCounts).filter((ch) => channelCounts[ch] > 0);
+  const channelsWithoutContent = enabledChannels.filter((ch) => channelCounts[ch] === 0);
+
+  // Content type coverage (inferred from warnings/templateType)
+  let hasRecentListingPost = false;
+  let hasRecentTestimonialPost = false;
+  let hasRecentFallbackPost = false;
+  let listingPostCount = 0;
+  let testimonialPostCount = 0;
+
+  for (const d of recentDrafts) {
+    const ws = d.warnings ?? [];
+    const isListing = ws.some((w) => w.includes("listing") || w.includes("re_auto_listing"));
+    const isTestimonial = ws.some((w) => w.includes("testimonial") || w.includes("review"));
+    const isFallback = ws.some((w) => w.includes("fallback") || w.includes("market_update"));
+
+    if (isListing) { hasRecentListingPost = true; listingPostCount++; }
+    if (isTestimonial) { hasRecentTestimonialPost = true; testimonialPostCount++; }
+    if (isFallback) hasRecentFallbackPost = true;
   }
 
-  return triggers;
+  // Identify missing opportunities (coverage gaps)
+  const gaps = [];
+
+  if (!hasRecentListingPost && settings.allowListingPosts && reAssets.listingCount > 0) {
+    gaps.push({ type: "listing", reason: "No listing post this week", priority: 90 });
+  }
+  if (!hasRecentTestimonialPost && settings.allowTestimonialPosts && reAssets.reviewCount > 0) {
+    gaps.push({ type: "testimonial", reason: "No testimonial post this week", priority: 80 });
+  }
+  if (!hasRecentFallbackPost && settings.allowFallbackPosts && recentDrafts.length >= 2) {
+    gaps.push({ type: "fallback", reason: "No market insight or tip post this week", priority: 60 });
+  }
+  for (const ch of channelsWithoutContent) {
+    gaps.push({ type: "channel", channel: ch, reason: `No content for ${ch} this week`, priority: 75 });
+  }
+
+  // Variety check: too many listing posts in a row?
+  const tooManyListings = listingPostCount >= 3 && !hasRecentTestimonialPost && !hasRecentFallbackPost;
+
+  return {
+    channelCounts,
+    channelsWithContent,
+    channelsWithoutContent,
+    hasRecentListingPost,
+    hasRecentTestimonialPost,
+    hasRecentFallbackPost,
+    listingPostCount,
+    testimonialPostCount,
+    totalRecentDrafts: recentDrafts.length,
+    tooManyListings,
+    gaps: gaps.sort((a, b) => b.priority - a.priority),
+  };
 }
 
 // ── Guardrails ───────────────────────────────────────────────────────────
 
 /**
- * Check if autopilot is allowed to create a draft right now.
- * Returns { allowed: true } or { allowed: false, reason: string }.
+ * Check how many more drafts autopilot can create.
+ * Returns { allowed: boolean, remaining: number, reason?: string }.
  */
 async function checkGuardrails(workspaceId, settings) {
   const now = Date.now();
   const minSpacingMs = (settings.minimumHoursBetweenDrafts ?? 24) * 60 * 60 * 1000;
 
-  // Count autopilot drafts this week (Mon-Sun)
   const dayOfWeek = new Date().getUTCDay();
   const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
   const weekStart = new Date();
   weekStart.setUTCDate(weekStart.getUTCDate() - mondayOffset);
   weekStart.setUTCHours(0, 0, 0, 0);
 
-  const [weekCount, lastAutopilot] = await Promise.all([
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+
+  const [weekCount, todayCount, lastAutopilot] = await Promise.all([
     prisma.draft.count({
-      where: {
-        clientId: workspaceId,
-        createdBy: "system:autopilot",
-        createdAt: { gte: weekStart },
-      },
+      where: { clientId: workspaceId, createdBy: "system:autopilot", createdAt: { gte: weekStart } },
+    }),
+    prisma.draft.count({
+      where: { clientId: workspaceId, createdBy: "system:autopilot", createdAt: { gte: todayStart } },
     }),
     prisma.draft.findFirst({
       where: { clientId: workspaceId, createdBy: "system:autopilot" },
@@ -217,315 +256,457 @@ async function checkGuardrails(workspaceId, settings) {
     }),
   ]);
 
-  // Weekly limit
-  if (weekCount >= (settings.maxDraftsPerWeek ?? 3)) {
-    return { allowed: false, reason: `Weekly limit reached (${weekCount}/${settings.maxDraftsPerWeek ?? 3})` };
+  const maxWeek = settings.maxDraftsPerWeek ?? 3;
+
+  if (weekCount >= maxWeek) {
+    return { allowed: false, remaining: 0, reason: `Weekly limit reached (${weekCount}/${maxWeek})` };
   }
 
-  // Minimum spacing
+  // For scheduled runs: daily cap is 2 (up from 1 for multi-draft)
+  if (todayCount >= 2) {
+    return { allowed: false, remaining: 0, reason: "Daily autopilot limit reached (2/day)" };
+  }
+
   if (lastAutopilot) {
     const elapsed = now - lastAutopilot.createdAt.getTime();
     if (elapsed < minSpacingMs) {
       const hoursLeft = Math.ceil((minSpacingMs - elapsed) / (60 * 60 * 1000));
-      return { allowed: false, reason: `Too soon — next autopilot draft in ~${hoursLeft}h` };
+      return { allowed: false, remaining: 0, reason: `Too soon — next autopilot draft in ~${hoursLeft}h` };
     }
   }
 
-  // Daily limit (hard cap: 1 per day)
-  const todayStart = new Date();
-  todayStart.setUTCHours(0, 0, 0, 0);
-  const todayCount = await prisma.draft.count({
-    where: {
-      clientId: workspaceId,
-      createdBy: "system:autopilot",
-      createdAt: { gte: todayStart },
-    },
-  });
-  if (todayCount >= 1) {
-    return { allowed: false, reason: "Daily autopilot limit reached (1/day)" };
-  }
-
-  return { allowed: true };
+  const weekRemaining = maxWeek - weekCount;
+  const dayRemaining = 2 - todayCount;
+  return { allowed: true, remaining: Math.min(weekRemaining, dayRemaining) };
 }
 
-// ── Decision engine ──────────────────────────────────────────────────────
+// ── Channel differentiation helpers ──────────────────────────────────────
+
+/** Pick channel-appropriate guidance variations. */
+function channelGuidanceVariation(channel, baseGuidance, contentType) {
+  const suffix = {
+    FACEBOOK: contentType === "listing"
+      ? " Write a detailed, community-friendly post with property highlights and neighborhood context."
+      : " Write a warm, engaging post suited for Facebook's community-driven audience.",
+    INSTAGRAM: contentType === "listing"
+      ? " Write a punchy, visual-first caption — scroll-stopping opener, key features, strong CTA."
+      : " Write a short, visual-first Instagram caption — engaging, concise, with a clear CTA.",
+    LINKEDIN: " Write a professional, analytical post suitable for LinkedIn's business audience.",
+  };
+  return baseGuidance + (suffix[channel] ?? "");
+}
+
+// ── Multi-draft planner (v2) ─────────────────────────────────────────────
+
+/** @typedef {{ reasonCode: string, templateType: string, channel: string, dataItemId?: string, guidance: string, sourceType: string, triggerType: string }} DraftPlan */
 
 /**
- * @typedef {{ reasonCode: string, templateType: string, channel: string, dataItemId?: string, guidance: string, sourceType: string, triggerType: string }} DraftPlan
+ * Plan up to `maxPlans` diversified drafts based on coverage gaps and triggers.
+ * Returns an array of draft plans (may be empty).
  */
+function planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannels, maxPlans }) {
+  const plans = [];
+  const usedChannels = new Set();
+  const usedAssets = new Set();
+  const usedTypes = new Set();
 
-/**
- * Make a rule-based decision on what to generate.
- * Returns a draft plan or null (do nothing).
- *
- * @param {TriggerResult[]} triggers
- * @param {object} reAssets
- * @param {object} settings
- * @param {string[]} enabledChannels
- * @returns {DraftPlan | null}
- */
-function makeDecision(triggers, reAssets, settings, enabledChannels) {
-  const eligible = triggers.filter((t) => t.eligible);
-  if (eligible.length === 0) return null;
-
-  // Resolve target channel
-  const preferred = settings.preferredChannels?.length > 0
-    ? settings.preferredChannels
-    : null;
+  const preferred = settings.preferredChannels?.length > 0 ? settings.preferredChannels : null;
   const channelOrder = ["FACEBOOK", "INSTAGRAM", "LINKEDIN", "X"];
-  const pickChannel = () => {
+
+  const pickChannel = (exclude = new Set()) => {
+    // Prefer channels with coverage gaps first
+    const gapChannel = coverage.channelsWithoutContent.find(
+      (ch) => !exclude.has(ch) && enabledChannels.includes(ch)
+    );
+    if (gapChannel) return gapChannel;
+
     if (preferred) {
-      const match = preferred.find((c) => enabledChannels.includes(c));
+      const match = preferred.find((c) => enabledChannels.includes(c) && !exclude.has(c));
       if (match) return match;
     }
-    return channelOrder.find((c) => enabledChannels.includes(c)) ?? enabledChannels[0];
+    return channelOrder.find((c) => enabledChannels.includes(c) && !exclude.has(c))
+      ?? enabledChannels.find((c) => !exclude.has(c))
+      ?? enabledChannels[0];
   };
 
-  // Priority 1: New listing post
-  const newListing = eligible.find((t) => t.triggerType === "new_listing");
-  if (newListing && settings.allowListingPosts && reAssets.bestListing && reAssets.bestListingSource) {
-    const listingLabel = reAssets.bestListing.title || reAssets.bestListing.address || "property";
-    return {
-      reasonCode: "listing_import",
+  const eligible = triggers.filter((t) => t.eligible);
+
+  const addPlan = (plan) => {
+    if (plans.length >= maxPlans) return false;
+    plans.push(plan);
+    usedChannels.add(plan.channel);
+    if (plan.dataItemId) usedAssets.add(plan.dataItemId);
+    usedTypes.add(plan.sourceType);
+    return true;
+  };
+
+  // ── Priority 1: New listing post (if gap or trigger)
+  const newListingTrigger = eligible.find((t) => t.triggerType === "new_listing");
+  if (
+    (newListingTrigger || !coverage.hasRecentListingPost) &&
+    settings.allowListingPosts &&
+    reAssets.bestListing &&
+    reAssets.bestListingSource &&
+    !coverage.tooManyListings
+  ) {
+    const ch = pickChannel(usedChannels);
+    const label = reAssets.bestListing.title || reAssets.bestListing.address || "property";
+    addPlan({
+      reasonCode: newListingTrigger ? "listing_import" : "coverage_listing",
       templateType: "listing_post",
-      channel: pickChannel(),
+      channel: ch,
       dataItemId: reAssets.bestListingSource.id,
-      guidance: `Create a 'just listed' post for ${listingLabel}. Highlight the best features.`,
+      guidance: channelGuidanceVariation(ch, `Create a 'just listed' post for ${label}.`, "listing"),
       sourceType: "listing",
-      triggerType: "new_listing",
-    };
+      triggerType: newListingTrigger ? "new_listing" : "coverage",
+    });
   }
 
-  // Priority 2: Testimonial post from new review
-  const newReview = eligible.find((t) => t.triggerType === "new_review");
-  if (newReview && settings.allowTestimonialPosts && reAssets.reviews?.length > 0) {
-    return {
-      reasonCode: "new_review",
+  // ── Priority 2: Testimonial post (if gap or trigger)
+  const newReviewTrigger = eligible.find((t) => t.triggerType === "new_review");
+  if (
+    plans.length < maxPlans &&
+    (newReviewTrigger || !coverage.hasRecentTestimonialPost) &&
+    settings.allowTestimonialPosts &&
+    reAssets.reviews?.length > 0 &&
+    !usedTypes.has("review")
+  ) {
+    const ch = pickChannel(usedChannels);
+    addPlan({
+      reasonCode: newReviewTrigger ? "new_review" : "coverage_testimonial",
       templateType: "client_testimonial",
-      channel: pickChannel(),
-      guidance: "Create a testimonial post using a real client review. Quote accurately and build trust.",
+      channel: ch,
+      guidance: channelGuidanceVariation(ch, "Create a testimonial post using a real client review. Quote accurately.", "review"),
       sourceType: "review",
-      triggerType: "new_review",
-    };
+      triggerType: newReviewTrigger ? "new_review" : "coverage",
+    });
   }
 
-  // Priority 3: Inactivity — use best available asset
-  const inactivity = eligible.find((t) => t.triggerType === "inactivity_gap");
-  if (inactivity) {
-    // Prefer listing if available
-    if (settings.allowListingPosts && reAssets.bestListing && reAssets.bestListingSource) {
-      const listingLabel = reAssets.bestListing.title || reAssets.bestListing.address || "a property";
-      return {
-        reasonCode: "inactivity_listing",
-        templateType: "featured_property",
-        channel: pickChannel(),
-        dataItemId: reAssets.bestListingSource.id,
-        guidance: `Feature ${listingLabel} to keep content flowing. Highlight value and location.`,
-        sourceType: "listing",
-        triggerType: "inactivity_gap",
-      };
-    }
-    // Review-based fallback
-    if (settings.allowTestimonialPosts && reAssets.reviews?.length > 0) {
-      return {
-        reasonCode: "inactivity_review",
-        templateType: "client_testimonial",
-        channel: pickChannel(),
-        guidance: "Create a testimonial post to maintain posting consistency.",
-        sourceType: "review",
-        triggerType: "inactivity_gap",
-      };
-    }
-    // Generic fallback
-    if (settings.allowFallbackPosts) {
-      return {
-        reasonCode: "inactivity_fallback",
-        templateType: "market_update",
-        channel: pickChannel(),
-        guidance: "Create a real estate market insight or tip post to maintain posting consistency.",
-        sourceType: "fallback",
-        triggerType: "inactivity_gap",
-      };
-    }
-  }
-
-  // Priority 4: Channel gap — fill an underserved channel
-  const channelGap = eligible.find((t) => t.triggerType === "channel_gap");
-  if (channelGap) {
-    const gapChannel = channelGap.supportingData?.gapChannels?.[0];
-    if (gapChannel && enabledChannels.includes(gapChannel)) {
-      // Use best available asset for the gap channel
-      if (settings.allowListingPosts && reAssets.bestListing && reAssets.bestListingSource) {
-        return {
+  // ── Priority 3: Channel gap fill (different content type)
+  if (plans.length < maxPlans && coverage.channelsWithoutContent.length > 0) {
+    const gapCh = coverage.channelsWithoutContent.find((ch) => !usedChannels.has(ch));
+    if (gapCh) {
+      // Pick a content type we haven't used yet
+      if (settings.allowListingPosts && !usedTypes.has("listing") && reAssets.bestListing && reAssets.bestListingSource) {
+        addPlan({
           reasonCode: "channel_gap_listing",
-          templateType: "listing_post",
-          channel: gapChannel,
+          templateType: "featured_property",
+          channel: gapCh,
           dataItemId: reAssets.bestListingSource.id,
-          guidance: `Create a listing post for ${gapChannel} — this channel needs fresh content.`,
+          guidance: channelGuidanceVariation(gapCh, `Feature a property for ${gapCh}.`, "listing"),
           sourceType: "listing",
           triggerType: "channel_gap",
-        };
-      }
-      if (settings.allowFallbackPosts) {
-        return {
+        });
+      } else if (settings.allowFallbackPosts && !usedTypes.has("fallback")) {
+        addPlan({
           reasonCode: "channel_gap_fallback",
           templateType: "market_update",
-          channel: gapChannel,
-          guidance: `Create a real estate post for ${gapChannel} — this channel has had no content this week.`,
+          channel: gapCh,
+          guidance: channelGuidanceVariation(gapCh, "Create a real estate market insight or local tip.", "fallback"),
           sourceType: "fallback",
           triggerType: "channel_gap",
-        };
+        });
       }
     }
   }
 
-  return null;
+  // ── Priority 4: Inactivity fallback
+  const inactivity = eligible.find((t) => t.triggerType === "inactivity_gap");
+  if (plans.length === 0 && inactivity) {
+    const ch = pickChannel(usedChannels);
+    if (settings.allowListingPosts && reAssets.bestListing && reAssets.bestListingSource) {
+      addPlan({
+        reasonCode: "inactivity_listing",
+        templateType: "featured_property",
+        channel: ch,
+        dataItemId: reAssets.bestListingSource.id,
+        guidance: channelGuidanceVariation(ch, `Feature a property to keep content flowing.`, "listing"),
+        sourceType: "listing",
+        triggerType: "inactivity_gap",
+      });
+    } else if (settings.allowTestimonialPosts && reAssets.reviews?.length > 0) {
+      addPlan({
+        reasonCode: "inactivity_review",
+        templateType: "client_testimonial",
+        channel: ch,
+        guidance: channelGuidanceVariation(ch, "Create a testimonial post to maintain consistency.", "review"),
+        sourceType: "review",
+        triggerType: "inactivity_gap",
+      });
+    } else if (settings.allowFallbackPosts) {
+      addPlan({
+        reasonCode: "inactivity_fallback",
+        templateType: "market_update",
+        channel: ch,
+        guidance: channelGuidanceVariation(ch, "Create a real estate market insight to maintain consistency.", "fallback"),
+        sourceType: "fallback",
+        triggerType: "inactivity_gap",
+      });
+    }
+  }
+
+  return plans;
 }
 
-// ── Run orchestration ────────────────────────────────────────────────────
+// ── Draft execution ──────────────────────────────────────────────────────
 
 /**
- * Run the autopilot evaluation + generation pipeline for a workspace.
- *
- * @param {string} workspaceId
- * @returns {Promise<{ action: "generated" | "no_action", draft?: object, reason: string, triggers: TriggerResult[], decision?: DraftPlan | null }>}
+ * Execute a single draft plan. Returns the formatted draft or null on failure.
  */
-export async function runAutopilot(workspaceId) {
-  // 1. Validate workspace is real estate
+async function executeDraftPlan(workspaceId, plan, runMode) {
+  // Duplicate asset check (48h window)
+  if (plan.dataItemId) {
+    const recentDupe = await prisma.draft.findFirst({
+      where: {
+        clientId: workspaceId,
+        createdBy: "system:autopilot",
+        createdAt: { gte: new Date(Date.now() - 2 * DAY_MS) },
+        warnings: { hasSome: [`autopilot_asset: ${plan.dataItemId}`] },
+      },
+    });
+    if (recentDupe) return null;
+  }
+
+  try {
+    const draft = await generateDraft({
+      clientId: workspaceId,
+      kind: "POST",
+      channel: plan.channel,
+      guidance: plan.guidance,
+      templateType: plan.templateType,
+      createdBy: "system:autopilot",
+      dataItemId: plan.dataItemId,
+      recommendationId: `autopilot_${plan.reasonCode}`,
+    });
+
+    const autopilotWarnings = [
+      "autopilot: true",
+      `autopilot_trigger: ${plan.triggerType}`,
+      `autopilot_reason: ${plan.reasonCode}`,
+      `autopilot_channel: ${plan.channel}`,
+      `autopilot_mode: ${runMode}`,
+      ...(plan.dataItemId ? [`autopilot_asset: ${plan.dataItemId}`] : []),
+    ];
+
+    await prisma.draft.update({
+      where: { id: draft.id },
+      data: { warnings: [...(draft.warnings ?? []), ...autopilotWarnings] },
+    });
+
+    const updated = await prisma.draft.findUnique({ where: { id: draft.id } });
+    return formatDraft(updated);
+  } catch {
+    return null;
+  }
+}
+
+// ── Run orchestration (v1 event-driven, preserved) ───────────────────────
+
+/**
+ * Run autopilot evaluation for a workspace (event-driven or manual).
+ * Creates at most one draft.
+ */
+export async function runAutopilot(workspaceId, { mode = "event" } = {}) {
+  const preamble = await loadAutopilotContext(workspaceId);
+  if (preamble.action === "no_action") return preamble;
+
+  const { settings, reAssets, enabledChannels } = preamble;
+
+  // v1 trigger evaluation
+  const triggers = await evaluateTriggers(workspaceId, reAssets, settings);
+
+  // v1 single-decision engine
+  const eligible = triggers.filter((t) => t.eligible);
+  if (eligible.length === 0) {
+    return { action: "no_action", reason: "No eligible triggers", triggers, mode };
+  }
+
+  // Use the coverage-aware planner but cap at 1 for event-driven runs
+  const coverage = await evaluateContentCoverage(workspaceId, enabledChannels, reAssets, settings);
+  const plans = planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannels, maxPlans: 1 });
+
+  if (plans.length === 0) {
+    return { action: "no_action", reason: "No suitable action found", triggers, coverage: summarizeCoverage(coverage), mode };
+  }
+
+  const draft = await executeDraftPlan(workspaceId, plans[0], mode);
+  if (!draft) {
+    return { action: "no_action", reason: "Draft generation skipped (duplicate or failed)", triggers, mode };
+  }
+
+  return {
+    action: "generated",
+    drafts: [draft],
+    draftsCreated: 1,
+    reason: `Generated ${plans[0].templateType} for ${plans[0].channel}`,
+    triggers,
+    plans,
+    coverage: summarizeCoverage(coverage),
+    mode,
+  };
+}
+
+// ── Scheduled run (v2) ───────────────────────────────────────────────────
+
+/**
+ * Run a scheduled autopilot evaluation.
+ * May create up to maxDraftsPerScheduledRun drafts (default 2).
+ * Uses content coverage for diversified planning.
+ */
+export async function runScheduledAutopilot(workspaceId) {
+  const preamble = await loadAutopilotContext(workspaceId);
+  if (preamble.action === "no_action") return preamble;
+
+  const { settings, reAssets, enabledChannels, guardrail } = preamble;
+  const maxPlans = Math.min(settings.maxDraftsPerScheduledRun ?? 2, guardrail.remaining);
+
+  if (maxPlans <= 0) {
+    return { action: "no_action", reason: guardrail.reason ?? "No capacity remaining", mode: "scheduled" };
+  }
+
+  // Evaluate triggers + coverage
+  const triggers = await evaluateTriggers(workspaceId, reAssets, settings);
+  const coverage = await evaluateContentCoverage(workspaceId, enabledChannels, reAssets, settings);
+
+  // Plan multi-draft batch
+  const plans = planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannels, maxPlans });
+
+  if (plans.length === 0) {
+    return {
+      action: "no_action",
+      reason: "No suitable actions — content coverage is adequate",
+      triggers,
+      coverage: summarizeCoverage(coverage),
+      mode: "scheduled",
+    };
+  }
+
+  // Execute plans sequentially (respect spacing — but within a batch run, allow adjacent)
+  const drafts = [];
+  for (const plan of plans) {
+    const draft = await executeDraftPlan(workspaceId, plan, "scheduled");
+    if (draft) drafts.push(draft);
+  }
+
+  if (drafts.length === 0) {
+    return {
+      action: "no_action",
+      reason: "All plans skipped (duplicate assets or generation failures)",
+      triggers,
+      plans,
+      coverage: summarizeCoverage(coverage),
+      mode: "scheduled",
+    };
+  }
+
+  return {
+    action: "generated",
+    drafts,
+    draftsCreated: drafts.length,
+    reason: `Scheduled run created ${drafts.length} draft${drafts.length === 1 ? "" : "s"}`,
+    triggers,
+    plans,
+    coverage: summarizeCoverage(coverage),
+    mode: "scheduled",
+  };
+}
+
+// ── Evaluate all enabled workspaces (for external cron/scheduler) ────────
+
+/**
+ * Find all real estate workspaces with autopilot enabled and run scheduled
+ * evaluation for each. Returns summary results.
+ */
+export async function evaluateAllAutopilotWorkspaces() {
+  const rows = await prisma.workspaceTechStackConnection.findMany({
+    where: { providerKey: AUTOPILOT_PROVIDER_KEY },
+    select: { workspaceId: true, metadataJson: true },
+  });
+
+  const enabled = rows.filter((r) => r.metadataJson?.enabled && r.metadataJson?.mode !== "off");
+  const results = [];
+
+  for (const row of enabled) {
+    try {
+      const result = await runScheduledAutopilot(row.workspaceId);
+      results.push({ workspaceId: row.workspaceId, ...result });
+    } catch (err) {
+      results.push({ workspaceId: row.workspaceId, action: "error", reason: err.message });
+    }
+  }
+
+  return {
+    evaluated: enabled.length,
+    results,
+    generatedTotal: results.reduce((n, r) => n + (r.draftsCreated ?? 0), 0),
+  };
+}
+
+// ── Shared setup ─────────────────────────────────────────────────────────
+
+async function loadAutopilotContext(workspaceId) {
   const client = await prisma.client.findUnique({
     where: { id: workspaceId },
     select: { industryKey: true },
   });
   if (!client || client.industryKey !== "real_estate") {
-    return { action: "no_action", reason: "Autopilot is only available for real estate workspaces", triggers: [] };
+    return { action: "no_action", reason: "Autopilot is only available for real estate workspaces" };
   }
 
-  // 2. Load settings
   const settings = await getAutopilotSettings(workspaceId);
   if (!settings.enabled || settings.mode === "off") {
-    return { action: "no_action", reason: "Autopilot is disabled", triggers: [] };
+    return { action: "no_action", reason: "Autopilot is disabled" };
   }
 
-  // 3. Check guardrails first
   const guardrail = await checkGuardrails(workspaceId, settings);
   if (!guardrail.allowed) {
-    return { action: "no_action", reason: guardrail.reason, triggers: [] };
+    return { action: "no_action", reason: guardrail.reason };
   }
 
-  // 4. Load real estate context + assets
-  let reContext;
+  let reContext, reAssets;
   try {
     reContext = await resolveRealEstateContext(workspaceId);
   } catch {
-    return { action: "no_action", reason: "Failed to resolve real estate context", triggers: [] };
+    return { action: "no_action", reason: "Failed to resolve real estate context" };
   }
-
-  let reAssets;
   try {
     reAssets = await loadRealEstateGenerationAssets(workspaceId, reContext);
   } catch {
-    return { action: "no_action", reason: "Failed to load real estate assets", triggers: [] };
+    return { action: "no_action", reason: "Failed to load real estate assets" };
   }
 
-  // 5. Evaluate triggers
-  const triggers = await evaluateTriggers(workspaceId, reAssets, settings);
-
-  // 6. Get enabled channels
   const channelRows = await prisma.channelSettings.findMany({
     where: { clientId: workspaceId, isEnabled: true },
     select: { channel: true },
   });
   const enabledChannels = channelRows.map((c) => c.channel);
   if (enabledChannels.length === 0) {
-    return { action: "no_action", reason: "No channels enabled", triggers };
+    return { action: "no_action", reason: "No channels enabled" };
   }
 
-  // 7. Make decision
-  const decision = makeDecision(triggers, reAssets, settings, enabledChannels);
-  if (!decision) {
-    return { action: "no_action", reason: "No suitable action found", triggers, decision: null };
-  }
+  return { settings, reContext, reAssets, enabledChannels, guardrail };
+}
 
-  // 8. Check for duplicate — don't create listing post for same item within 48h
-  if (decision.dataItemId) {
-    const recentDupe = await prisma.draft.findFirst({
-      where: {
-        clientId: workspaceId,
-        createdBy: "system:autopilot",
-        createdAt: { gte: new Date(Date.now() - 2 * DAY_MS) },
-        warnings: { hasSome: [`autopilot_asset: ${decision.dataItemId}`] },
-      },
-    });
-    if (recentDupe) {
-      return {
-        action: "no_action",
-        reason: `Skipped — autopilot already used this asset within 48 hours`,
-        triggers,
-        decision,
-      };
-    }
-  }
+// ── Coverage summary helper ──────────────────────────────────────────────
 
-  // 9. Generate draft via existing pipeline
-  try {
-    const draft = await generateDraft({
-      clientId: workspaceId,
-      kind: "POST",
-      channel: decision.channel,
-      guidance: decision.guidance,
-      templateType: decision.templateType,
-      createdBy: "system:autopilot",
-      dataItemId: decision.dataItemId,
-      recommendationId: `autopilot_${decision.reasonCode}`,
-    });
-
-    // 10. Append autopilot-specific warnings for transparency
-    const autopilotWarnings = [
-      `autopilot: true`,
-      `autopilot_trigger: ${decision.triggerType}`,
-      `autopilot_reason: ${decision.reasonCode}`,
-      `autopilot_channel: ${decision.channel}`,
-      ...(decision.dataItemId ? [`autopilot_asset: ${decision.dataItemId}`] : []),
-    ];
-
-    // Merge warnings into the draft record
-    await prisma.draft.update({
-      where: { id: draft.id },
-      data: {
-        warnings: [...(draft.warnings ?? []), ...autopilotWarnings],
-      },
-    });
-
-    // Re-read for clean output
-    const updated = await prisma.draft.findUnique({ where: { id: draft.id } });
-
-    return {
-      action: "generated",
-      draft: formatDraft(updated),
-      reason: `Generated ${decision.templateType} for ${decision.channel} — trigger: ${decision.triggerType}`,
-      triggers,
-      decision,
-    };
-  } catch (err) {
-    return {
-      action: "no_action",
-      reason: `Generation failed: ${err.message ?? "unknown error"}`,
-      triggers,
-      decision,
-    };
-  }
+function summarizeCoverage(coverage) {
+  return {
+    totalRecentDrafts: coverage.totalRecentDrafts,
+    channelsWithContent: coverage.channelsWithContent,
+    channelsWithoutContent: coverage.channelsWithoutContent,
+    hasRecentListingPost: coverage.hasRecentListingPost,
+    hasRecentTestimonialPost: coverage.hasRecentTestimonialPost,
+    hasRecentFallbackPost: coverage.hasRecentFallbackPost,
+    tooManyListings: coverage.tooManyListings,
+    gaps: coverage.gaps.map((g) => g.reason),
+  };
 }
 
 // ── Status (for dashboard) ───────────────────────────────────────────────
 
-/**
- * Get autopilot status for dashboard display.
- * @param {string} workspaceId
- */
 export async function getAutopilotStatus(workspaceId) {
   const settings = await getAutopilotSettings(workspaceId);
 
-  // Weekly boundaries
   const dayOfWeek = new Date().getUTCDay();
   const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
   const weekStart = new Date();
@@ -534,11 +715,7 @@ export async function getAutopilotStatus(workspaceId) {
 
   const [draftsThisWeek, lastAction] = await Promise.all([
     prisma.draft.count({
-      where: {
-        clientId: workspaceId,
-        createdBy: "system:autopilot",
-        createdAt: { gte: weekStart },
-      },
+      where: { clientId: workspaceId, createdBy: "system:autopilot", createdAt: { gte: weekStart } },
     }),
     prisma.draft.findFirst({
       where: { clientId: workspaceId, createdBy: "system:autopilot" },
@@ -547,11 +724,37 @@ export async function getAutopilotStatus(workspaceId) {
     }),
   ]);
 
-  // Parse last action type from warnings
+  // Parse last action metadata from warnings
   let lastActionType = null;
+  let lastRunMode = null;
   if (lastAction?.warnings) {
-    const triggerWarning = lastAction.warnings.find((w) => w.startsWith("autopilot_trigger:"));
-    if (triggerWarning) lastActionType = triggerWarning.split(":")[1]?.trim();
+    const triggerW = lastAction.warnings.find((w) => w.startsWith("autopilot_trigger:"));
+    if (triggerW) lastActionType = triggerW.split(":")[1]?.trim();
+    const modeW = lastAction.warnings.find((w) => w.startsWith("autopilot_mode:"));
+    if (modeW) lastRunMode = modeW.split(":")[1]?.trim();
+  }
+
+  // Lightweight coverage gaps (only if enabled)
+  let coverageGaps = [];
+  if (settings.enabled && settings.mode !== "off") {
+    try {
+      const channelRows = await prisma.channelSettings.findMany({
+        where: { clientId: workspaceId, isEnabled: true },
+        select: { channel: true },
+      });
+      const enabledChannels = channelRows.map((c) => c.channel);
+      if (enabledChannels.length > 0) {
+        // Quick coverage check (reuse evaluator with minimal asset load)
+        const coverage = await evaluateContentCoverage(
+          workspaceId, enabledChannels,
+          { listingCount: 0, reviewCount: 0 }, // counts don't matter for gap detection
+          settings,
+        );
+        coverageGaps = coverage.gaps.map((g) => g.reason);
+      }
+    } catch {
+      // Non-critical
+    }
   }
 
   return {
@@ -562,5 +765,7 @@ export async function getAutopilotStatus(workspaceId) {
     lastActionAt: lastAction?.createdAt?.toISOString() ?? null,
     lastActionType,
     lastActionChannel: lastAction?.channel ?? null,
+    lastRunMode,
+    coverageGaps,
   };
 }

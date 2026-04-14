@@ -141,6 +141,8 @@ function parseSourceMeta(warnings, createdBy) {
       meta.autopilotChannel = w.slice("autopilot_channel:".length).trim();
     } else if (w.startsWith("autopilot_asset:")) {
       meta.autopilotAsset = w.slice("autopilot_asset:".length).trim();
+    } else if (w.startsWith("autopilot_mode:")) {
+      meta.autopilotMode = w.slice("autopilot_mode:".length).trim();
     }
   }
 

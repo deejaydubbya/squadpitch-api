@@ -81,7 +81,7 @@ import {
   upsertWorkspaceTechStackConnection,
 } from "../industry/techStack.service.js";
 import { invalidateClientContext } from "./generation/clientOrchestrator.js";
-import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, getAutopilotStatus } from "./autopilot.service.js";
+import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus } from "./autopilot.service.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
@@ -2235,7 +2235,7 @@ studioRouter.patch(
   }
 );
 
-// ── Autopilot (Real Estate v1) ─────────────────────────────────────────
+// ── Autopilot (Real Estate v2) ─────────────────────────────────────────
 
 /**
  * GET /api/v1/workspaces/:id/autopilot/settings
@@ -2274,14 +2274,14 @@ studioRouter.put(
 /**
  * POST /api/v1/workspaces/:id/autopilot/run
  * Manual trigger — evaluates triggers + settings + guardrails,
- * either creates one draft or returns no_action.
+ * creates at most one draft or returns no_action.
  */
 studioRouter.post(
   `${BASE}/workspaces/:id/autopilot/run`,
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const result = await runAutopilot(req.params.id);
+      const result = await runAutopilot(req.params.id, { mode: "manual" });
       res.json(result);
     } catch (err) {
       next(err);
@@ -2300,6 +2300,42 @@ studioRouter.get(
     try {
       const status = await getAutopilotStatus(req.params.id);
       res.json(status);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/autopilot/scheduled-run
+ * Scheduled autopilot run — evaluates coverage + triggers, may create up to
+ * maxDraftsPerScheduledRun drafts. Intended for external scheduler / cron.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/autopilot/scheduled-run`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await runScheduledAutopilot(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/internal/autopilot/evaluate-all
+ * Internal endpoint — runs scheduled autopilot for all enabled workspaces.
+ * Intended to be called by an external cron job (e.g. daily).
+ * No workspace ownership check — protected by route prefix / API key in production.
+ */
+studioRouter.post(
+  `${BASE}/internal/autopilot/evaluate-all`,
+  async (req, res, next) => {
+    try {
+      const result = await evaluateAllAutopilotWorkspaces();
+      res.json(result);
     } catch (err) {
       next(err);
     }

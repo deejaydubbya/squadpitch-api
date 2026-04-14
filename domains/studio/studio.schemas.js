@@ -514,6 +514,7 @@ export const AutopilotSettingsSchema = z.object({
   mode: z.enum(["off", "draft_assist"]).optional(),
   preferredChannels: z.array(ChannelEnum).max(6).optional(),
   maxDraftsPerWeek: z.number().int().min(1).max(20).optional(),
+  maxDraftsPerScheduledRun: z.number().int().min(1).max(5).optional(),
   minimumHoursBetweenDrafts: z.number().int().min(1).max(168).optional(),
   allowListingPosts: z.boolean().optional(),
   allowTestimonialPosts: z.boolean().optional(),
