@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["transformation_post", "open_appointment_reminder"],
   },
   ui: { icon: "Scissors" },
+  techStack: [],
 };

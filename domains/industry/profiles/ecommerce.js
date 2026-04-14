@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["new_product_post", "sale_announcement"],
   },
   ui: { icon: "ShoppingBag" },
+  techStack: [],
 };

@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["weekly_content_recap", "new_video_announcement"],
   },
   ui: { icon: "Mic" },
+  techStack: [],
 };

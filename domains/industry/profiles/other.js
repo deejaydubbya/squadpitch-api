@@ -27,4 +27,5 @@ export default {
     starterAutomations: [],
   },
   ui: { icon: "Briefcase" },
+  techStack: [],
 };

@@ -1,6 +1,8 @@
-// Industry service — extraction hints, starter angles, and blueprint resolution.
+// Industry service — extraction hints, starter angles, blueprint resolution, and tech stack.
 
 import { getIndustryProfile } from "./registry.js";
+
+/** @typedef {import("./techStack.types.js").IndustryTechStackItem} IndustryTechStackItem */
 
 /**
  * Get extraction hints for an industry key.
@@ -67,4 +69,17 @@ export function resolveStarterBlueprints(industryKey) {
     slugs: profile.content.starterBlueprintSlugs,
     channels: profile.content.starterChannels,
   };
+}
+
+/**
+ * Get the tech stack items for an industry key.
+ * Returns an empty array if no industry key is provided or no items exist.
+ *
+ * @param {string | null | undefined} industryKey
+ * @returns {IndustryTechStackItem[]}
+ */
+export function getIndustryTechStack(industryKey) {
+  if (!industryKey) return [];
+  const profile = getIndustryProfile(industryKey);
+  return profile.techStack ?? [];
 }

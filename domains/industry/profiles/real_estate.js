@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["new_listing_post", "open_house_post"],
   },
   ui: { icon: "Home" },
+  techStack: [],
 };

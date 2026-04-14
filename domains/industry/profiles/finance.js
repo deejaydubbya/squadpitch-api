@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["market_commentary_post", "tax_season_tip"],
   },
   ui: { icon: "TrendingUp" },
+  techStack: [],
 };

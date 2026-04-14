@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["class_reminder_post", "member_milestone_celebration"],
   },
   ui: { icon: "Dumbbell" },
+  techStack: [],
 };

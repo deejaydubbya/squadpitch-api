@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["completed_job_post", "seasonal_service_reminder"],
   },
   ui: { icon: "Wrench" },
+  techStack: [],
 };

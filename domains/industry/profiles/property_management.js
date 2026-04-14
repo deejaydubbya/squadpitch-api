@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["new_listing_post", "seasonal_maintenance_reminder"],
   },
   ui: { icon: "Building2" },
+  techStack: [],
 };

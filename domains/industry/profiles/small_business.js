@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["new_review_post", "weekly_business_update"],
   },
   ui: { icon: "Store" },
+  techStack: [],
 };

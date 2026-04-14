@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["daily_special_post", "event_announcement"],
   },
   ui: { icon: "UtensilsCrossed" },
+  techStack: [],
 };

@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["weekly_legal_tip", "new_blog_post_share"],
   },
   ui: { icon: "Scale" },
+  techStack: [],
 };

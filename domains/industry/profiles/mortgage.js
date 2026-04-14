@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["rate_change_post", "weekly_market_update"],
   },
   ui: { icon: "Landmark" },
+  techStack: [],
 };

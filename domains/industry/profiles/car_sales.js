@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["new_inventory_post", "price_drop_alert"],
   },
   ui: { icon: "Car" },
+  techStack: [],
 };

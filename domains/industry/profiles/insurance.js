@@ -27,4 +27,5 @@ export default {
     starterAutomations: ["seasonal_coverage_reminder", "policy_renewal_tip"],
   },
   ui: { icon: "Shield" },
+  techStack: [],
 };
