@@ -1,6 +1,6 @@
 export default {
   key: "fitness",
-  label: "Fitness / Gym / Personal Training",
+  label: "Fitness & Training",
   description: "Gyms, personal trainers, yoga studios, and wellness coaches.",
   onboarding: {
     websitePlaceholder: "ironcorefitness.com",

@@ -1,6 +1,6 @@
 export default {
   key: "restaurant",
-  label: "Restaurant / Cafe / Food",
+  label: "Restaurant & Food",
   description: "Restaurants, cafes, food trucks, catering, and food & beverage brands.",
   onboarding: {
     websitePlaceholder: "bellavistabistro.com",

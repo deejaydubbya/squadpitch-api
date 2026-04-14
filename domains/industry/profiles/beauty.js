@@ -1,6 +1,6 @@
 export default {
   key: "beauty",
-  label: "Beauty / Salon / Spa",
+  label: "Beauty & Salon",
   description: "Hair salons, spas, barbershops, nail studios, and beauty professionals.",
   onboarding: {
     websitePlaceholder: "glamoursalon.com",

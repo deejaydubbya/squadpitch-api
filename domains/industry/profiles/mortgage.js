@@ -1,6 +1,6 @@
 export default {
   key: "mortgage",
-  label: "Mortgage / Loan Officer",
+  label: "Mortgage & Loans",
   description: "Mortgage brokers, loan officers, and lending institutions.",
   onboarding: {
     websitePlaceholder: "primemortgage.com",

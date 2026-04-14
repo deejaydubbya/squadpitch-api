@@ -1,6 +1,6 @@
 export default {
   key: "ecommerce",
-  label: "E-Commerce / Online Store",
+  label: "E-Commerce",
   description: "Online stores, DTC brands, and digital retailers.",
   onboarding: {
     websitePlaceholder: "mybrand.shop",

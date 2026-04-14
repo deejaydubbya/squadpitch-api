@@ -1,6 +1,6 @@
 export default {
   key: "small_business",
-  label: "Small Business (General)",
+  label: "Small Business",
   description: "Local shops, service providers, and general small businesses.",
   onboarding: {
     websitePlaceholder: "mybusiness.com",

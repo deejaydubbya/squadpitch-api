@@ -1,6 +1,6 @@
 export default {
   key: "property_management",
-  label: "Property Management / Rentals",
+  label: "Property Management",
   description: "Residential and commercial property management companies and landlords.",
   onboarding: {
     websitePlaceholder: "sunsetproperties.com",
