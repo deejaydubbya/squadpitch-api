@@ -506,3 +506,16 @@ export const ManualSetupSchema = z.object({
     { message: "At least one field is required" },
   ),
 });
+
+// ── Autopilot ─────────────────────────────────────────────────────────
+
+export const AutopilotSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  mode: z.enum(["off", "draft_assist"]).optional(),
+  preferredChannels: z.array(ChannelEnum).max(6).optional(),
+  maxDraftsPerWeek: z.number().int().min(1).max(20).optional(),
+  minimumHoursBetweenDrafts: z.number().int().min(1).max(168).optional(),
+  allowListingPosts: z.boolean().optional(),
+  allowTestimonialPosts: z.boolean().optional(),
+  allowFallbackPosts: z.boolean().optional(),
+});

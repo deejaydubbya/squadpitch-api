@@ -5,6 +5,7 @@ import { prisma } from "../../prisma.js";
 import { getContentContext, getRecommendationTemplates } from "../industry/industry.service.js";
 import { buildTechStackContentContext, resolveRealEstateContext } from "../industry/techStack.service.js";
 import { loadRealEstateGenerationAssets } from "../industry/realEstateGeneration.js";
+import { getAutopilotStatus } from "./autopilot.service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -473,15 +474,20 @@ export async function getDashboardRecommendations(clientId) {
     daysSinceLastGeneration,
   };
 
-  // Real estate asset summary
+  // Real estate asset summary + autopilot status
   if (industryKey === "real_estate") {
-    summary.realEstate = {
-      listingCount: reAssets?.listingCount ?? realEstateContext?.assets?.listingCount ?? 0,
-      reviewCount: reAssets?.reviewCount ?? realEstateContext?.assets?.reviewCount ?? 0,
-      listingFeedConnected: realEstateContext?.techStack?.listingFeed?.status === "connected",
-      websiteConnected: realEstateContext?.techStack?.website?.status === "connected",
-      availableChannels: realEstateContext?.publishing?.availableChannels ?? [],
-    };
+    const [reSum, apStatus] = await Promise.all([
+      Promise.resolve({
+        listingCount: reAssets?.listingCount ?? realEstateContext?.assets?.listingCount ?? 0,
+        reviewCount: reAssets?.reviewCount ?? realEstateContext?.assets?.reviewCount ?? 0,
+        listingFeedConnected: realEstateContext?.techStack?.listingFeed?.status === "connected",
+        websiteConnected: realEstateContext?.techStack?.website?.status === "connected",
+        availableChannels: realEstateContext?.publishing?.availableChannels ?? [],
+      }),
+      getAutopilotStatus(clientId).catch(() => null),
+    ]);
+    summary.realEstate = reSum;
+    if (apStatus) summary.autopilot = apStatus;
   }
 
   return {
