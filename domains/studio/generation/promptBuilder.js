@@ -175,6 +175,24 @@ export function buildSystemPrompt(ctx) {
     }
   }
 
+  // Tech stack context — what tools are connected and what data is available.
+  const ts = ctx.techStackContext;
+  if (ts && ts.connectedTools.length > 0) {
+    lines.push(`\nConnected tools: ${ts.connectedTools.join(", ")}`);
+    if (ts.hasWebsite && ts.websiteUrl) {
+      lines.push(`Website: ${ts.websiteUrl} — reference real pages, services, and details from the business website when relevant.`);
+    }
+    if (ts.hasFacebook && ts.facebookPageName) {
+      lines.push(`Facebook Page: ${ts.facebookPageName}`);
+    }
+    if (ts.hasInstagram && ts.instagramAccountName) {
+      lines.push(`Instagram: @${ts.instagramAccountName}`);
+    }
+    if (ts.connectedCapabilities.includes("publishing")) {
+      lines.push("This business publishes content directly — write posts that are ready to post, not drafts that need heavy editing.");
+    }
+  }
+
   // Anti-patterns to reduce generic AI tone.
   lines.push(`
 IMPORTANT — avoid these generic patterns:
@@ -376,6 +394,16 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, dataI
   // Blueprint angle injection
   if (blueprint) {
     lines.push(formatBlueprintForPrompt(blueprint));
+  }
+
+  // Channel-specific style hints based on connected tech stack
+  const ts = ctx.techStackContext;
+  if (ts) {
+    if (channel === "INSTAGRAM" && ts.hasInstagram) {
+      lines.push("\nThis will be published to their connected Instagram account. Use shorter, visual-first language. Lead with a hook that works without an image preview.");
+    } else if (channel === "FACEBOOK" && ts.hasFacebook) {
+      lines.push("\nThis will be published to their connected Facebook Page. Write in a slightly longer, conversational tone. Facebook audiences engage more with storytelling and context.");
+    }
   }
 
   if (guidance && guidance.trim().length > 0) {

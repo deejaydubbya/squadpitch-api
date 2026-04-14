@@ -142,6 +142,54 @@ export async function getWorkspaceTechStackView(workspaceId) {
   });
 }
 
+// ── Content context for AI generation ────────────────────────────────
+
+/**
+ * @typedef {Object} TechStackContentContext
+ * @property {boolean} hasWebsite
+ * @property {string | null} websiteUrl
+ * @property {boolean} hasFacebook
+ * @property {string | null} facebookPageName
+ * @property {boolean} hasInstagram
+ * @property {string | null} instagramAccountName
+ * @property {string[]} connectedTools - Labels of all connected tech stack items
+ * @property {string[]} connectedCapabilities - Deduplicated capabilities across all connected items
+ */
+
+/**
+ * Build a lightweight content context from the workspace's connected tech stack.
+ * Used by the AI generation system to make prompts aware of connected tools.
+ *
+ * @param {string} workspaceId
+ * @returns {Promise<TechStackContentContext>}
+ */
+export async function buildTechStackContentContext(workspaceId) {
+  const view = await getWorkspaceTechStackView(workspaceId);
+  const connected = view.filter((i) => i.connectionStatus === "connected");
+
+  // Extract specific tool flags
+  const website = connected.find((i) => i.providerKey === "idx_website");
+  const facebook = connected.find((i) => i.providerKey === "facebook_page");
+  const instagram = connected.find((i) => i.providerKey === "instagram_business");
+
+  // Deduplicate capabilities across all connected items
+  const capSet = new Set();
+  for (const item of connected) {
+    for (const cap of item.capabilities) capSet.add(cap);
+  }
+
+  return {
+    hasWebsite: !!website,
+    websiteUrl: website?.metadataJson?.url ?? null,
+    hasFacebook: !!facebook,
+    facebookPageName: facebook?.metadataJson?.displayName ?? null,
+    hasInstagram: !!instagram,
+    instagramAccountName: instagram?.metadataJson?.displayName ?? null,
+    connectedTools: connected.map((i) => i.label),
+    connectedCapabilities: [...capSet],
+  };
+}
+
 // ── Mutation helpers ────────────────────────────────────────────────
 
 /**

@@ -9,6 +9,7 @@
 import { prisma } from "../../../prisma.js";
 import { redisGet, redisSet, redisDel } from "../../../redis.js";
 import { getContentContext } from "../../industry/industry.service.js";
+import { buildTechStackContentContext } from "../../industry/techStack.service.js";
 
 const CACHE_TTL = 1800; // 30 minutes
 const CACHE_PREFIX = "sp:client:ctx:";
@@ -82,10 +83,19 @@ export async function loadClientGenerationContext(clientId) {
 
   const industryContext = getContentContext(client.industryKey);
 
+  // Load connected tech stack context (website, channels, etc.)
+  let techStackContext = null;
+  try {
+    techStackContext = await buildTechStackContentContext(clientId);
+  } catch {
+    // Non-critical — generation works without tech stack context
+  }
+
   const ctx = {
     client,
     industryKey: client.industryKey ?? null,
     industryContext,
+    techStackContext,
     brand: client.brandProfile ?? null,
     voice: client.voiceProfile ?? null,
     media: client.mediaProfile ?? null,

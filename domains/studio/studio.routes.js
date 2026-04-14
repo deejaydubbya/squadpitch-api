@@ -76,6 +76,7 @@ import {
   getWorkspaceTechStackView,
   upsertWorkspaceTechStackConnection,
 } from "../industry/techStack.service.js";
+import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
 
@@ -2043,6 +2044,9 @@ studioRouter.put(
         "connected",
         { metadataJson: metadata },
       );
+
+      // Invalidate generation context cache so prompts pick up new tech stack state
+      invalidateClientContext(req.params.id).catch(() => {});
 
       res.json({ connection });
     } catch (err) {
