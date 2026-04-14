@@ -2,6 +2,8 @@
 // Reuses existing services; does NOT duplicate logic.
 
 import { prisma } from "../../prisma.js";
+import { getContentContext, getRecommendationTemplates } from "../industry/industry.service.js";
+import { buildTechStackContentContext } from "../industry/techStack.service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -20,6 +22,13 @@ export async function getDashboardRecommendations(clientId) {
   weekStart.setUTCDate(now.getUTCDate() - mondayOffset);
   weekStart.setUTCHours(0, 0, 0, 0);
 
+  // Load client for industryKey
+  const client = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { industryKey: true },
+  });
+  const industryKey = client?.industryKey ?? null;
+
   const [
     dataItemStats,
     draftStats,
@@ -28,6 +37,7 @@ export async function getDashboardRecommendations(clientId) {
     publishedThisWeek,
     scheduledUpcoming,
     lastAutopilotDraft,
+    techStack,
   ] = await Promise.all([
     // Business data summary
     prisma.workspaceDataItem.groupBy({
@@ -76,6 +86,8 @@ export async function getDashboardRecommendations(clientId) {
       orderBy: { createdAt: "desc" },
       select: { createdAt: true },
     }),
+    // Tech stack context (non-critical)
+    buildTechStackContentContext(clientId).catch(() => null),
   ]);
 
   const totalDataItems = dataItemStats.reduce((s, r) => s + r._count._all, 0);
@@ -187,6 +199,76 @@ export async function getDashboardRecommendations(clientId) {
       priority: 70,
       category: "workflow",
     });
+  }
+
+  // ── Template-driven content suggestions ──────────────────────────────
+  const industryCtx = getContentContext(industryKey);
+  const totalPublished = statusMap.PUBLISHED ?? 0;
+  const templates = getRecommendationTemplates(industryKey);
+
+  if (enabledChannels.length > 0 && templates.length > 0) {
+    // Build condition context for template filtering
+    const condCtx = {
+      hasData: totalDataItems > 0,
+      noPublished: totalPublished === 0,
+      hasWebsite: !!techStack?.hasWebsite,
+    };
+
+    // Filter templates by tier (exclude advanced) and conditions
+    const eligible = templates.filter((t) => {
+      if (t.tier === "advanced") return false;
+      const cond = t.conditions ?? {};
+      if (cond.hasData && !condCtx.hasData) return false;
+      if (cond.noPublished && !condCtx.noPublished) return false;
+      if (cond.hasWebsite && !condCtx.hasWebsite) return false;
+      return true;
+    });
+
+    // Sort by priority rank (high > medium > low)
+    const priorityRank = { high: 3, medium: 2, low: 1 };
+    eligible.sort((a, b) => (priorityRank[b.priority] ?? 1) - (priorityRank[a.priority] ?? 1));
+
+    // Boost: website-connected items get +2 priority points
+    const industryLabel = industryCtx?.label ?? "your industry";
+
+    // Pick top 3 templates as recommendations
+    for (const tmpl of eligible.slice(0, 3)) {
+      const numPriority =
+        tmpl.priority === "high" ? 84 : tmpl.priority === "medium" ? 72 : 60;
+
+      recommendations.push({
+        id: `tmpl_${tmpl.type}`,
+        title: tmpl.title,
+        description: tmpl.description,
+        reason: `Suggested for ${industryLabel} businesses based on proven content patterns.`,
+        action: "generate_post",
+        actionLabel: "Create Post",
+        priority: numPriority,
+        category: "content",
+        metadata: { guidance: tmpl.guidance, templateType: tmpl.type },
+      });
+    }
+  }
+
+  // ── Tech-stack-aware boosts ─────────────────────────────────────────
+  if (techStack && enabledChannels.length > 0) {
+    // Website connected but low posting → suggest website-based content
+    if (techStack.hasWebsite && techStack.websiteUrl && recentPublished < 2) {
+      recommendations.push({
+        id: "website_content",
+        title: "Generate content from your website",
+        description: "Use your website content to create posts that showcase your real business.",
+        reason: "Your website is connected but you have few recent posts.",
+        action: "generate_post",
+        actionLabel: "Create Post",
+        priority: 82,
+        category: "content",
+        metadata: {
+          guidance: `Create a post based on this business's website. Reference real pages, services, and details from ${techStack.websiteUrl}.`,
+          templateType: "website_content",
+        },
+      });
+    }
   }
 
   recommendations.sort((a, b) => b.priority - a.priority);

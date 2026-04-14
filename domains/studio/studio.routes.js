@@ -71,7 +71,7 @@ import crypto from "crypto";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
-import { getStarterAngles, getIndustryTechStack } from "../industry/industry.service.js";
+import { getStarterAngles, getIndustryTechStack, getRecommendationTemplates } from "../industry/industry.service.js";
 import {
   getWorkspaceTechStackView,
   upsertWorkspaceTechStackConnection,
@@ -705,6 +705,9 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
     });
 
     const starterAngles = getStarterAngles(industryKey) || [];
+    const coreTemplates = getRecommendationTemplates(industryKey)
+      .filter((t) => t.tier === "core")
+      .map(({ type, title, guidance }) => ({ type, title, guidance }));
 
     res.json({
       brandData: {
@@ -727,6 +730,7 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
       images,
       dataItems,
       starterAngles,
+      coreTemplates,
     });
   } catch (err) {
     if (err.status === 400 || err.status === 408 || err.status === 422) {
@@ -830,6 +834,9 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
     });
 
     const starterAngles = getStarterAngles(industryKey) || [];
+    const coreTemplates = getRecommendationTemplates(industryKey)
+      .filter((t) => t.tier === "core")
+      .map(({ type, title, guidance }) => ({ type, title, guidance }));
 
     // Final complete event with full payload (same shape as the non-stream endpoint)
     sendEvent({
@@ -855,6 +862,7 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       images,
       dataItems,
       starterAngles,
+      coreTemplates,
     });
   } catch (err) {
     console.error("[onboarding-stream] Error:", err.message || err);

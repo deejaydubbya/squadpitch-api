@@ -62,6 +62,15 @@ export default {
     { key: "featured_vehicle", label: "Featured Vehicle" },
     { key: "limited_time_offer", label: "Limited-Time Offer" },
   ],
+  recommendationTemplates: [
+    { type: "new_inventory_post", tier: "core", title: "Showcase New Inventory", description: "Feature a newly arrived vehicle with specs and photos.", priority: "high", guidance: "Create a post showcasing a new vehicle arrival on the lot. Highlight make, model, year, key specs, price, and what makes it a great deal.", conditions: { hasData: true } },
+    { type: "price_drop_alert", tier: "core", title: "Announce a Price Drop", description: "Re-engage buyers with a price reduction on a vehicle.", priority: "high", guidance: "Create a price drop alert for a vehicle. Emphasize the new price, savings, and urgency to act before it's gone.", conditions: { hasData: true } },
+    { type: "customer_delivery", tier: "core", title: "Share a Customer Delivery", description: "Celebrate a sold vehicle with a happy customer moment.", priority: "high", guidance: "Create a customer delivery celebration post. Share the excitement of a new purchase, congratulate the buyer, and invite others to visit.", conditions: {} },
+    { type: "vehicle_spotlight", tier: "secondary", title: "Spotlight a Vehicle", description: "Deep-dive on a specific vehicle's features and value.", priority: "medium", guidance: "Create a detailed spotlight post for a specific vehicle. Cover features, performance, interior, and why it stands out from competitors.", conditions: { hasData: true } },
+    { type: "financing_offer", tier: "secondary", title: "Promote a Financing Deal", description: "Highlight special financing or lease offers.", priority: "medium", guidance: "Create a financing or lease promotion post. Include specific terms, monthly payment examples, and a clear call-to-action.", conditions: {} },
+    { type: "trade_in_promo", tier: "secondary", title: "Encourage Trade-Ins", description: "Promote trade-in value and upgrade opportunities.", priority: "medium", guidance: "Create a trade-in promotion post. Emphasize top trade-in values, easy process, and how buyers can upgrade their ride.", conditions: {} },
+    { type: "business_intro", tier: "advanced", title: "Introduce Your Dealership", description: "Tell buyers who you are and why they should visit.", priority: "low", guidance: "Write an introduction post for this dealership. Highlight inventory focus, customer service philosophy, and what sets them apart.", conditions: { noPublished: true } },
+  ],
   ui: { icon: "Car" },
   techStack: [],
 };

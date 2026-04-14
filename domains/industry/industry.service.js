@@ -310,3 +310,78 @@ export function getIndustryContentTypeLabels(industryKey) {
   const profile = getIndustryProfile(industryKey);
   return profile.contentTypeLabels ?? [];
 }
+
+// ── Recommendation templates ─────────────────────────────────────────
+
+/**
+ * @typedef {Object} RecommendationTemplate
+ * @property {string} type - Unique template key (e.g. "listing_post")
+ * @property {"core" | "secondary" | "advanced"} tier - Template tier for prioritization
+ * @property {string} title - Display title
+ * @property {string} description - Short description
+ * @property {"high" | "medium" | "low"} priority
+ * @property {string} guidance - Prompt guidance passed to content generation
+ * @property {{ hasData?: boolean, noPublished?: boolean, hasWebsite?: boolean }} [conditions]
+ */
+
+/** @type {RecommendationTemplate[]} */
+const GENERIC_TEMPLATES = [
+  {
+    type: "business_intro",
+    tier: "core",
+    title: "Introduce Your Business",
+    description: "Tell your audience who you are and what you offer.",
+    priority: "high",
+    guidance: "Write an introduction post for this business. Highlight key services, experience, and what makes them stand out.",
+    conditions: { noPublished: true },
+  },
+  {
+    type: "customer_spotlight",
+    tier: "core",
+    title: "Spotlight a Customer Win",
+    description: "Build trust by sharing a real customer success story.",
+    priority: "high",
+    guidance: "Share a customer success story or testimonial. Use specific details and outcomes to build credibility and trust.",
+    conditions: { hasData: true },
+  },
+  {
+    type: "promotion_post",
+    tier: "core",
+    title: "Promote an Offer or Event",
+    description: "Drive action with a timely promotion or upcoming event.",
+    priority: "high",
+    guidance: "Create a promotional post for a current offer, sale, or upcoming event. Include a clear call-to-action and urgency.",
+    conditions: {},
+  },
+  {
+    type: "expertise_post",
+    tier: "secondary",
+    title: "Share Your Expertise",
+    description: "Demonstrate knowledge with an insight or tip your audience will find valuable.",
+    priority: "medium",
+    guidance: "Create a post sharing a useful tip, insight, or industry knowledge that positions this business as an expert in their field.",
+    conditions: {},
+  },
+  {
+    type: "behind_the_scenes",
+    tier: "secondary",
+    title: "Share Behind the Scenes",
+    description: "Humanize your brand with a look at the team or process.",
+    priority: "medium",
+    guidance: "Create a behind-the-scenes post showing the team, the process, or day-to-day operations. Make it personal and relatable.",
+    conditions: {},
+  },
+];
+
+/**
+ * Get recommendation templates for an industry.
+ * Returns industry-specific templates if available, otherwise generic fallbacks.
+ *
+ * @param {string | null | undefined} industryKey
+ * @returns {RecommendationTemplate[]}
+ */
+export function getRecommendationTemplates(industryKey) {
+  if (!industryKey) return GENERIC_TEMPLATES;
+  const profile = getIndustryProfile(industryKey);
+  return profile.recommendationTemplates ?? GENERIC_TEMPLATES;
+}

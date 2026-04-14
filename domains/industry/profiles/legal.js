@@ -62,6 +62,15 @@ export default {
     { key: "legal_tip", label: "Legal Tip" },
     { key: "common_mistake", label: "Common Mistake" },
   ],
+  recommendationTemplates: [
+    { type: "case_result", tier: "core", title: "Highlight a Case Result", description: "Showcase a successful outcome to build credibility.", priority: "high", guidance: "Create a post highlighting a successful case result or settlement. Demonstrate expertise without revealing confidential client details.", conditions: { hasData: true } },
+    { type: "legal_update", tier: "core", title: "Share a Legal Update", description: "Discuss a recent law change that affects your audience.", priority: "high", guidance: "Create a post about a recent legal change or court decision. Explain what changed, who it affects, and what people should do about it.", conditions: {} },
+    { type: "consultation_cta", tier: "core", title: "Encourage Free Consultations", description: "Drive leads to book a consultation.", priority: "high", guidance: "Create a consultation call-to-action post. Explain what a free consultation includes, what to expect, and make it easy to book.", conditions: {} },
+    { type: "legal_tip", tier: "secondary", title: "Share a Legal Tip", description: "Educate your audience on a common legal issue.", priority: "medium", guidance: "Share a practical legal tip that helps people understand their rights or avoid a common mistake. Keep it accessible and jargon-free.", conditions: {} },
+    { type: "practice_area_spotlight", tier: "secondary", title: "Spotlight a Practice Area", description: "Explain a specific legal service you offer.", priority: "medium", guidance: "Create a practice area spotlight post. Explain what the area covers, who needs it, and how your firm approaches it differently.", conditions: {} },
+    { type: "client_testimonial", tier: "secondary", title: "Share a Client Testimonial", description: "Build trust with a real client review.", priority: "medium", guidance: "Feature a client testimonial or review. Share their experience working with the firm and the outcome they achieved.", conditions: { hasData: true } },
+    { type: "faq_post", tier: "advanced", title: "Answer a Common Question", description: "Address a frequently asked legal question.", priority: "low", guidance: "Answer a commonly asked legal question in plain language. Be helpful and authoritative — position the firm as the go-to resource.", conditions: {} },
+  ],
   ui: { icon: "Scale" },
   techStack: [],
 };

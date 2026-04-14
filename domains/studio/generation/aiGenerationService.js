@@ -118,6 +118,7 @@ export async function generateDraft({
   channel,
   bucketKey,
   guidance,
+  templateType,
   createdBy,
   dataItemId,
   blueprintId,
@@ -156,6 +157,7 @@ export async function generateDraft({
     channel,
     bucketKey,
     guidance,
+    templateType,
     dataItem,
     blueprint,
   });

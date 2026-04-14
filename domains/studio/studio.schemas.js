@@ -261,6 +261,7 @@ export const GenerateContentSchema = z.object({
   channel: ChannelEnum,
   bucketKey: z.string().max(40).optional(),
   guidance: z.string().min(1).max(4000),
+  templateType: z.string().max(60).optional(),
   dataItemId: z.string().optional(),
   blueprintId: z.string().optional(),
 });

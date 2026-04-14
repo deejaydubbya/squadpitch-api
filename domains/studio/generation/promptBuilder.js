@@ -339,13 +339,20 @@ export function formatBlueprintForPrompt(blueprint) {
  * system to produce right now — the kind of content, the channel, any
  * matched content bucket template, and the operator's guidance.
  */
-export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, dataItem, blueprint }) {
+export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templateType, dataItem, blueprint }) {
   const { contentBuckets, channelSettings } = ctx;
   const lines = [];
 
   const kindInstruction = KIND_INSTRUCTIONS[kind] ?? KIND_INSTRUCTIONS.POST;
   lines.push(`Task: ${kindInstruction}`);
   lines.push(`Channel: ${channel}`);
+
+  // Template type framing — gives the AI a clear content category
+  if (templateType) {
+    const label = templateType.replace(/_/g, " ");
+    const industryLabel = ctx.industryContext?.label;
+    lines.push(`Content type: ${industryLabel ? `${industryLabel} — ` : ""}${label}`);
+  }
 
   const channelCfg = Array.isArray(channelSettings)
     ? channelSettings.find((c) => c.channel === channel)

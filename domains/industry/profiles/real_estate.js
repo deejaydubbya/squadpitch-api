@@ -62,6 +62,15 @@ export default {
     { key: "market_insight", label: "Market Insight" },
     { key: "open_house", label: "Open House" },
   ],
+  recommendationTemplates: [
+    { type: "listing_post", tier: "core", title: "Post a New Listing", description: "Promote a property with key details to attract buyers.", priority: "high", guidance: "Create a 'just listed' post highlighting a property's best features. Include address, price, bedrooms, bathrooms, square footage, and unique selling points. Make it scroll-stopping.", conditions: { hasData: true } },
+    { type: "open_house_post", tier: "core", title: "Promote an Open House", description: "Drive traffic to your upcoming open house event.", priority: "high", guidance: "Create an open house announcement post. Include the date, time, address, and a compelling reason to attend. Build excitement and urgency.", conditions: {} },
+    { type: "price_drop_alert", tier: "core", title: "Announce a Price Reduction", description: "Re-engage interested buyers with a price drop alert.", priority: "high", guidance: "Create a price reduction alert post for a listing. Emphasize the new price, the value proposition, and create urgency to act now before it's gone.", conditions: { hasData: true } },
+    { type: "client_testimonial", tier: "core", title: "Share a Client Success Story", description: "Build trust with a real testimonial or success story.", priority: "high", guidance: "Share a client success story — how the agent helped a buyer or seller achieve their goal. Use specific details and outcomes to build credibility.", conditions: { hasData: true } },
+    { type: "market_update", tier: "secondary", title: "Share a Market Update", description: "Position yourself as a local market expert with fresh data.", priority: "medium", guidance: "Write a local market insight post sharing a surprising housing stat or trend. Be specific to the market area. Use real data if available.", conditions: {} },
+    { type: "business_intro", tier: "secondary", title: "Introduce Your Services", description: "Tell your audience who you are and what you offer.", priority: "medium", guidance: "Write an introduction post for this real estate business. Highlight key services, years of experience, areas served, and what sets them apart from other agents.", conditions: { noPublished: true } },
+    { type: "neighborhood_highlight", tier: "advanced", title: "Highlight a Neighborhood", description: "Showcase a local area to attract buyers to your market.", priority: "low", guidance: "Create a neighborhood highlight post. Feature local amenities, schools, dining, parks, and what makes the area special for homebuyers.", conditions: {} },
+  ],
   ui: { icon: "Home" },
   techStack: [
     {
