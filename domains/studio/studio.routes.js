@@ -797,6 +797,9 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
           url: hasUrl ? input : undefined,
           images: crawledImages,
           industryKey,
+          onProgress: (items) => {
+            sendEvent({ event: "data:progress", items, count: items.length });
+          },
         });
         sendEvent({ event: "data:done", items: dataItems, count: dataItems.length });
       } catch (err) {

@@ -108,10 +108,10 @@ const RESPONSE_FORMAT = { type: "json_object" };
  * Automatically chunks large content and runs parallel extractions.
  *
  * @param {string} rawContent — the raw text to extract from
- * @param {{ hint?: string, sourceUrl?: string, images?: string[] }} opts
+ * @param {{ hint?: string, sourceUrl?: string, images?: string[], onProgress?: (items: Array) => void }} opts
  * @returns {Promise<Array<{ type, title, summary, dataJson, tags, priority, confidence }>>}
  */
-export async function parseToStructuredData(rawContent, { hint, sourceUrl, images } = {}) {
+export async function parseToStructuredData(rawContent, { hint, sourceUrl, images, onProgress } = {}) {
   if (!rawContent || typeof rawContent !== "string") {
     return [];
   }
@@ -137,6 +137,11 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
     );
     for (const items of results) {
       allItems.push(...items);
+    }
+
+    // Report progress after each batch
+    if (onProgress && allItems.length > 0) {
+      onProgress(deduplicateItems(allItems));
     }
   }
 

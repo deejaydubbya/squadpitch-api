@@ -234,7 +234,7 @@ export async function extractBrandFromText(description, { industryKey } = {}) {
  * Extract structured data items (products, testimonials, FAQs, etc.)
  * from scraped content using the existing AI extraction pipeline.
  */
-export async function extractDataItems(combinedText, { url, images, industryKey } = {}) {
+export async function extractDataItems(combinedText, { url, images, industryKey, onProgress } = {}) {
   let hint = "Extract ALL products, inventory items, vehicles, services, testimonials, team member spotlights, FAQs, and any other structured business data. Do not stop early — extract every distinct item present.";
 
   const industryHints = getExtractionHints(industryKey);
@@ -246,6 +246,7 @@ export async function extractDataItems(combinedText, { url, images, industryKey 
     hint,
     sourceUrl: url,
     images,
+    onProgress,
   });
 }
 
