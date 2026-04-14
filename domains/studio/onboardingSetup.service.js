@@ -9,7 +9,7 @@ import { crawlWebsite } from "./crawlWebsite.js";
 import { parseToStructuredData } from "./dataExtraction.service.js";
 import { getExtractionHints } from "../industry/industry.service.js";
 
-const MAX_TEXT_LENGTH = 500_000;
+const MAX_TEXT_LENGTH = 300_000;
 const EXTRACTION_TIMEOUT_MS = 60_000;
 const EXTRACTION_TEMPERATURE = 0.3;
 

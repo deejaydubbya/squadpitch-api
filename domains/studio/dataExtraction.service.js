@@ -6,7 +6,7 @@
 
 import { generateStructuredContent } from "./generation/openai.provider.js";
 
-const MAX_INPUT_BYTES = 400_000; // ~100K tokens — gpt-4o-mini has 128K context, leaves room for prompt + output
+const MAX_INPUT_BYTES = 300_000; // ~110K tokens — gpt-4o-mini has 128K context, leaves ~18K for prompt + output
 const EXTRACTION_TIMEOUT_MS = 120_000;
 const EXTRACTION_TEMPERATURE = 0.3;
 
