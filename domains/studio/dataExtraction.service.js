@@ -9,7 +9,7 @@
 
 import { generateStructuredContent } from "./generation/openai.provider.js";
 
-const CHUNK_SIZE = 250_000; // ~90K tokens per chunk — safe for gpt-4o-mini's 128K context
+const CHUNK_SIZE = 100_000; // ~35K tokens per chunk — faster completion, more incremental progress
 const CHUNK_OVERLAP = 2_000; // overlap to avoid splitting items at boundaries
 const MAX_CONCURRENT_CHUNKS = 3;
 const EXTRACTION_TIMEOUT_MS = 120_000;
@@ -261,7 +261,7 @@ function deduplicateItems(items) {
   const seen = new Map(); // normalized title → best item
 
   for (const item of items) {
-    const key = normalizeTitle(item.title);
+    const key = `${item.type}:${normalizeTitle(item.title)}`;
     const existing = seen.get(key);
     if (!existing) {
       seen.set(key, item);
