@@ -3,10 +3,15 @@
 // Converts raw content (text, HTML, CSV rows) into structured WorkspaceDataItem
 // shapes using OpenAI structured output. All 11 DataItemType field shapes are
 // encoded in the system prompt so the model knows what to extract.
+//
+// Large content is automatically split into chunks and extracted in parallel,
+// then deduplicated by title similarity.
 
 import { generateStructuredContent } from "./generation/openai.provider.js";
 
-const MAX_INPUT_BYTES = 300_000; // ~110K tokens — gpt-4o-mini has 128K context, leaves ~18K for prompt + output
+const CHUNK_SIZE = 250_000; // ~90K tokens per chunk — safe for gpt-4o-mini's 128K context
+const CHUNK_OVERLAP = 2_000; // overlap to avoid splitting items at boundaries
+const MAX_CONCURRENT_CHUNKS = 3;
 const EXTRACTION_TIMEOUT_MS = 120_000;
 const EXTRACTION_TEMPERATURE = 0.3;
 
@@ -100,9 +105,10 @@ const RESPONSE_FORMAT = { type: "json_object" };
 
 /**
  * Parse raw content into structured data items using AI.
+ * Automatically chunks large content and runs parallel extractions.
  *
  * @param {string} rawContent — the raw text to extract from
- * @param {{ hint?: string, sourceUrl?: string }} opts
+ * @param {{ hint?: string, sourceUrl?: string, images?: string[] }} opts
  * @returns {Promise<Array<{ type, title, summary, dataJson, tags, priority, confidence }>>}
  */
 export async function parseToStructuredData(rawContent, { hint, sourceUrl, images } = {}) {
@@ -110,12 +116,80 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
     return [];
   }
 
-  // Truncate to bound token usage
-  const truncated = rawContent.slice(0, MAX_INPUT_BYTES);
+  // Split into chunks if content exceeds single-call limit
+  const chunks = splitIntoChunks(rawContent, CHUNK_SIZE, CHUNK_OVERLAP);
+  console.log(`[dataExtraction] Content: ${rawContent.length} bytes → ${chunks.length} chunk(s)`);
 
+  // Extract from all chunks (parallel with concurrency limit)
+  const allItems = [];
+  for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_CHUNKS) {
+    const batch = chunks.slice(i, i + MAX_CONCURRENT_CHUNKS);
+    const results = await Promise.all(
+      batch.map((chunk, j) =>
+        extractFromChunk(chunk, {
+          hint,
+          sourceUrl,
+          images,
+          chunkIndex: i + j,
+          totalChunks: chunks.length,
+        })
+      )
+    );
+    for (const items of results) {
+      allItems.push(...items);
+    }
+  }
+
+  // Deduplicate items that may appear in overlapping chunks
+  const deduped = deduplicateItems(allItems);
+  console.log(`[dataExtraction] Total: ${allItems.length} raw → ${deduped.length} after dedup`);
+
+  return deduped;
+}
+
+/**
+ * Split content into chunks, breaking at section boundaries (--- markers).
+ */
+function splitIntoChunks(content, chunkSize, overlap) {
+  if (content.length <= chunkSize) {
+    return [content];
+  }
+
+  const chunks = [];
+  let offset = 0;
+
+  while (offset < content.length) {
+    let end = Math.min(offset + chunkSize, content.length);
+
+    // Try to break at a section boundary (--- marker) near the end
+    if (end < content.length) {
+      const searchStart = Math.max(end - 5000, offset);
+      const searchRegion = content.slice(searchStart, end);
+      const lastBreak = searchRegion.lastIndexOf("\n---");
+      if (lastBreak !== -1) {
+        end = searchStart + lastBreak;
+      }
+    }
+
+    chunks.push(content.slice(offset, end));
+    offset = Math.max(offset + 1, end - overlap); // overlap to catch items at boundaries
+  }
+
+  return chunks;
+}
+
+/**
+ * Extract items from a single chunk.
+ */
+async function extractFromChunk(chunk, { hint, sourceUrl, images, chunkIndex, totalChunks }) {
   let userPrompt = "";
   if (hint) userPrompt += `IMPORTANT — The user wants to extract: ${hint}\n\n`;
-  userPrompt += `Extract structured data items from the following content:\n\n${truncated}`;
+
+  if (totalChunks > 1) {
+    userPrompt += `(Processing chunk ${chunkIndex + 1} of ${totalChunks})\n\n`;
+  }
+
+  userPrompt += `Extract structured data items from the following content:\n\n${chunk}`;
   if (sourceUrl) userPrompt += `\n\nSource URL: ${sourceUrl}`;
   if (images && images.length > 0) {
     userPrompt += `\n\nImage URLs found on this page (associate with relevant items in dataJson.imageUrl):\n${images.slice(0, 30).join("\n")}`;
@@ -132,7 +206,7 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
       timeoutMs: EXTRACTION_TIMEOUT_MS,
     });
   } catch (err) {
-    console.error("[dataExtraction] OpenAI call failed:", err.code, err.message, err.cause?.message);
+    console.error(`[dataExtraction] Chunk ${chunkIndex + 1}/${totalChunks} failed:`, err.code, err.message, err.cause?.message);
     return [];
   }
 
@@ -149,16 +223,14 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
 
   if (!Array.isArray(items)) {
     console.warn(
-      "[dataExtraction] No items array in OpenAI response. Keys:",
+      `[dataExtraction] Chunk ${chunkIndex + 1}/${totalChunks}: no items array. Keys:`,
       Object.keys(parsed ?? {}),
-      "| input length:", truncated.length,
     );
     return [];
   }
 
-  console.log("[dataExtraction] Extracted", items.length, "raw items from", truncated.length, "bytes of input");
+  console.log(`[dataExtraction] Chunk ${chunkIndex + 1}/${totalChunks}: extracted ${items.length} items from ${chunk.length} bytes`);
 
-  // Post-process: validate and clamp values
   return items
     .filter((item) => item.title || item.name || item.heading)
     .map((item) => ({
@@ -170,4 +242,39 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
       priority: Math.max(0, Math.min(10, Math.round(Number(item.priority) || 0))),
       confidence: Math.max(0, Math.min(1, Number(item.confidence) || 0)),
     }));
+}
+
+/**
+ * Deduplicate items by normalized title similarity.
+ * Keeps the version with higher priority/confidence.
+ */
+function deduplicateItems(items) {
+  const seen = new Map(); // normalized title → best item
+
+  for (const item of items) {
+    const key = normalizeTitle(item.title);
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, item);
+    } else {
+      // Keep the one with more data
+      const existingScore = existing.priority + existing.confidence + Object.keys(existing.dataJson).length;
+      const newScore = item.priority + item.confidence + Object.keys(item.dataJson).length;
+      if (newScore > existingScore) {
+        seen.set(key, item);
+      }
+    }
+  }
+
+  return Array.from(seen.values());
+}
+
+/**
+ * Normalize a title for dedup comparison.
+ */
+function normalizeTitle(title) {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 80);
 }
