@@ -28,6 +28,14 @@ Return a JSON object with these fields:
 - voiceRules: Object with "do" (array of 3 voice guidelines to follow) and "dont" (array of 3 things to avoid)
 - contentBuckets: Array of 3-5 content categories, each with "key" (lowercase slug), "label" (display name), and "template" (one-line description of what content fits this bucket)
 
+IMPORTANT — Individual vs. Company Detection:
+If the page is an individual's profile within a larger organization (e.g. a real estate agent page on coldwellbanker.com, a lawyer's bio on a law firm site, a financial advisor page on a brokerage site, a trainer profile on a gym website), extract the INDIVIDUAL as the brand — not the parent company. Use the person's name as the brand name, their personal specialties as offers, and their individual practice as the description. The parent company can be mentioned in the description for context (e.g. "David Browning is a real estate agent with Coldwell Banker...") but the brand identity should be built around the individual.
+
+Signals that a page is an individual profile:
+- URL contains /agents/, /team/, /advisors/, /attorneys/, /staff/, /people/, /professionals/, or a person's name
+- Page has a person's headshot, bio, contact info, personal credentials
+- Page shows individual listings, cases, reviews, or certifications
+
 Be specific and actionable. Base suggestions on the actual business content, not generic advice.`;
 
 const BRAND_EXTRACTION_FORMAT = {
@@ -186,7 +194,13 @@ export async function crawlAndCombine({ url, text, documentTexts = [], onProgres
  */
 export async function extractBrandData(content, { url, industryKey } = {}) {
   let userPrompt = `Analyze the following website content and extract brand profile data:\n\n${content.slice(0, MAX_TEXT_LENGTH)}`;
-  if (url) userPrompt += `\n\nSource URL: ${url}`;
+  if (url) {
+    userPrompt += `\n\nSource URL: ${url}`;
+    const profilePatterns = /\/(agents?|team|advisors?|attorneys?|staff|people|professionals?|brokers?|trainers?|coaches|instructors?)\//i;
+    if (profilePatterns.test(url)) {
+      userPrompt += `\n\nNote: This URL appears to be an individual's profile page within a larger organization. Extract the INDIVIDUAL person as the brand — use their name, their specialties, their practice. Do NOT use the parent company name as the brand name.`;
+    }
+  }
 
   const industryHints = getExtractionHints(industryKey);
   if (industryHints) {
