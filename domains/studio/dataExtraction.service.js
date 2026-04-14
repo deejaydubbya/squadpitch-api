@@ -120,11 +120,13 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
   const chunks = splitIntoChunks(rawContent, CHUNK_SIZE, CHUNK_OVERLAP);
   console.log(`[dataExtraction] Content: ${rawContent.length} bytes → ${chunks.length} chunk(s)`);
 
-  // Extract from all chunks (parallel with concurrency limit)
+  // Extract from all chunks in parallel, reporting progress as each completes
   const allItems = [];
+
   for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_CHUNKS) {
     const batch = chunks.slice(i, i + MAX_CONCURRENT_CHUNKS);
-    const results = await Promise.all(
+    // Start batch and attach per-chunk progress callbacks
+    await Promise.all(
       batch.map((chunk, j) =>
         extractFromChunk(chunk, {
           hint,
@@ -132,17 +134,15 @@ export async function parseToStructuredData(rawContent, { hint, sourceUrl, image
           images,
           chunkIndex: i + j,
           totalChunks: chunks.length,
+        }).then((items) => {
+          allItems.push(...items);
+          // Report progress as each individual chunk completes
+          if (onProgress && allItems.length > 0) {
+            onProgress(deduplicateItems(allItems));
+          }
         })
       )
     );
-    for (const items of results) {
-      allItems.push(...items);
-    }
-
-    // Report progress after each batch
-    if (onProgress && allItems.length > 0) {
-      onProgress(deduplicateItems(allItems));
-    }
   }
 
   // Deduplicate items that may appear in overlapping chunks
