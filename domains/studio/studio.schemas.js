@@ -389,7 +389,7 @@ export const OAuthCompleteSchema = z.object({
 // ── Autopilot ───────────────────────────────────────────────────────────
 
 export const AutopilotPreviewSchema = z.object({
-  count: z.number().int().min(1).max(20).default(5),
+  count: z.number().int().min(1).max(10).default(1),
   channel: ChannelEnum.optional(),
   excludeDataItemIds: z.array(z.string()).default([]),
 });
@@ -405,7 +405,7 @@ export const AutopilotExecuteSchema = z.object({
       })
     )
     .min(1)
-    .max(20),
+    .max(10),
 });
 
 // ── Data Import ──────────────────────────────────────────────────────────

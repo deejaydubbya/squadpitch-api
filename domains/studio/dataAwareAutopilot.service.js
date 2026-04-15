@@ -6,12 +6,54 @@
 import { getSmartOpportunities } from "./contentOpportunity.service.js";
 import { getSmartBlueprintForItem } from "./dataAnalytics.service.js";
 
+// ── Content angles for batch diversification ─────────────────────────
+
+const CONTENT_ANGLES = [
+  {
+    key: "spotlight",
+    label: "Property Spotlight",
+    guidance: "Write a property spotlight post — highlight the standout features and what makes this listing special.",
+  },
+  {
+    key: "buyer_tip",
+    label: "Buyer Guidance",
+    guidance: "Write a buyer-focused post — position this as a tip, opportunity, or smart move for potential buyers.",
+  },
+  {
+    key: "neighborhood",
+    label: "Neighborhood & Lifestyle",
+    guidance: "Write a neighborhood-focused post — highlight the area, local lifestyle, and community context around this property.",
+  },
+  {
+    key: "market_insight",
+    label: "Market Insight",
+    guidance: "Write a market insight post — use this data to share a timely observation about the local market or real estate trends.",
+  },
+  {
+    key: "trust",
+    label: "Trust & Social Proof",
+    guidance: "Write a trust-building post — use this content to build credibility and social proof with your audience.",
+  },
+];
+
+/**
+ * Assign diversified content angles to a batch of suggestions.
+ * Ensures no two suggestions in the same batch share the same angle.
+ */
+function assignAngles(count) {
+  const angles = [];
+  for (let i = 0; i < count; i++) {
+    angles.push(CONTENT_ANGLES[i % CONTENT_ANGLES.length]);
+  }
+  return angles;
+}
+
 // ── Reasoning ────────────────────────────────────────────────────────
 
-function buildReasoning(opp) {
+function buildReasoning(opp, angle) {
   const parts = [];
   if (opp.dataItem.usageCount === 0) {
-    parts.push("Never used before — fresh content opportunity");
+    parts.push("Fresh content opportunity");
   }
   if (opp.adjustedScore >= 70) {
     parts.push("High opportunity score");
@@ -27,8 +69,8 @@ function buildReasoning(opp) {
       parts.push(`Not used in ${daysSince}+ days`);
     }
   }
-  if (opp.score >= 60) {
-    parts.push("Proven high performer");
+  if (angle) {
+    parts.push(`Angle: ${angle.label}`);
   }
   if (parts.length === 0) parts.push("Selected by opportunity ranking");
   return parts.join(". ");
@@ -38,7 +80,7 @@ function buildReasoning(opp) {
 
 export async function previewAutopilot(
   clientId,
-  { count = 5, channel, excludeDataItemIds = [] } = {}
+  { count = 1, channel, excludeDataItemIds = [] } = {}
 ) {
   const opportunities = await getSmartOpportunities(clientId, {
     limit: count,
@@ -46,9 +88,11 @@ export async function previewAutopilot(
     excludeDataItemIds,
   });
 
+  // Assign diversified angles across the batch
+  const angles = assignAngles(opportunities.length);
+
   const suggestions = await Promise.all(
     opportunities.map(async (opp, index) => {
-      // Try to pick the best blueprint for this item (may override the opportunity's default)
       const smartBp = await getSmartBlueprintForItem(
         opp.dataItem.id,
         clientId,
@@ -65,6 +109,7 @@ export async function previewAutopilot(
         : opp.blueprint;
 
       const autoSelected = smartBp ? smartBp.id !== opp.blueprint.id : false;
+      const angle = angles[index];
 
       return {
         rank: index + 1,
@@ -73,7 +118,8 @@ export async function previewAutopilot(
         opportunityScore: opp.score,
         adjustedScore: opp.adjustedScore,
         autoSelected,
-        reasoning: buildReasoning(opp),
+        reasoning: buildReasoning(opp, angle),
+        angle: angle?.key ?? null,
       };
     })
   );
@@ -98,8 +144,13 @@ export async function executeAutopilot(
   }
 ) {
   const results = [];
+  // Re-assign angles for diversified generation guidance
+  const angles = assignAngles(suggestions.length);
 
-  for (const suggestion of suggestions) {
+  for (let i = 0; i < suggestions.length; i++) {
+    const suggestion = suggestions[i];
+    const angle = angles[i];
+
     try {
       const allowed = await checkUsageLimit(userId, "posts");
       if (!allowed) {
@@ -114,7 +165,7 @@ export async function executeAutopilot(
         clientId,
         kind: "POST",
         channel: channel || "INSTAGRAM",
-        guidance: "",
+        guidance: angle?.guidance ?? "",
         createdBy: actorSub,
         dataItemId: suggestion.dataItem.id,
         blueprintId: suggestion.blueprint.id,
