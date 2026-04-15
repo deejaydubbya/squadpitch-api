@@ -606,7 +606,13 @@ studioRouter.get(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const result = await getDataSuggestions(req.params.id);
+      const client = await prisma.client.findUnique({
+        where: { id: req.params.id },
+        select: { industryKey: true },
+      });
+      const result = await getDataSuggestions(req.params.id, {
+        industryKey: client?.industryKey ?? undefined,
+      });
       res.json(result);
     } catch (err) {
       next(err);

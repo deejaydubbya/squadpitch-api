@@ -275,6 +275,7 @@ export const UpdateDraftSchema = z.object({
   hashtags: z.array(z.string().max(100)).optional(),
   cta: z.string().max(500).nullable().optional(),
   altText: z.string().max(2000).nullable().optional(),
+  channel: ChannelEnum.optional(),
 });
 
 export const RejectDraftSchema = z.object({

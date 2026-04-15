@@ -4,6 +4,7 @@
 // suggestions to help users get more value from their data.
 
 import { prisma } from "../../prisma.js";
+import { getIndustryProfile } from "../industry/registry.js";
 
 const ALL_DATA_TYPES = [
   "TESTIMONIAL",
@@ -45,7 +46,17 @@ export async function getUnusedData(clientId, { limit = 50 } = {}) {
  *   - stale_data    → items not used in 30+ days
  *   - new_data      → items added in last 7 days with no content
  */
-export async function getDataSuggestions(clientId) {
+export async function getDataSuggestions(clientId, { industryKey } = {}) {
+  // Resolve industry-aware labels
+  const isRE = industryKey === "real_estate";
+  const labelMap = { ...TYPE_LABEL_MAP };
+  const itemLabel = isRE ? "content assets" : "business data";
+  const itemsLabel = isRE ? "unused listings" : "unused data items";
+  if (isRE) {
+    labelMap.PRODUCT_LAUNCH = "New Listings";
+    labelMap.CUSTOM = "Listings";
+  }
+
   const [
     typeGroups,
     unusedCount,
@@ -114,9 +125,9 @@ export async function getDataSuggestions(clientId) {
     suggestions.push({
       id: "unused_data",
       type: "unused_data",
-      title: `${unusedCount} unused data item${unusedCount === 1 ? "" : "s"}`,
+      title: `${unusedCount} ${itemsLabel}`,
       description:
-        "Generate content from your unused business data to maximize its value.",
+        `Generate content from your ${itemLabel} to maximize its value.`,
       action: "generate_from_unused",
       priority: 90,
     });
@@ -139,7 +150,7 @@ export async function getDataSuggestions(clientId) {
   if (missingImportant.length > 0 && totalActive > 0) {
     const typeLabels = missingImportant
       .slice(0, 3)
-      .map((t) => TYPE_LABEL_MAP[t] || t)
+      .map((t) => labelMap[t] || t)
       .join(", ");
     suggestions.push({
       id: "missing_types",
@@ -170,7 +181,7 @@ export async function getDataSuggestions(clientId) {
     suggestions.push({
       id: "no_data",
       type: "no_data",
-      title: "Add your first business data",
+      title: `Add your first ${itemLabel}`,
       description:
         "Testimonials, stats, and case studies power smarter, data-driven content.",
       action: "add_data",

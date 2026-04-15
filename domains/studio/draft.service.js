@@ -60,6 +60,7 @@ export async function updateDraft(draftId, patch) {
       ...(patch.hashtags !== undefined && { hashtags: patch.hashtags }),
       ...(patch.cta !== undefined && { cta: patch.cta }),
       ...(patch.altText !== undefined && { altText: patch.altText }),
+      ...(patch.channel !== undefined && { channel: patch.channel }),
     },
   });
 }
@@ -91,6 +92,8 @@ export async function duplicateDraft(draftId, createdBy) {
       variations: src.variations,
       altText: src.altText,
       imageGuidance: src.imageGuidance,
+      mediaUrl: src.mediaUrl,
+      mediaType: src.mediaType,
       warnings: [],
       createdBy,
     },
@@ -155,7 +158,10 @@ function parseSourceMeta(warnings, createdBy) {
     else if (meta.autopilotReason?.includes("listing")) meta.source = "listing";
     else if (meta.autopilotReason?.includes("review")) meta.source = "review";
     else if (meta.autopilotReason?.includes("fallback")) meta.source = "fallback";
-    else if (warnings.some((w) => w.includes("review") || w.includes("testimonial"))) meta.source = "review";
+    else if (warnings.some((w) =>
+      w.startsWith("source:review") || w.startsWith("source:testimonial") ||
+      w === "review" || w === "testimonial"
+    )) meta.source = "review";
   }
 
   if (isAutopilot) meta.autopilot = true;
