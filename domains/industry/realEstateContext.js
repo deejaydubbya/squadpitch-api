@@ -40,10 +40,10 @@ export const RE_CAPABILITY_MAP = {
   idx_website: {
     type: "manual",
     ownedBy: "tech_stack",
-    capabilities: ["website_context", "business_identity", "listing_source_candidate"],
+    capabilities: ["website_context", "business_identity", "brand_enrichment"],
     contributes: {
-      data: ["website_content"],
-      ux: "Enriches generation with real website pages and services",
+      data: ["website_content", "business_context"],
+      ux: "Enriches generation with business context, brand voice, and website content",
     },
     usedFor: "Enriches AI-generated content with real website pages, services, and business details",
   },
@@ -89,6 +89,16 @@ export const RE_CAPABILITY_MAP = {
       ux: "Review-based content, local SEO, Google posts",
     },
     usedFor: "Strengthen local search presence, manage reviews, and publish Google posts",
+  },
+  real_estate_crm: {
+    type: "manual",
+    ownedBy: "tech_stack",
+    capabilities: ["crm_data", "milestone_signals", "testimonial_signals", "content_source"],
+    contributes: {
+      data: ["milestones", "testimonials", "content_signals"],
+      ux: "Powers 'Just Sold' posts, client testimonials, and milestone celebrations",
+    },
+    usedFor: "Import closed deals, client milestones, and testimonial signals from your CRM",
   },
 };
 

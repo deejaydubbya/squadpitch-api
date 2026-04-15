@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS = {
   minimumHoursBetweenDrafts: 24,
   allowListingPosts: true,
   allowTestimonialPosts: true,
+  allowMilestonePosts: true,
   allowFallbackPosts: true,
 };
 
@@ -89,7 +90,7 @@ export async function updateAutopilotSettings(workspaceId, patch) {
 async function evaluateTriggers(workspaceId, reAssets, settings) {
   const triggers = [];
 
-  const [lastAnyDraft, recentNewListings, recentNewReviews] = await Promise.all([
+  const [lastAnyDraft, recentNewListings, recentNewReviews, recentNewMilestones] = await Promise.all([
     prisma.draft.findFirst({
       where: { clientId: workspaceId, status: { not: "FAILED" } },
       orderBy: { createdAt: "desc" },
@@ -97,6 +98,7 @@ async function evaluateTriggers(workspaceId, reAssets, settings) {
     }),
     getRecentAssetCount(workspaceId, "CUSTOM", DAY_MS),
     getRecentAssetCount(workspaceId, "TESTIMONIAL", 2 * DAY_MS),
+    getRecentAssetCount(workspaceId, "MILESTONE", 2 * DAY_MS),
   ]);
 
   // A. new_listing
@@ -139,6 +141,18 @@ async function evaluateTriggers(workspaceId, reAssets, settings) {
     });
   }
 
+  // D. new_milestone (closed deal / "Just Sold")
+  if (settings.allowMilestonePosts && reAssets.milestoneCount > 0) {
+    triggers.push({
+      triggerType: "new_milestone",
+      reason: recentNewMilestones > 0
+        ? `${recentNewMilestones} new milestone${recentNewMilestones === 1 ? "" : "s"} (closed deal) imported recently`
+        : `${reAssets.milestoneCount} milestone${reAssets.milestoneCount === 1 ? "" : "s"} available`,
+      eligible: recentNewMilestones > 0,
+      supportingData: { newCount: recentNewMilestones, totalCount: reAssets.milestoneCount },
+    });
+  }
+
   return triggers;
 }
 
@@ -175,18 +189,22 @@ async function evaluateContentCoverage(workspaceId, enabledChannels, reAssets, s
   // Content type coverage (inferred from warnings/templateType)
   let hasRecentListingPost = false;
   let hasRecentTestimonialPost = false;
+  let hasRecentMilestonePost = false;
   let hasRecentFallbackPost = false;
   let listingPostCount = 0;
   let testimonialPostCount = 0;
+  let milestonePostCount = 0;
 
   for (const d of recentDrafts) {
     const ws = d.warnings ?? [];
     const isListing = ws.some((w) => w.includes("listing") || w.includes("re_auto_listing"));
     const isTestimonial = ws.some((w) => w.includes("testimonial") || w.includes("review"));
+    const isMilestone = ws.some((w) => w.includes("milestone") || w.includes("just_sold"));
     const isFallback = ws.some((w) => w.includes("fallback") || w.includes("market_update"));
 
     if (isListing) { hasRecentListingPost = true; listingPostCount++; }
     if (isTestimonial) { hasRecentTestimonialPost = true; testimonialPostCount++; }
+    if (isMilestone) { hasRecentMilestonePost = true; milestonePostCount++; }
     if (isFallback) hasRecentFallbackPost = true;
   }
 
@@ -198,6 +216,9 @@ async function evaluateContentCoverage(workspaceId, enabledChannels, reAssets, s
   }
   if (!hasRecentTestimonialPost && settings.allowTestimonialPosts && reAssets.reviewCount > 0) {
     gaps.push({ type: "testimonial", reason: "No testimonial post this week", priority: 80 });
+  }
+  if (!hasRecentMilestonePost && settings.allowMilestonePosts && reAssets.milestoneCount > 0) {
+    gaps.push({ type: "milestone", reason: "No 'Just Sold' or milestone post this week", priority: 85 });
   }
   if (!hasRecentFallbackPost && settings.allowFallbackPosts && recentDrafts.length >= 2) {
     gaps.push({ type: "fallback", reason: "No market insight or tip post this week", priority: 60 });
@@ -215,9 +236,11 @@ async function evaluateContentCoverage(workspaceId, enabledChannels, reAssets, s
     channelsWithoutContent,
     hasRecentListingPost,
     hasRecentTestimonialPost,
+    hasRecentMilestonePost,
     hasRecentFallbackPost,
     listingPostCount,
     testimonialPostCount,
+    milestonePostCount,
     totalRecentDrafts: recentDrafts.length,
     tooManyListings,
     gaps: gaps.sort((a, b) => b.priority - a.priority),
@@ -389,7 +412,30 @@ function planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannel
     });
   }
 
-  // ── Priority 3: Channel gap fill (different content type)
+  // ── Priority 3: Milestone post — "Just Sold" (if gap or trigger)
+  const newMilestoneTrigger = eligible.find((t) => t.triggerType === "new_milestone");
+  if (
+    plans.length < maxPlans &&
+    (newMilestoneTrigger || !coverage.hasRecentMilestonePost) &&
+    settings.allowMilestonePosts &&
+    reAssets.bestMilestone &&
+    reAssets.bestMilestoneSource &&
+    !usedTypes.has("milestone")
+  ) {
+    const ch = pickChannel(usedChannels);
+    const label = reAssets.bestMilestone.address || reAssets.bestMilestone.achievement || "closed deal";
+    addPlan({
+      reasonCode: newMilestoneTrigger ? "new_milestone" : "coverage_milestone",
+      templateType: "milestone_celebration",
+      channel: ch,
+      dataItemId: reAssets.bestMilestoneSource.id,
+      guidance: channelGuidanceVariation(ch, `Create a 'Just Sold' or milestone celebration post for ${label}. Celebrate the achievement.`, "milestone"),
+      sourceType: "milestone",
+      triggerType: newMilestoneTrigger ? "new_milestone" : "coverage",
+    });
+  }
+
+  // ── Priority 4: Channel gap fill (different content type)
   if (plans.length < maxPlans && coverage.channelsWithoutContent.length > 0) {
     const gapCh = coverage.channelsWithoutContent.find((ch) => !usedChannels.has(ch));
     if (gapCh) {
@@ -417,7 +463,7 @@ function planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannel
     }
   }
 
-  // ── Priority 4: Inactivity fallback
+  // ── Priority 5: Inactivity fallback
   const inactivity = eligible.find((t) => t.triggerType === "inactivity_gap");
   if (plans.length === 0 && inactivity) {
     const ch = pickChannel(usedChannels);
@@ -429,6 +475,16 @@ function planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannel
         dataItemId: reAssets.bestListingSource.id,
         guidance: channelGuidanceVariation(ch, `Feature a property to keep content flowing.`, "listing"),
         sourceType: "listing",
+        triggerType: "inactivity_gap",
+      });
+    } else if (settings.allowMilestonePosts && reAssets.bestMilestone && reAssets.bestMilestoneSource) {
+      addPlan({
+        reasonCode: "inactivity_milestone",
+        templateType: "milestone_celebration",
+        channel: ch,
+        dataItemId: reAssets.bestMilestoneSource.id,
+        guidance: channelGuidanceVariation(ch, "Create a 'Just Sold' post to maintain consistency.", "milestone"),
+        sourceType: "milestone",
         triggerType: "inactivity_gap",
       });
     } else if (settings.allowTestimonialPosts && reAssets.reviews?.length > 0) {
@@ -705,6 +761,7 @@ function summarizeCoverage(coverage) {
     channelsWithoutContent: coverage.channelsWithoutContent,
     hasRecentListingPost: coverage.hasRecentListingPost,
     hasRecentTestimonialPost: coverage.hasRecentTestimonialPost,
+    hasRecentMilestonePost: coverage.hasRecentMilestonePost,
     hasRecentFallbackPost: coverage.hasRecentFallbackPost,
     tooManyListings: coverage.tooManyListings,
     gaps: coverage.gaps.map((g) => g.reason),

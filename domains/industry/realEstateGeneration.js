@@ -9,7 +9,7 @@
 // content-driving assets live in WorkspaceDataItems — this module never
 // reads raw tech stack connection metadata for content.
 
-import { getRealEstateListings, getRealEstateTestimonials } from "./realEstateAssets.js";
+import { getRealEstateListings, getRealEstateTestimonials, getRealEstateMilestones } from "./realEstateAssets.js";
 
 // ── Listing normalization ───────────────────────────────────────────────
 
@@ -107,6 +107,31 @@ export function normalizeReview(dataItem) {
   };
 }
 
+// ── Milestone normalization ──────────────────────────────────────────
+
+/**
+ * Normalize a MILESTONE WorkspaceDataItem into a generation-ready shape.
+ *
+ * @param {object} dataItem — WorkspaceDataItem with type=MILESTONE
+ * @returns {{ achievement, address, price, closingDate, clientName, dealType } | null}
+ */
+export function normalizeMilestone(dataItem) {
+  if (!dataItem) return null;
+  const d = dataItem.dataJson ?? {};
+
+  const achievement = d.achievement || dataItem.title || null;
+  if (!achievement) return null;
+
+  return {
+    achievement,
+    address: d.address || null,
+    price: parseNumeric(d.price),
+    closingDate: d.closingDate || null,
+    clientName: d.clientName || d.personName || null,
+    dealType: d.dealType || "Sale",
+  };
+}
+
 // ── Selection ───────────────────────────────────────────────────────────
 
 /**
@@ -138,9 +163,10 @@ export function selectBestListing(normalizedListings) {
  */
 export async function loadRealEstateGenerationAssets(workspaceId, realEstateContext) {
   // Read through canonical asset access layer
-  const [listingItems, reviewItems] = await Promise.all([
+  const [listingItems, reviewItems, milestoneItems] = await Promise.all([
     getRealEstateListings(workspaceId, { orderBy: "rotation", limit: 20 }),
     getRealEstateTestimonials(workspaceId, { limit: 10 }),
+    getRealEstateMilestones(workspaceId, { limit: 10 }),
   ]);
 
   // Normalize all listings
@@ -157,12 +183,24 @@ export async function loadRealEstateGenerationAssets(workspaceId, realEstateCont
     .filter(Boolean)
     .slice(0, 5);
 
+  // Normalize milestones (prefer least-used first)
+  const milestones = milestoneItems
+    .map((item) => ({ normalized: normalizeMilestone(item), source: item }))
+    .filter((r) => r.normalized)
+    .sort((a, b) => (a.source.usageCount ?? 0) - (b.source.usageCount ?? 0));
+
+  const bestMilestone = milestones[0] ?? null;
+
   return {
     bestListing: selectedEntry?.normalized ?? null,
     bestListingSource: selectedEntry?.source ?? null,
     reviews,
+    milestones: milestones.map((m) => m.normalized),
+    bestMilestone: bestMilestone?.normalized ?? null,
+    bestMilestoneSource: bestMilestone?.source ?? null,
     listingCount: normalizedListings.length,
     reviewCount: reviews.length,
+    milestoneCount: milestones.length,
     businessProfile: realEstateContext?.businessProfile ?? null,
     rotationApplied: selectedEntry?.rotated ?? false,
   };

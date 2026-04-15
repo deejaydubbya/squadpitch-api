@@ -72,7 +72,7 @@ function buildRealEstateStatusSummary(providerKey, connectionStatus, metadata, c
   switch (providerKey) {
     case "idx_website":
       if (connected && metadata?.url) return metadata.url;
-      return "Add your website to enrich content";
+      return "Add your website to enrich business context";
 
     case "listing_feed": {
       if (!connected) return "Add your listings page URL";
@@ -101,6 +101,17 @@ function buildRealEstateStatusSummary(providerKey, connectionStatus, metadata, c
           : "Connected — reviews power trust content";
       }
       return "Connect to use reviews for content";
+
+    case "real_estate_crm": {
+      if (!connected) return "Connect your CRM to import deals and testimonials";
+      const deals = metadata?.dealCount;
+      const contacts = metadata?.contactCount;
+      const parts = [];
+      if (deals > 0) parts.push(`${deals} deal${deals === 1 ? "" : "s"}`);
+      if (contacts > 0) parts.push(`${contacts} contact${contacts === 1 ? "" : "s"}`);
+      if (parts.length > 0) return `${parts.join(", ")} synced`;
+      return "Connected — sync to import CRM data";
+    }
 
     default:
       return undefined;

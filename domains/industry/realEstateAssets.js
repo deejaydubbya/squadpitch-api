@@ -42,6 +42,7 @@ import { normalizeListing, normalizeReview, selectBestListing } from "./realEsta
 export const RE_SOURCE_TYPES = {
   LISTING_FEED: "listing_feed",
   GBP: "gbp",
+  CRM: "crm",
   WEBSITE_EXTRACT: "website_extract",
   MANUAL: "manual",
   ONBOARDING: "onboarding",
@@ -100,22 +101,42 @@ export async function getRealEstateTestimonials(workspaceId, opts = {}) {
  * @returns {Promise<{ listingCount: number, reviewCount: number }>}
  */
 export async function getRealEstateAssetCounts(workspaceId) {
-  const [listingCount, reviewCount] = await Promise.all([
+  const [listingCount, reviewCount, milestoneCount] = await Promise.all([
     prisma.workspaceDataItem.count({
       where: { clientId: workspaceId, type: "CUSTOM", status: "ACTIVE" },
     }),
     prisma.workspaceDataItem.count({
       where: { clientId: workspaceId, type: "TESTIMONIAL", status: "ACTIVE" },
     }),
+    prisma.workspaceDataItem.count({
+      where: { clientId: workspaceId, type: "MILESTONE", status: "ACTIVE" },
+    }),
   ]);
-  return { listingCount, reviewCount };
+  return { listingCount, reviewCount, milestoneCount };
+}
+
+/**
+ * Get all active milestone data items for a workspace (closed deals, etc.).
+ *
+ * @param {string} workspaceId
+ * @param {{ limit?: number }} [opts]
+ * @returns {Promise<import("@prisma/client").WorkspaceDataItem[]>}
+ */
+export async function getRealEstateMilestones(workspaceId, opts = {}) {
+  const { limit = 10 } = opts;
+
+  return prisma.workspaceDataItem.findMany({
+    where: { clientId: workspaceId, type: "MILESTONE", status: "ACTIVE" },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+  });
 }
 
 /**
  * Count recently added items (for trigger evaluation).
  *
  * @param {string} workspaceId
- * @param {"CUSTOM" | "TESTIMONIAL"} type
+ * @param {"CUSTOM" | "TESTIMONIAL" | "MILESTONE"} type
  * @param {number} withinMs — time window in milliseconds
  * @returns {Promise<number>}
  */
@@ -142,12 +163,14 @@ export async function getRecentAssetCount(workspaceId, type, withinMs) {
  * @returns {object} — enriched dataJson
  */
 export function stampSourceAttribution(dataJson, sourceType, extra = {}) {
+  const now = new Date().toISOString();
   return {
     ...dataJson,
     _sourceType: sourceType,
     ...(extra.sourceUrl && { _sourceUrl: extra.sourceUrl }),
     ...(extra.sourceConnectionId && { _sourceConnectionId: extra.sourceConnectionId }),
-    _importedAt: extra.importedAt ?? new Date().toISOString(),
+    _importedAt: dataJson._importedAt || extra.importedAt || now,
+    _updatedAt: now,
   };
 }
 
@@ -164,5 +187,6 @@ export function readSourceAttribution(dataItem) {
     sourceUrl: d._sourceUrl ?? null,
     sourceConnectionId: d._sourceConnectionId ?? null,
     importedAt: d._importedAt ?? null,
+    updatedAt: d._updatedAt ?? null,
   };
 }

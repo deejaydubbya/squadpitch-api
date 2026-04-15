@@ -50,6 +50,11 @@ export function buildContentContext(dataItem, industryKey) {
 // ── Industry Transformers ──────────────────────────────────────────────
 
 function transformRealEstate(item) {
+  // Dispatch by item type for type-aware context building
+  if (item.type === "TESTIMONIAL") return transformRealEstateTestimonial(item);
+  if (item.type === "MILESTONE") return transformRealEstateMilestone(item);
+
+  // Default: listing-shaped data (CUSTOM type)
   const d = item.dataJson;
   const beds = d.bedrooms || d.beds;
   const baths = d.bathrooms || d.baths;
@@ -92,6 +97,73 @@ function transformRealEstate(item) {
     pricePoint: formatPrice(d.price),
     location: location || undefined,
     ...(trustSignals.length > 0 && { trustSignals }),
+  };
+}
+
+function transformRealEstateTestimonial(item) {
+  const d = item.dataJson ?? {};
+
+  const author = d.author || d.name || d.client || null;
+  const quote = d.quote || d.testimonial || d.review || item.summary || null;
+  const rating = d.rating || d.stars || null;
+
+  const headline = author
+    ? `Client Testimonial from ${author}`
+    : item.title || "Client Testimonial";
+
+  const trustSignals = [];
+  if (quote) trustSignals.push(`"${quote.length > 150 ? quote.slice(0, 147) + "..." : quote}"`);
+  if (author) trustSignals.push(`— ${author}${d.role ? `, ${d.role}` : ""}`);
+  if (rating) trustSignals.push(`${rating}/5 stars`);
+  if (d.result || d.outcome) trustSignals.push(d.result || d.outcome);
+
+  const highlights = [];
+  if (d.context) highlights.push(d.context);
+  if (d._sourceType === "gbp") highlights.push("Google Business Profile review");
+  if (d._sourceType === "crm") highlights.push("CRM client feedback");
+
+  return {
+    headline,
+    highlights,
+    trustSignals: trustSignals.slice(0, 4),
+    emotionalHook: quote
+      ? extractHook(quote)
+      : "Happy client experience",
+  };
+}
+
+function transformRealEstateMilestone(item) {
+  const d = item.dataJson ?? {};
+
+  const achievement = d.achievement || "Milestone";
+  const address = d.address || null;
+  const price = d.price || null;
+  const closingDate = d.closingDate || null;
+  const clientName = d.clientName || d.personName || null;
+
+  const headline = address
+    ? `${achievement}: ${address}`
+    : `${achievement}${clientName ? ` with ${clientName}` : ""}`;
+
+  const highlights = [];
+  if (address) highlights.push(address);
+  if (price) highlights.push(`$${Number(price).toLocaleString()}`);
+  if (closingDate) highlights.push(`Closed ${closingDate}`);
+  if (d.dealType && d.dealType !== "Sale") highlights.push(d.dealType);
+
+  const trustSignals = [];
+  trustSignals.push(achievement);
+  if (clientName) trustSignals.push(`Client: ${clientName}`);
+  if (d.description || d.significance) trustSignals.push(d.description || d.significance);
+
+  return {
+    headline,
+    highlights: highlights.slice(0, 5),
+    pricePoint: formatPrice(price),
+    trustSignals: trustSignals.slice(0, 4),
+    emotionalHook: address
+      ? `Another successful closing at ${address}`
+      : "Another milestone achieved",
   };
 }
 

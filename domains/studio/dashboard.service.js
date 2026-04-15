@@ -427,7 +427,7 @@ export async function getDashboardRecommendations(clientId) {
         }
       }
 
-      // Listing feed not connected
+      // Listing feeds not connected
       if (!realEstateContext.techStack?.listingFeed || realEstateContext.techStack.listingFeed.status !== "connected") {
         recommendations.push({
           id: "re_setup_listing_feed",
@@ -435,7 +435,7 @@ export async function getDashboardRecommendations(clientId) {
           description: "Connect your listings page to automatically import properties for content.",
           reason: "Listing data powers just-listed posts, open house alerts, and price drop content.",
           action: "setup_tech_stack",
-          actionLabel: "Set Up Listing Feed",
+          actionLabel: "Set Up Listing Feeds",
           priority: 78,
           category: "real_estate",
         });

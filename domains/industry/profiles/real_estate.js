@@ -83,10 +83,21 @@ export default {
       label: "Real Estate CRM",
       category: "crm",
       priority: "core",
-      status: "planned",
-      connectionMode: "planned",
-      description: "Sync leads, contacts, and follow-up activity from your CRM.",
+      status: "live",
+      connectionMode: "manual",
+      description: "Connect your CRM to import closed deals, client milestones, and testimonial signals for content.",
       capabilities: ["lead_sync", "client_sync", "content_source", "workflow_trigger"],
+      manualSetup: {
+        fields: [
+          {
+            key: "apiKey",
+            label: "API Key",
+            type: "password",
+            required: true,
+            placeholder: "Your Follow Up Boss API key",
+          },
+        ],
+      },
     },
     {
       providerKey: "facebook_page",
@@ -152,18 +163,18 @@ export default {
     },
     {
       providerKey: "idx_website",
-      label: "Website / IDX Website",
+      label: "Website Content",
       category: "website",
       priority: "core",
       status: "live",
       connectionMode: "manual",
-      description: "Import website and listing content to improve business context and content generation.",
+      description: "Import your website to enrich business context, brand voice, and AI-generated content.",
       capabilities: ["imports", "content_source", "lead_sync", "analytics_source"],
       manualSetup: {
         fields: [
           {
             key: "url",
-            label: "Website URL",
+            label: "Business Website URL",
             type: "url",
             required: true,
             placeholder: "https://yourrealtybrand.com",
@@ -173,12 +184,12 @@ export default {
     },
     {
       providerKey: "listing_feed",
-      label: "Listing Feed",
+      label: "Property Listings",
       category: "data_source",
       priority: "core",
       status: "live",
       connectionMode: "manual",
-      description: "Import property listings from your website or IDX page to power listing posts, open house alerts, and price drop content.",
+      description: "Import and manage your property inventory — powers listing posts, open house alerts, and price drop content.",
       capabilities: ["imports", "content_source", "data_enrichment"],
       manualSetup: {
         fields: [

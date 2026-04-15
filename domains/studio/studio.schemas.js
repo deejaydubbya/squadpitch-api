@@ -521,3 +521,123 @@ export const AutopilotSettingsSchema = z.object({
   allowTestimonialPosts: z.boolean().optional(),
   allowFallbackPosts: z.boolean().optional(),
 });
+
+// ── Planner Suggestions ──────────────────────────────────────────────
+
+export const PlannerSuggestionsSchema = z.object({
+  weekStart: z.string().min(1),
+  weekEnd: z.string().min(1),
+});
+
+export const PlanMyWeekSchema = z.object({
+  weekStart: z.string().optional(),
+  weekEnd: z.string().optional(),
+});
+
+export const SwapSuggestionSchema = z.object({
+  excludeDataItemIds: z.array(z.string()).default([]),
+  targetDate: z.string().min(1),
+  channel: ChannelEnum.optional(),
+});
+
+// ── Listing Ingestion ───────────────────────────────────────────────────
+
+export const ManualListingSchema = z.object({
+  title: z.string().max(200).optional(),
+  description: z.string().max(5000).optional(),
+  price: z.union([z.string(), z.number()]).optional(),
+  status: z.string().max(20).optional(),
+  address: z.string().max(200).optional(),
+  street: z.string().max(200).optional(),
+  city: z.string().max(100).optional(),
+  state: z.string().max(50).optional(),
+  zip: z.string().max(20).optional(),
+  beds: z.union([z.string(), z.number()]).optional(),
+  baths: z.union([z.string(), z.number()]).optional(),
+  sqft: z.union([z.string(), z.number()]).optional(),
+  lotSize: z.string().max(50).optional(),
+  propertyType: z.string().max(50).optional(),
+  images: z.union([z.string(), z.array(z.string())]).optional(),
+  imageUrl: z.string().max(2000).optional(),
+  listingUrl: z.string().max(2000).optional(),
+  agentName: z.string().max(100).optional(),
+  brokerage: z.string().max(100).optional(),
+  yearBuilt: z.union([z.string(), z.number()]).optional(),
+  garage: z.union([z.string(), z.number()]).optional(),
+  features: z.union([z.string(), z.array(z.string())]).optional(),
+});
+
+export const ListingCSVPreviewSchema = z.object({
+  csvContent: z.string().min(5).max(5_000_000),
+});
+
+export const ListingCSVImportSchema = z.object({
+  csvContent: z.string().min(5).max(5_000_000),
+  columnMapping: z.record(z.string(), z.string()),
+});
+
+export const ListingUrlImportSchema = z.object({
+  url: z.string().url().max(2000),
+});
+
+export const ListingConfirmUrlSchema = z.object({
+  title: z.string().max(200).optional(),
+  description: z.string().max(5000).optional(),
+  price: z.union([z.string(), z.number()]).optional(),
+  status: z.string().max(20).optional(),
+  address: z.object({
+    street: z.string().max(200).optional().nullable(),
+    city: z.string().max(100).optional().nullable(),
+    state: z.string().max(50).optional().nullable(),
+    zip: z.string().max(20).optional().nullable(),
+  }).optional(),
+  beds: z.union([z.string(), z.number()]).optional().nullable(),
+  baths: z.union([z.string(), z.number()]).optional().nullable(),
+  sqft: z.union([z.string(), z.number()]).optional().nullable(),
+  lotSize: z.string().max(50).optional().nullable(),
+  propertyType: z.string().max(50).optional().nullable(),
+  images: z.array(z.string()).optional(),
+  listingUrl: z.string().max(2000).optional().nullable(),
+  agentName: z.string().max(100).optional().nullable(),
+  brokerage: z.string().max(100).optional().nullable(),
+  yearBuilt: z.union([z.string(), z.number()]).optional().nullable(),
+  garage: z.union([z.string(), z.number()]).optional().nullable(),
+  features: z.union([z.string(), z.array(z.string())]).optional().nullable(),
+  sourceType: z.string().optional(),
+  sourceId: z.string().optional().nullable(),
+});
+
+// ── GBP Integration ─────────────────────────────────────────────────────
+
+export const GBPCallbackSchema = z.object({
+  code: z.string().min(1),
+  state: z.string().min(1),
+});
+
+export const GBPSetLocationSchema = z.object({
+  accountId: z.string().min(1),
+  locationId: z.string().min(1),
+  locationName: z.string().optional(),
+});
+
+// ── CRM Integration ─────────────────────────────────────────────────────
+
+export const CRMConnectSchema = z.object({
+  apiKey: z.string().min(1).max(500),
+});
+
+export const CRMDisconnectSchema = z.object({});
+
+// ── Listing Feeds ──────────────────────────────────────────────────────
+
+export const CreateListingSourceSchema = z.object({
+  name: z.string().max(100).optional(),
+  type: z.enum(["URL", "CSV", "MANUAL"]),
+  sourceUrl: z.string().url().max(2000).optional(),
+});
+
+export const UpdateListingSourceSchema = z.object({
+  name: z.string().max(100).optional(),
+  sourceUrl: z.string().url().max(2000).optional(),
+  isEnabled: z.boolean().optional(),
+});

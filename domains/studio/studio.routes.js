@@ -52,6 +52,19 @@ import {
   ListingFeedRefreshSchema,
   ListingFeedSettingsSchema,
   AutopilotSettingsSchema,
+  PlannerSuggestionsSchema,
+  PlanMyWeekSchema,
+  SwapSuggestionSchema,
+  ManualListingSchema,
+  ListingCSVPreviewSchema,
+  ListingCSVImportSchema,
+  ListingUrlImportSchema,
+  ListingConfirmUrlSchema,
+  GBPCallbackSchema,
+  GBPSetLocationSchema,
+  CRMConnectSchema,
+  CreateListingSourceSchema,
+  UpdateListingSourceSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import * as dataService from "./data.service.js";
@@ -69,7 +82,7 @@ import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit, g
 import { getLimitsForTier } from "../billing/billing.constants.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { isProviderBudgetExceeded, getServiceStatus, getThrottlePolicy } from "../billing/serviceHealth.service.js";
-import { redisGet, redisSet } from "../../redis.js";
+import { redisGet, redisSet, redisDel } from "../../redis.js";
 import crypto from "crypto";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
@@ -82,6 +95,13 @@ import {
 } from "../industry/techStack.service.js";
 import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus } from "./autopilot.service.js";
+import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
+import * as listingIngestion from "./listingIngestion.service.js";
+import * as gbpProvider from "../integrations/providers/gbpProvider.js";
+import { syncGBP } from "./gbpSync.service.js";
+import * as fubProvider from "../integrations/providers/fubProvider.js";
+import { syncCRM } from "./crmSync.service.js";
+import * as listingFeedService from "./listingFeed.service.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
@@ -2140,7 +2160,7 @@ studioRouter.post(
         select: { industryKey: true },
       });
       if (!client || client.industryKey !== "real_estate") {
-        return sendError(res, 400, "WRONG_INDUSTRY", "Listing feed is only available for real estate workspaces.");
+        return sendError(res, 400, "WRONG_INDUSTRY", "Listing feeds are only available for real estate workspaces.");
       }
 
       // Parse optional body override
@@ -2209,7 +2229,7 @@ studioRouter.post(
 
 /**
  * PATCH /api/v1/workspaces/:id/tech-stack/listing_feed/settings
- * Update listing feed settings (e.g. autoGenerateOnImport).
+ * Update listing feeds settings (e.g. autoGenerateOnImport).
  */
 studioRouter.patch(
   `${BASE}/workspaces/:id/tech-stack/listing_feed/settings`,
@@ -2224,7 +2244,7 @@ studioRouter.patch(
         where: { workspaceId_providerKey: { workspaceId, providerKey: "listing_feed" } },
       });
       if (!existing) {
-        return sendError(res, 404, "NOT_FOUND", "Listing feed not configured yet.");
+        return sendError(res, 404, "NOT_FOUND", "Listing feeds not configured yet.");
       }
 
       const updated = await upsertWorkspaceTechStackConnection(workspaceId, "listing_feed", existing.connectionStatus, {
@@ -2341,6 +2361,611 @@ studioRouter.post(
   async (req, res, next) => {
     try {
       const result = await evaluateAllAutopilotWorkspaces();
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Planner Suggestions ──────────────────────────────────────────────────
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/planner/suggestions`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = PlannerSuggestionsSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const result = await getPlannerSuggestions(req.params.id, {
+        weekStart: parsed.data.weekStart,
+        weekEnd: parsed.data.weekEnd,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/planner/plan-week`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = PlanMyWeekSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      // Service health pre-flight
+      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+      { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
+
+      // Global budget check
+      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+
+      // Default to current week if not provided
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const weekStart = parsed.data.weekStart ?? new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset).toISOString().slice(0, 10);
+      const weekEnd = parsed.data.weekEnd ?? new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset + 6).toISOString().slice(0, 10);
+
+      const actorSub = getAuth0Sub(req);
+      const result = await planMyWeek(req.params.id, actorSub, {
+        weekStart,
+        weekEnd,
+        generateDraft: service.generateDraft,
+        scheduleDraft: service.scheduleDraft,
+        checkUsageLimit,
+        incrementUsage,
+        userId: req.user.id,
+      });
+
+      // Fire-and-forget: notification + activity
+      if (result.generated > 0) {
+        enqueueNotification({
+          userId: req.user.id,
+          eventType: "BATCH_COMPLETE",
+          payload: { count: result.generated, clientId: req.params.id, source: "plan_week" },
+          resourceType: "client",
+          resourceId: req.params.id,
+        }).catch(() => {});
+
+        recordActivity({
+          userId: req.user.id,
+          clientId: req.params.id,
+          eventType: "PLAN_WEEK_EXECUTED",
+          payload: {
+            generated: result.generated,
+            scheduled: result.scheduled,
+            clientId: req.params.id,
+          },
+          resourceType: "client",
+          resourceId: req.params.id,
+        }).catch(() => {});
+      }
+
+      res.status(201).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/planner/swap-suggestion`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = SwapSuggestionSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const result = await swapSuggestion(req.params.id, {
+        excludeDataItemIds: parsed.data.excludeDataItemIds,
+        targetDate: parsed.data.targetDate,
+        channel: parsed.data.channel,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Listing Ingestion ─────────────────────────────────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/listings/manual
+ * Ingest a single listing from manual entry.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listings/manual`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ManualListingSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const result = await listingIngestion.ingestManualListing(
+        req.params.id,
+        parsed.data
+      );
+      res.status(result.created ? 201 : 200).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/listings/csv/preview
+ * Preview CSV for listing import — returns headers, row count, auto-detected mapping.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listings/csv/preview`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ListingCSVPreviewSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const result = listingIngestion.previewListingCSV(parsed.data.csvContent);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/listings/csv/import
+ * Import listings from CSV with column mapping.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listings/csv/import`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ListingCSVImportSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const result = await listingIngestion.ingestCsvListings(
+        req.params.id,
+        parsed.data.csvContent,
+        { columnMapping: parsed.data.columnMapping }
+      );
+      res.status(201).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/listings/url
+ * Import a listing from a URL (best-effort scraping). Returns preview.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listings/url`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ListingUrlImportSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const result = await listingIngestion.ingestUrlListing(
+        req.params.id,
+        parsed.data.url
+      );
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/listings/url/confirm
+ * Confirm and save a URL-imported listing after user review/edit.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listings/url/confirm`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ListingConfirmUrlSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const result = await listingIngestion.confirmUrlListing(
+        req.params.id,
+        parsed.data
+      );
+      res.status(result.created ? 201 : 200).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Google Business Profile Integration ───────────────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/gbp/connect
+ * Start GBP OAuth flow. Returns { authUrl }.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/gbp/connect`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const nonce = crypto.randomBytes(16).toString("hex");
+      const key = `sp:gbp-oauth:${nonce}`;
+      await redisSet(key, JSON.stringify({ clientId: req.params.id, userId: req.user.id }), 600);
+
+      const authUrl = gbpProvider.getAuthUrl(nonce);
+      res.json({ authUrl });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/gbp/callback
+ * Complete GBP OAuth. Body: { code, state }.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/gbp/callback`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = GBPCallbackSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const { code, state } = parsed.data;
+
+      // Consume OAuth state
+      const key = `sp:gbp-oauth:${state}`;
+      const raw = await redisGet(key);
+      if (!raw) return sendError(res, 400, "INVALID_STATE", "Invalid or expired OAuth state");
+
+      const stateData = JSON.parse(raw);
+      if (stateData.userId !== req.user.id) {
+        return sendError(res, 403, "STATE_MISMATCH", "OAuth state user mismatch");
+      }
+
+      await redisDel(key);
+
+      // Exchange code for tokens
+      const tokens = await gbpProvider.exchangeCode(code);
+
+      // List accounts to help user pick location
+      const tempConfig = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken };
+      let accounts = [];
+      let locations = [];
+      try {
+        accounts = await gbpProvider.listAccounts(tempConfig);
+        if (accounts.length > 0) {
+          locations = await gbpProvider.listLocations(tempConfig, accounts[0].name);
+        }
+      } catch {
+        // OAuth succeeded but listing failed — still save tokens
+      }
+
+      // Save connection with tokens (pending location selection if multiple)
+      const autoLocation = locations.length === 1;
+      await upsertWorkspaceTechStackConnection(req.params.id, "google_business_profile",
+        autoLocation ? "connected" : "pending",
+        {
+          metadataJson: {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            email: tokens.email,
+            accountId: accounts[0]?.name || null,
+            locationId: autoLocation ? locations[0]?.name : null,
+            locationName: autoLocation ? locations[0]?.title : null,
+          },
+        }
+      );
+
+      invalidateClientContext(req.params.id).catch(() => {});
+
+      res.json({
+        connected: true,
+        email: tokens.email,
+        accounts,
+        locations,
+        needsLocationSelection: !autoLocation && locations.length > 1,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/gbp/set-location
+ * Set the GBP location after OAuth if multiple locations exist.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/gbp/set-location`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = GBPSetLocationSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const connection = await prisma.workspaceTechStackConnection.findUnique({
+        where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "google_business_profile" } },
+      });
+
+      if (!connection) return sendError(res, 404, "NOT_FOUND", "GBP connection not found");
+
+      await prisma.workspaceTechStackConnection.update({
+        where: { id: connection.id },
+        data: {
+          connectionStatus: "connected",
+          metadataJson: {
+            ...(connection.metadataJson || {}),
+            accountId: parsed.data.accountId,
+            locationId: parsed.data.locationId,
+            locationName: parsed.data.locationName || null,
+          },
+        },
+      });
+
+      invalidateClientContext(req.params.id).catch(() => {});
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/gbp/sync
+ * Trigger a GBP sync (reviews + business info).
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/gbp/sync`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await syncGBP(req.params.id);
+
+      // Fire-and-forget: run autopilot if new reviews imported
+      if (result.reviewsImported > 0) {
+        runAutopilot(req.params.id).catch(() => {});
+      }
+
+      invalidateClientContext(req.params.id).catch(() => {});
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/workspaces/:id/integrations/gbp/disconnect
+ * Disconnect GBP integration.
+ */
+studioRouter.delete(
+  `${BASE}/workspaces/:id/integrations/gbp/disconnect`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      await upsertWorkspaceTechStackConnection(req.params.id, "google_business_profile", "not_connected", {
+        metadataJson: {},
+      });
+      invalidateClientContext(req.params.id).catch(() => {});
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── CRM Integration (Follow Up Boss) ─────────────────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/crm/connect
+ * Connect CRM with API key. Body: { apiKey }.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/crm/connect`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = CRMConnectSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      // Validate the API key
+      const validation = await fubProvider.validateApiKey(parsed.data.apiKey);
+      if (!validation.valid) {
+        return sendError(res, 400, "INVALID_API_KEY", validation.error || "Invalid API key");
+      }
+
+      // Encrypt and store
+      const encryptedKey = fubProvider.encryptApiKey(parsed.data.apiKey);
+
+      await upsertWorkspaceTechStackConnection(req.params.id, "real_estate_crm", "connected", {
+        metadataJson: {
+          apiKey: encryptedKey,
+          provider: "follow_up_boss",
+          userName: validation.userName,
+          connectedAt: new Date().toISOString(),
+        },
+      });
+
+      invalidateClientContext(req.params.id).catch(() => {});
+      res.json({ connected: true, userName: validation.userName });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/crm/sync
+ * Trigger a CRM sync (deals + contacts + notes).
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/crm/sync`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await syncCRM(req.params.id);
+
+      // Fire-and-forget: run autopilot if new content signals found
+      if (result.milestonesImported > 0 || result.testimonialsImported > 0) {
+        runAutopilot(req.params.id).catch(() => {});
+      }
+
+      invalidateClientContext(req.params.id).catch(() => {});
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/workspaces/:id/integrations/crm/disconnect
+ * Disconnect CRM integration.
+ */
+studioRouter.delete(
+  `${BASE}/workspaces/:id/integrations/crm/disconnect`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      await upsertWorkspaceTechStackConnection(req.params.id, "real_estate_crm", "not_connected", {
+        metadataJson: {},
+      });
+      invalidateClientContext(req.params.id).catch(() => {});
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/workspaces/:id/integrations/status
+ * Get connection status for GBP + CRM.
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/integrations/status`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const [gbp, crm] = await Promise.all([
+        prisma.workspaceTechStackConnection.findUnique({
+          where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "google_business_profile" } },
+        }),
+        prisma.workspaceTechStackConnection.findUnique({
+          where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "real_estate_crm" } },
+        }),
+      ]);
+
+      res.json({
+        gbp: gbp ? {
+          status: gbp.connectionStatus,
+          email: gbp.metadataJson?.email || null,
+          locationName: gbp.metadataJson?.locationName || null,
+          businessName: gbp.metadataJson?.businessName || null,
+          lastSyncedAt: gbp.metadataJson?.lastSyncedAt || null,
+          reviewCount: gbp.metadataJson?.reviewCount || 0,
+          averageRating: gbp.metadataJson?.averageRating || null,
+          lastError: gbp.lastError,
+        } : { status: "not_connected" },
+        crm: crm ? {
+          status: crm.connectionStatus,
+          provider: crm.metadataJson?.provider || null,
+          userName: crm.metadataJson?.userName || null,
+          lastSyncedAt: crm.metadataJson?.lastSyncedAt || null,
+          dealCount: crm.metadataJson?.dealCount || 0,
+          contactCount: crm.metadataJson?.contactCount || 0,
+          lastError: crm.lastError,
+        } : { status: "not_connected" },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Listing Feeds (multi-source) ────────────────────────────────────────
+
+/** GET /api/v1/workspaces/:id/listing-feeds — list all listing sources */
+studioRouter.get(
+  `${BASE}/workspaces/:id/listing-feeds`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const sources = await listingFeedService.getListingSources(req.params.id);
+      const stats = await listingFeedService.getListingFeedStats(req.params.id);
+      res.json({ sources, stats });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** POST /api/v1/workspaces/:id/listing-feeds — create a new listing source */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listing-feeds`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = CreateListingSourceSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const source = await listingFeedService.createListingSource(req.params.id, parsed.data);
+      res.status(201).json(source);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** PATCH /api/v1/workspaces/:id/listing-feeds/:sourceId — update a listing source */
+studioRouter.patch(
+  `${BASE}/workspaces/:id/listing-feeds/:sourceId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpdateListingSourceSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const source = await listingFeedService.updateListingSource(req.params.id, req.params.sourceId, parsed.data);
+      res.json(source);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** POST /api/v1/workspaces/:id/listing-feeds/:sourceId/sync — sync a URL listing source */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listing-feeds/:sourceId/sync`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await listingFeedService.syncListingSource(req.params.id, req.params.sourceId);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** DELETE /api/v1/workspaces/:id/listing-feeds/:sourceId — remove a listing source */
+studioRouter.delete(
+  `${BASE}/workspaces/:id/listing-feeds/:sourceId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await listingFeedService.removeListingSource(req.params.id, req.params.sourceId);
       res.json(result);
     } catch (err) {
       next(err);
