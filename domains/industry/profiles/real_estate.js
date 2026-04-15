@@ -124,12 +124,12 @@ export default {
     {
       providerKey: "google_business_profile",
       label: "Google Business Profile",
-      category: "publishing",
+      category: "data_enrichment",
       priority: "recommended",
-      status: "planned",
+      status: "live",
       connectionMode: "oauth",
-      description: "Share updates and strengthen your local business presence on Google.",
-      capabilities: ["publishing", "analytics_source"],
+      description: "Import reviews and business updates from your Google Business Profile to power testimonial-driven content.",
+      capabilities: ["testimonial_source", "content_source", "analytics_source"],
     },
     {
       providerKey: "transaction_management",
