@@ -175,6 +175,20 @@ let refreshInsightsWorker;
 let server;
 (async () => {
   try {
+    // Eager-connect Prisma before accepting traffic — critical for Fly.io cold starts
+    // where the database may also need to wake up.
+    for (let i = 0; i < 5; i++) {
+      try {
+        await prisma.$connect();
+        console.log("[BOOT] Prisma connected to database");
+        break;
+      } catch (err) {
+        console.warn(`[BOOT] Prisma connect attempt ${i + 1}/5 failed: ${err.message}`);
+        if (i < 4) await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+        else console.error("[BOOT] Could not connect to database after 5 attempts — starting anyway");
+      }
+    }
+
     server = httpServer.listen(Number(env.PORT), "::", () => {
       console.log(`Squadpitch API listening on port ${env.PORT}`);
     });
