@@ -84,6 +84,7 @@ import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { isProviderBudgetExceeded, getServiceStatus, getThrottlePolicy } from "../billing/serviceHealth.service.js";
 import { redisGet, redisSet, redisSetNX, redisDel } from "../../redis.js";
 import crypto from "crypto";
+import { encryptToken } from "../../lib/tokenCrypto.js";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
@@ -2132,6 +2133,11 @@ studioRouter.put(
           }
         }
 
+        // Encrypt password/secret fields before storing
+        if (field.type === "password" && value) {
+          value = encryptToken(value);
+        }
+
         metadata[field.key] = value;
       }
 
@@ -2875,6 +2881,10 @@ studioRouter.post(
       invalidateClientContext(req.params.id).catch(() => {});
       res.json(result);
     } catch (err) {
+      // Token decryption failures mean the key needs to be re-entered
+      if (err.code === "TOKEN_DECRYPT_MALFORMED" || err.message?.includes("Malformed encrypted token")) {
+        return sendError(res, 400, "INVALID_KEY", "CRM API key is invalid — please reconnect your CRM.");
+      }
       next(err);
     }
   }
