@@ -68,15 +68,17 @@ export default {
   ],
   ui: { icon: "Home" },
   techStack: [
+    // ── Import Your Data ──
     {
-      providerKey: "mls_idx",
-      label: "MLS / IDX",
+      providerKey: "listing_feed",
+      label: "Property Listings",
       category: "data_source",
       priority: "core",
-      status: "planned",
-      connectionMode: "planned",
-      description: "Import your listings and property details automatically.",
-      capabilities: ["imports", "content_source", "data_enrichment", "workflow_trigger"],
+      status: "live",
+      connectionMode: "managed",
+      description: "Connect listing sources (MLS, IDX, websites, CSV) to power your property marketing.",
+      capabilities: ["imports", "content_source", "data_enrichment"],
+      managedIn: "content_assets",
     },
     {
       providerKey: "real_estate_crm",
@@ -85,7 +87,7 @@ export default {
       priority: "core",
       status: "live",
       connectionMode: "manual",
-      description: "Connect your CRM to import closed deals, client milestones, and testimonial signals for content.",
+      description: "Import closed deals, client milestones, and testimonial signals to generate high-impact content.",
       capabilities: ["lead_sync", "client_sync", "content_source", "workflow_trigger"],
       manualSetup: {
         fields: [
@@ -99,6 +101,38 @@ export default {
         ],
       },
     },
+    {
+      providerKey: "idx_website",
+      label: "Website Content",
+      category: "website",
+      priority: "core",
+      status: "live",
+      connectionMode: "manual",
+      description: "Use your website to teach the AI your brand voice, services, and local expertise.",
+      capabilities: ["imports", "content_source", "lead_sync", "analytics_source"],
+      manualSetup: {
+        fields: [
+          {
+            key: "url",
+            label: "Business Website URL",
+            type: "url",
+            required: true,
+            placeholder: "https://yourrealtybrand.com",
+          },
+        ],
+      },
+    },
+    {
+      providerKey: "google_business_profile",
+      label: "Google Business Profile",
+      category: "data_enrichment",
+      priority: "recommended",
+      status: "live",
+      connectionMode: "oauth",
+      description: "Turn your Google reviews into social proof content and trust-building posts.",
+      capabilities: ["testimonial_source", "content_source", "analytics_source"],
+    },
+    // ── Publish Your Content ──
     {
       providerKey: "facebook_page",
       label: "Facebook Page",
@@ -121,16 +155,7 @@ export default {
       description: "Publish and schedule visual real estate content to Instagram.",
       capabilities: ["publishing", "analytics_source", "scheduling_target"],
     },
-    {
-      providerKey: "google_business_profile",
-      label: "Google Business Profile",
-      category: "data_enrichment",
-      priority: "recommended",
-      status: "live",
-      connectionMode: "oauth",
-      description: "Import reviews and business updates from your Google Business Profile to power testimonial-driven content.",
-      capabilities: ["testimonial_source", "content_source", "analytics_source"],
-    },
+    // ── Enhance Your Workflow ──
     {
       providerKey: "transaction_management",
       label: "Transaction Management",
@@ -160,38 +185,6 @@ export default {
       connectionMode: "planned",
       description: "Use showing activity and appointments to support event-driven marketing.",
       capabilities: ["workflow_trigger", "client_sync"],
-    },
-    {
-      providerKey: "idx_website",
-      label: "Website Content",
-      category: "website",
-      priority: "core",
-      status: "live",
-      connectionMode: "manual",
-      description: "Import your website to enrich business context, brand voice, and AI-generated content.",
-      capabilities: ["imports", "content_source", "lead_sync", "analytics_source"],
-      manualSetup: {
-        fields: [
-          {
-            key: "url",
-            label: "Business Website URL",
-            type: "url",
-            required: true,
-            placeholder: "https://yourrealtybrand.com",
-          },
-        ],
-      },
-    },
-    {
-      providerKey: "listing_feed",
-      label: "Property Listings",
-      category: "data_source",
-      priority: "core",
-      status: "live",
-      connectionMode: "managed",
-      description: "Import and manage your property inventory — powers listing posts, open house alerts, and price drop content.",
-      capabilities: ["imports", "content_source", "data_enrichment"],
-      managedIn: "content_assets",
     },
     {
       providerKey: "open_house_lead_capture",
