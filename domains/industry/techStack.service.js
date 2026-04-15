@@ -75,10 +75,11 @@ function buildRealEstateStatusSummary(providerKey, connectionStatus, metadata, c
       return "Add your website to enrich business context";
 
     case "listing_feed": {
-      if (!connected) return "Add your listings page URL";
+      if (!connected) return "Add listing sources to power your content";
       const count = metadata?.listingCount;
-      if (count > 0) return `${count} listing${count === 1 ? "" : "s"} ready for content`;
-      return "Connected — refresh to import listings";
+      const sources = metadata?.sourceCount;
+      if (count > 0) return `${count} listing${count === 1 ? "" : "s"} from ${sources} source${sources === 1 ? "" : "s"}`;
+      return `${sources} source${sources === 1 ? "" : "s"} connected — sync to import`;
     }
 
     case "facebook_page":
@@ -181,6 +182,29 @@ export async function getWorkspaceTechStackView(workspaceId) {
     }
   }
 
+  // 4b. Resolve "managed" items (e.g. listing_feed → WorkspaceDataSource records)
+  const managedItems = items.filter((i) => i.connectionMode === "managed");
+  /** @type {Record<string, { connectionStatus: WorkspaceConnectionStatus, sourceCount: number, listingCount: number }>} */
+  const managedStateMap = {};
+  if (managedItems.some((i) => i.providerKey === "listing_feed")) {
+    const listingSources = await prisma.workspaceDataSource.findMany({
+      where: { clientId: workspaceId, type: { in: ["URL", "CSV", "MANUAL"] } },
+      include: { _count: { select: { dataItems: true } } },
+    });
+    // Exclude CRM/GBP sources by name
+    const filtered = listingSources.filter((s) => {
+      const name = (s.name || "").toLowerCase();
+      return !name.includes("crm") && !name.includes("gbp");
+    });
+    const sourceCount = filtered.length;
+    const listingCount = filtered.reduce((n, s) => n + s._count.dataItems, 0);
+    managedStateMap["listing_feed"] = {
+      connectionStatus: sourceCount > 0 ? "connected" : "not_connected",
+      sourceCount,
+      listingCount,
+    };
+  }
+
   // 5. Merge
   const isRealEstate = client.industryKey === "real_estate";
 
@@ -188,8 +212,9 @@ export async function getWorkspaceTechStackView(workspaceId) {
     const caps = item.capabilities;
     // For channel-mapped items, derive state from the channel platform
     const channelState = channelStateMap[item.providerKey];
+    const managedState = managedStateMap[item.providerKey];
     const conn = connectionDetailMap[item.providerKey];
-    const connectionStatus = channelState?.connectionStatus ?? conn?.connectionStatus ?? "not_connected";
+    const connectionStatus = channelState?.connectionStatus ?? managedState?.connectionStatus ?? conn?.connectionStatus ?? "not_connected";
     const connMode = item.connectionMode ?? "planned";
 
     // Compute usedFor + nextAction from capability map (real estate only)
@@ -197,7 +222,9 @@ export async function getWorkspaceTechStackView(workspaceId) {
     const usedFor = capEntry?.usedFor ?? undefined;
 
     let nextAction = undefined;
-    if (connectionStatus !== "connected") {
+    if (connMode === "managed") {
+      nextAction = { label: connectionStatus === "connected" ? "Manage" : "Add sources", action: "navigate", navigateTo: item.managedIn };
+    } else if (connectionStatus !== "connected") {
       if (connMode === "manual") {
         nextAction = { label: "Set up", action: "manual_setup" };
       } else if (connMode === "oauth" && item.status === "live") {
@@ -210,9 +237,11 @@ export async function getWorkspaceTechStackView(workspaceId) {
     }
 
     // Compute statusSummary — short human-readable state text
-    const metadata = channelState
-      ? (channelState.displayName ? { displayName: channelState.displayName } : null)
-      : (conn?.metadataJson ?? null);
+    const metadata = managedState
+      ? { sourceCount: managedState.sourceCount, listingCount: managedState.listingCount }
+      : channelState
+        ? (channelState.displayName ? { displayName: channelState.displayName } : null)
+        : (conn?.metadataJson ?? null);
 
     let statusSummary = undefined;
     if (isRealEstate) {
@@ -229,6 +258,7 @@ export async function getWorkspaceTechStackView(workspaceId) {
       capabilities: caps,
       connectionMode: connMode,
       manualSetup: item.manualSetup ?? undefined,
+      managedIn: item.managedIn ?? undefined,
       channelRef: item.channelRef ?? undefined,
       connectionStatus,
       metadataJson: metadata,

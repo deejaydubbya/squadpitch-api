@@ -188,20 +188,10 @@ export default {
       category: "data_source",
       priority: "core",
       status: "live",
-      connectionMode: "manual",
+      connectionMode: "managed",
       description: "Import and manage your property inventory — powers listing posts, open house alerts, and price drop content.",
       capabilities: ["imports", "content_source", "data_enrichment"],
-      manualSetup: {
-        fields: [
-          {
-            key: "sourceUrl",
-            label: "Listings Page URL",
-            type: "url",
-            required: true,
-            placeholder: "https://yoursite.com/listings",
-          },
-        ],
-      },
+      managedIn: "content_assets",
     },
     {
       providerKey: "open_house_lead_capture",
