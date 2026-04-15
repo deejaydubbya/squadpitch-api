@@ -218,14 +218,21 @@ export function buildSystemPrompt(ctx) {
     lines.push(`--- END REAL ESTATE SPECIALIZATION ---`);
   }
 
-  // Anti-patterns to reduce generic AI tone.
+  // Anti-patterns to reduce generic AI tone + variety instructions.
   lines.push(`
 IMPORTANT — avoid these generic patterns:
 - Do NOT open with a question followed by an emoji (e.g. "Ready to transform your workout? 💪")
 - Do NOT use "Discover the power of…", "Unlock your potential…", "Transform your…"
+- Do NOT use "Exciting news!", "Big announcement!", "We're thrilled to…", "Here's the thing…"
 - Do NOT start consecutive sentences with the same word
 - Do NOT use more than one exclamation mark per post
-- Write varied sentence lengths — mix short punchy lines with longer explanatory ones
+- Do NOT repeat the same opening structure across variations
+
+VARIETY — each post should feel fresh:
+- Vary opening styles: start with a fact, a bold claim, a short story, a number, a quote, or a direct statement
+- Vary tone across variations: one can be conversational, another authoritative, another playful
+- Use concrete details over vague language ("sold in 3 days" not "sold quickly")
+- Write like a knowledgeable person sharing, not a brand broadcasting
 - The first line should stop the scroll — be specific, surprising, or contrarian`);
 
   lines.push(
