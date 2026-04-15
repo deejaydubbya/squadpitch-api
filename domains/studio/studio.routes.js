@@ -82,7 +82,7 @@ import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit, g
 import { getLimitsForTier } from "../billing/billing.constants.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { isProviderBudgetExceeded, getServiceStatus, getThrottlePolicy } from "../billing/serviceHealth.service.js";
-import { redisGet, redisSet, redisDel } from "../../redis.js";
+import { redisGet, redisSet, redisSetNX, redisDel } from "../../redis.js";
 import crypto from "crypto";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
@@ -109,19 +109,23 @@ import { parseDocument, isAcceptedFile } from "./documentParser.js";
 export const studioRouter = express.Router();
 
 const BASE = "/api/v1";
-const DEDUP_TTL = 10; // seconds — prevents double-click duplicate AI calls
+const DEDUP_TTL = 30; // seconds — prevents double-click duplicate AI calls (auto-expires as safety net)
 
 /**
  * Acquire a short-lived Redis lock to prevent duplicate AI calls.
- * Returns true if the lock was acquired (proceed), false if already in-flight.
+ * Returns the lock key if acquired (so caller can release it), or null if already in-flight.
  */
 async function acquireDedup(userId, action, body) {
   const hash = crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 16);
   const key = `sp:dedup:${userId}:${action}:${hash}`;
-  const existing = await redisGet(key);
-  if (existing) return false;
-  await redisSet(key, "1", DEDUP_TTL);
-  return true;
+  // Atomic set-if-not-exists via NX — avoids GET/SET race condition
+  const acquired = await redisSetNX(key, "1", DEDUP_TTL);
+  return acquired ? key : null;
+}
+
+/** Release a dedup lock early (on success or failure). */
+async function releaseDedup(key) {
+  if (key) await redisDel(key);
 }
 
 // Ownership middleware: verifies the client belongs to the authenticated user.
@@ -1160,12 +1164,12 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
 
     // Idempotency: reject duplicate requests within 10s window
-    const canProceed = await acquireDedup(req.user.id, "generate", parsed.data);
-    if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "A generation is already in progress. Please wait.");
+    const dedupKey = await acquireDedup(req.user.id, "generate", parsed.data);
+    if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A generation is already in progress. Please wait.");
 
     // Usage limit check
     const allowed = await checkUsageLimit(req.user.id, "posts");
-    if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more.");
+    if (!allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more."); }
 
     const actorSub = getAuth0Sub(req);
     const { dataItemId, blueprintId, ...genData } = parsed.data;
@@ -1177,6 +1181,7 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
       userId: req.user.id,
     });
 
+    await releaseDedup(dedupKey);
     await incrementUsage(req.user.id, "posts");
 
     // Fire-and-forget: record activity
@@ -1217,10 +1222,11 @@ studioRouter.post(`${BASE}/workspaces/:id/ideas`, requireClientOwner, async (req
     // Global budget check
     if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
 
-    const canProceed = await acquireDedup(req.user.id, "ideas", { clientId: req.params.id });
-    if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "Idea generation is already in progress. Please wait.");
+    const dedupKey = await acquireDedup(req.user.id, "ideas", { clientId: req.params.id });
+    if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "Idea generation is already in progress. Please wait.");
 
     const ideas = await service.generateContentIdeas(req.params.id, { userId: req.user.id });
+    await releaseDedup(dedupKey);
     res.json({ ideas });
   } catch (err) {
     next(err);
@@ -1637,12 +1643,12 @@ studioRouter.post(
       // Global budget check
       if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI image generation is temporarily unavailable due to budget limits. Please try again later.");
 
-      const canProceed = await acquireDedup(req.user.id, "image", parsed.data);
-      if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "An image generation is already in progress. Please wait.");
+      const dedupKey = await acquireDedup(req.user.id, "image", parsed.data);
+      if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "An image generation is already in progress. Please wait.");
 
       // Usage limit check
       const allowed = await checkUsageLimit(req.user.id, "images");
-      if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly image generation limit. Upgrade your plan for more.");
+      if (!allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly image generation limit. Upgrade your plan for more."); }
 
       const actorSub = getAuth0Sub(req);
       const asset = await service.enqueueGeneration({
@@ -1651,6 +1657,7 @@ studioRouter.post(
         userId: req.user.id,
       });
 
+      await releaseDedup(dedupKey);
       await incrementUsage(req.user.id, "images");
 
       trackAiUsage({
@@ -1705,12 +1712,12 @@ studioRouter.post(
       // Global budget check
       if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI video generation is temporarily unavailable due to budget limits. Please try again later.");
 
-      const canProceed = await acquireDedup(req.user.id, "video", parsed.data);
-      if (!canProceed) return sendError(res, 429, "DUPLICATE_REQUEST", "A video generation is already in progress. Please wait.");
+      const dedupKey = await acquireDedup(req.user.id, "video", parsed.data);
+      if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A video generation is already in progress. Please wait.");
 
       // Usage limit check
       const allowed = await checkUsageLimit(req.user.id, "videos");
-      if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly video generation limit. Upgrade your plan for more.");
+      if (!allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly video generation limit. Upgrade your plan for more."); }
 
       const actorSub = getAuth0Sub(req);
       const asset = await service.enqueueVideoGeneration({
@@ -1719,6 +1726,7 @@ studioRouter.post(
         userId: req.user.id,
       });
 
+      await releaseDedup(dedupKey);
       await incrementUsage(req.user.id, "videos");
 
       trackAiUsage({

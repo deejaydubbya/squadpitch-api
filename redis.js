@@ -58,6 +58,20 @@ export async function redisSet(key, value, ttlSeconds) {
   }
 }
 
+/**
+ * Atomic set-if-not-exists with TTL. Returns true if the key was set, false if it already existed.
+ */
+export async function redisSetNX(key, value, ttlSeconds) {
+  try {
+    const r = getRedis();
+    if (!r) return true; // fail-open: allow the request if Redis is down
+    const result = await r.set(key, value, "EX", ttlSeconds, "NX");
+    return result === "OK";
+  } catch {
+    return true; // fail-open
+  }
+}
+
 export async function redisDel(key) {
   try {
     const r = getRedis();
