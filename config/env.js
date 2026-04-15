@@ -76,6 +76,11 @@ export const env = {
   GOOGLE_SHEETS_CLIENT_SECRET: process.env.GOOGLE_SHEETS_CLIENT_SECRET,
   GOOGLE_SHEETS_REDIRECT_URI: process.env.GOOGLE_SHEETS_REDIRECT_URI,
 
+  // Google Business Profile
+  GBP_CLIENT_ID: process.env.GBP_CLIENT_ID,
+  GBP_CLIENT_SECRET: process.env.GBP_CLIENT_SECRET,
+  GBP_REDIRECT_URI: process.env.GBP_REDIRECT_URI,
+
   // Dropbox (media import)
   DROPBOX_APP_KEY: process.env.DROPBOX_APP_KEY,
   DROPBOX_APP_SECRET: process.env.DROPBOX_APP_SECRET,

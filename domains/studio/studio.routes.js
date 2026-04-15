@@ -87,6 +87,7 @@ import crypto from "crypto";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
+import { crawlWebsite } from "./crawlWebsite.js";
 import { getStarterAngles, getIndustryTechStack, getRecommendationTemplates } from "../industry/industry.service.js";
 import { RE_CAPABILITY_MAP } from "../industry/realEstateContext.js";
 import {
@@ -2229,6 +2230,46 @@ studioRouter.post(
       }
 
       res.json({ listings: listings.length, lastSyncedAt, autopilotTriggered });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/tech-stack/idx_website/refresh
+ * Re-crawl the stored website URL and update metadata.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/tech-stack/idx_website/refresh`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const workspaceId = req.params.id;
+
+      const existing = await prisma.workspaceTechStackConnection.findUnique({
+        where: { workspaceId_providerKey: { workspaceId, providerKey: "idx_website" } },
+      });
+
+      const url = existing?.metadataJson?.url;
+      if (!url) {
+        return sendError(res, 400, "NO_URL", "No website URL configured. Set one up first via tech stack.");
+      }
+
+      const crawled = await crawlWebsite(url, { maxPages: 20 });
+      const lastSyncedAt = new Date().toISOString();
+
+      await upsertWorkspaceTechStackConnection(workspaceId, "idx_website", "connected", {
+        metadataJson: {
+          ...(existing.metadataJson ?? {}),
+          lastSyncedAt,
+          pageCount: crawled.pages.length,
+        },
+      });
+
+      invalidateClientContext(workspaceId).catch(() => {});
+
+      res.json({ pages: crawled.pages.length, lastSyncedAt });
     } catch (err) {
       next(err);
     }

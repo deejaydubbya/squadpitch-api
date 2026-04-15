@@ -75,10 +75,21 @@ export default {
       category: "data_source",
       priority: "core",
       status: "live",
-      connectionMode: "managed",
+      connectionMode: "manual",
       description: "Connect listing sources (MLS, IDX, websites, CSV) to power your property marketing.",
       capabilities: ["imports", "content_source", "data_enrichment"],
       managedIn: "content_assets",
+      manualSetup: {
+        fields: [
+          {
+            key: "url",
+            label: "Listing Website URL",
+            type: "url",
+            required: true,
+            placeholder: "https://yourwebsite.com/listings",
+          },
+        ],
+      },
     },
     {
       providerKey: "real_estate_crm",
@@ -128,9 +139,20 @@ export default {
       category: "data_enrichment",
       priority: "recommended",
       status: "live",
-      connectionMode: "oauth",
+      connectionMode: "manual",
       description: "Turn your Google reviews into social proof content and trust-building posts.",
       capabilities: ["testimonial_source", "content_source", "analytics_source"],
+      manualSetup: {
+        fields: [
+          {
+            key: "url",
+            label: "Google Business Profile URL",
+            type: "url",
+            required: true,
+            placeholder: "https://g.co/kgs/your-business",
+          },
+        ],
+      },
     },
     // ── Publish Your Content ──
     {
