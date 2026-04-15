@@ -32,6 +32,7 @@ import { loadRealEstateGenerationAssets } from "../industry/realEstateGeneration
 import { getRecentAssetCount } from "../industry/realEstateAssets.js";
 import { generateDraft } from "./generation/aiGenerationService.js";
 import { formatDraft } from "./draft.service.js";
+import { pickAngleForSource } from "./contentAngles.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AUTOPILOT_PROVIDER_KEY = "_autopilot_settings";
@@ -298,7 +299,7 @@ function channelGuidanceVariation(channel, baseGuidance, contentType) {
 
 // ── Multi-draft planner (v2) ─────────────────────────────────────────────
 
-/** @typedef {{ reasonCode: string, templateType: string, channel: string, dataItemId?: string, guidance: string, sourceType: string, triggerType: string }} DraftPlan */
+/** @typedef {{ reasonCode: string, templateType: string, channel: string, dataItemId?: string, guidance: string, sourceType: string, triggerType: string, contentAngle?: object }} DraftPlan */
 
 /**
  * Plan up to `maxPlans` diversified drafts based on coverage gaps and triggers.
@@ -309,6 +310,7 @@ function planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannel
   const usedChannels = new Set();
   const usedAssets = new Set();
   const usedTypes = new Set();
+  const usedAngles = new Set();
 
   const preferred = settings.preferredChannels?.length > 0 ? settings.preferredChannels : null;
   const channelOrder = ["FACEBOOK", "INSTAGRAM", "LINKEDIN", "X"];
@@ -333,10 +335,15 @@ function planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannel
 
   const addPlan = (plan) => {
     if (plans.length >= maxPlans) return false;
+    // Select content angle for strategic variety
+    const dataJson = plan.dataItemId && reAssets.bestListing ? reAssets.bestListing : null;
+    const angle = pickAngleForSource(plan.sourceType, dataJson, usedAngles);
+    plan.contentAngle = angle;
     plans.push(plan);
     usedChannels.add(plan.channel);
     if (plan.dataItemId) usedAssets.add(plan.dataItemId);
     usedTypes.add(plan.sourceType);
+    usedAngles.add(angle.key);
     return true;
   };
 
@@ -477,6 +484,7 @@ async function executeDraftPlan(workspaceId, plan, runMode) {
       createdBy: "system:autopilot",
       dataItemId: plan.dataItemId,
       recommendationId: `autopilot_${plan.reasonCode}`,
+      contentAngle: plan.contentAngle,
     });
 
     const autopilotWarnings = [
@@ -486,6 +494,7 @@ async function executeDraftPlan(workspaceId, plan, runMode) {
       `autopilot_channel: ${plan.channel}`,
       `autopilot_mode: ${runMode}`,
       ...(plan.dataItemId ? [`autopilot_asset: ${plan.dataItemId}`] : []),
+      ...(plan.contentAngle ? [`autopilot_angle: ${plan.contentAngle.key}`, `autopilot_angle_label: ${plan.contentAngle.label}`] : []),
     ];
 
     await prisma.draft.update({

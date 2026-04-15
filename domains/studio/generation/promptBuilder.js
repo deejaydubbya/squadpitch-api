@@ -451,13 +451,20 @@ function buildRealEstateFallback(reCtx, hasListing, hasReviews) {
  * system to produce right now — the kind of content, the channel, any
  * matched content bucket template, and the operator's guidance.
  */
-export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templateType, dataItem, blueprint, realEstateAssets }) {
+export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templateType, dataItem, blueprint, realEstateAssets, contentAngle }) {
   const { contentBuckets, channelSettings } = ctx;
   const lines = [];
 
   const kindInstruction = KIND_INSTRUCTIONS[kind] ?? KIND_INSTRUCTIONS.POST;
   lines.push(`Task: ${kindInstruction}`);
   lines.push(`Channel: ${channel}`);
+
+  // Content angle — strategic direction for this specific draft
+  if (contentAngle && contentAngle.guidance) {
+    lines.push(`\n--- CONTENT ANGLE: ${contentAngle.label} ---`);
+    lines.push(contentAngle.guidance);
+    lines.push(`--- END CONTENT ANGLE ---`);
+  }
 
   // Template type framing — gives the AI a clear content category
   if (templateType) {

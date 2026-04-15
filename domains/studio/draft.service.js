@@ -143,6 +143,10 @@ function parseSourceMeta(warnings, createdBy) {
       meta.autopilotAsset = w.slice("autopilot_asset:".length).trim();
     } else if (w.startsWith("autopilot_mode:")) {
       meta.autopilotMode = w.slice("autopilot_mode:".length).trim();
+    } else if (w.startsWith("autopilot_angle_label:")) {
+      meta.contentAngle = w.slice("autopilot_angle_label:".length).trim();
+    } else if (w.startsWith("autopilot_angle:")) {
+      meta.contentAngleKey = w.slice("autopilot_angle:".length).trim();
     }
   }
 

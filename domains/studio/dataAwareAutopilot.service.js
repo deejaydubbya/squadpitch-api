@@ -5,48 +5,7 @@
 
 import { getSmartOpportunities } from "./contentOpportunity.service.js";
 import { getSmartBlueprintForItem } from "./dataAnalytics.service.js";
-
-// ── Content angles for batch diversification ─────────────────────────
-
-const CONTENT_ANGLES = [
-  {
-    key: "spotlight",
-    label: "Property Spotlight",
-    guidance: "Write a property spotlight post — highlight the standout features and what makes this listing special.",
-  },
-  {
-    key: "buyer_tip",
-    label: "Buyer Guidance",
-    guidance: "Write a buyer-focused post — position this as a tip, opportunity, or smart move for potential buyers.",
-  },
-  {
-    key: "neighborhood",
-    label: "Neighborhood & Lifestyle",
-    guidance: "Write a neighborhood-focused post — highlight the area, local lifestyle, and community context around this property.",
-  },
-  {
-    key: "market_insight",
-    label: "Market Insight",
-    guidance: "Write a market insight post — use this data to share a timely observation about the local market or real estate trends.",
-  },
-  {
-    key: "trust",
-    label: "Trust & Social Proof",
-    guidance: "Write a trust-building post — use this content to build credibility and social proof with your audience.",
-  },
-];
-
-/**
- * Assign diversified content angles to a batch of suggestions.
- * Ensures no two suggestions in the same batch share the same angle.
- */
-function assignAngles(count) {
-  const angles = [];
-  for (let i = 0; i < count; i++) {
-    angles.push(CONTENT_ANGLES[i % CONTENT_ANGLES.length]);
-  }
-  return angles;
-}
+import { assignAngleBatch, pickAngleForSource } from "./contentAngles.js";
 
 // ── Reasoning ────────────────────────────────────────────────────────
 
@@ -88,8 +47,8 @@ export async function previewAutopilot(
     excludeDataItemIds,
   });
 
-  // Assign diversified angles across the batch
-  const angles = assignAngles(opportunities.length);
+  // Assign diversified angles across the batch using shared angle system
+  const angles = assignAngleBatch(opportunities.length);
 
   const suggestions = await Promise.all(
     opportunities.map(async (opp, index) => {
@@ -144,8 +103,8 @@ export async function executeAutopilot(
   }
 ) {
   const results = [];
-  // Re-assign angles for diversified generation guidance
-  const angles = assignAngles(suggestions.length);
+  // Re-assign angles for diversified generation guidance using shared angle system
+  const angles = assignAngleBatch(suggestions.length);
 
   for (let i = 0; i < suggestions.length; i++) {
     const suggestion = suggestions[i];
@@ -170,6 +129,7 @@ export async function executeAutopilot(
         dataItemId: suggestion.dataItem.id,
         blueprintId: suggestion.blueprint.id,
         userId,
+        contentAngle: angle,
       });
 
       await incrementUsage(userId, "posts");

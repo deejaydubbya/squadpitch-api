@@ -125,6 +125,7 @@ export async function generateDraft({
   blueprintId,
   userId,
   recommendationId,
+  contentAngle,
 }) {
   const ctx = await loadClientGenerationContext(clientId);
 
@@ -181,6 +182,7 @@ export async function generateDraft({
     dataItem,
     blueprint,
     realEstateAssets,
+    contentAngle,
   });
   const responseFormat = buildResponseFormat();
 
