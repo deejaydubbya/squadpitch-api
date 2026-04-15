@@ -139,20 +139,9 @@ export default {
       category: "data_enrichment",
       priority: "recommended",
       status: "live",
-      connectionMode: "manual",
+      connectionMode: "oauth",
       description: "Turn your Google reviews into social proof content and trust-building posts.",
       capabilities: ["testimonial_source", "content_source", "analytics_source"],
-      manualSetup: {
-        fields: [
-          {
-            key: "url",
-            label: "Google Business Profile URL",
-            type: "url",
-            required: true,
-            placeholder: "https://g.co/kgs/your-business",
-          },
-        ],
-      },
     },
     // ── Publish Your Content ──
     {
