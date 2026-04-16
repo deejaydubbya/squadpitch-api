@@ -10,10 +10,20 @@ primary_region = "ord"
   auto_start_machines = true
   min_machines_running = 1
 
+  # Health check — Fly restarts the machine if this fails 3 times in a row.
+  # Catches hung processes, OOM zombies, and dead DB connections.
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
 [env]
   NODE_ENV = "production"
   ENABLE_WORKERS = "true"
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+  size = "performance-1x"
+  memory = "2gb"
+  swap_size_mb = 512

@@ -595,3 +595,139 @@ export function buildResponseFormat() {
     json_schema: CONTENT_OUTPUT_SCHEMA,
   };
 }
+
+// ── Listing Campaign ────────────────────────────────────────────────────
+
+/**
+ * JSON schema for multi-output listing campaign response.
+ * A single AI call returns all 4 content types.
+ */
+export const CAMPAIGN_OUTPUT_SCHEMA = {
+  name: "listing_campaign",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      instagramCaption: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          body: { type: "string", description: "Instagram caption text." },
+          hashtags: { type: "array", items: { type: "string" }, description: "Hashtags without leading '#'." },
+          cta: { type: "string", description: "Call to action." },
+        },
+        required: ["body", "hashtags", "cta"],
+      },
+      facebookPost: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          body: { type: "string", description: "Facebook post text." },
+          hashtags: { type: "array", items: { type: "string" }, description: "Hashtags without leading '#'." },
+          cta: { type: "string", description: "Call to action." },
+        },
+        required: ["body", "hashtags", "cta"],
+      },
+      listingDescription: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          body: { type: "string", description: "Professional MLS-style listing description." },
+        },
+        required: ["body"],
+      },
+      emailPromo: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          subject: { type: "string", description: "Email subject line." },
+          body: { type: "string", description: "Email body text." },
+          cta: { type: "string", description: "Call to action." },
+        },
+        required: ["subject", "body", "cta"],
+      },
+    },
+    required: ["instagramCaption", "facebookPost", "listingDescription", "emailPromo"],
+  },
+};
+
+/**
+ * Build the user prompt for a listing campaign. Injects property details
+ * and asks for 4 distinct content pieces with channel-specific instructions.
+ */
+export function buildCampaignUserPrompt(ctx, listingData) {
+  const lines = [];
+
+  // Property details
+  lines.push(`--- PROPERTY DETAILS ---`);
+  if (listingData.address) lines.push(`Address: ${listingData.address}`);
+  if (listingData.price) lines.push(`Price: $${Number(listingData.price).toLocaleString()}`);
+
+  const specs = [];
+  if (listingData.beds) specs.push(`${listingData.beds} bed`);
+  if (listingData.baths) specs.push(`${listingData.baths} bath`);
+  if (listingData.sqft) specs.push(`${Number(listingData.sqft).toLocaleString()} sq ft`);
+  if (specs.length > 0) lines.push(`Specs: ${specs.join(" / ")}`);
+
+  if (listingData.propertyType) lines.push(`Property type: ${listingData.propertyType}`);
+  if (listingData.description) lines.push(`Description: ${listingData.description}`);
+  if (listingData.highlights) lines.push(`Notable features: ${listingData.highlights}`);
+  if (listingData.neighborhood) lines.push(`Neighborhood: ${listingData.neighborhood}`);
+  if (listingData.cta) lines.push(`Preferred CTA: ${listingData.cta}`);
+  if (listingData.agentName) lines.push(`Agent: ${listingData.agentName}`);
+  if (listingData.brokerage) lines.push(`Brokerage: ${listingData.brokerage}`);
+  lines.push(`--- END PROPERTY DETAILS ---`);
+
+  // Campaign instructions
+  lines.push(`
+Generate a complete listing marketing campaign with 4 distinct content pieces. Use the property details above as the foundation — do not invent features not listed.
+
+1. INSTAGRAM CAPTION:
+   - Short, punchy, scroll-stopping hook in the first line
+   - Highlight 2-3 most compelling features
+   - Keep under 150 words
+   - Include 15-20 relevant hashtags (mix of broad + local + real estate)
+   - Soft CTA (DM, link in bio, comment)
+
+2. FACEBOOK POST:
+   - Longer storytelling format, 150-250 words
+   - Community-focused — reference neighborhood, lifestyle, local appeal
+   - Conversational tone that feels personal, not corporate
+   - 3-5 hashtags max
+   - CTA that encourages engagement (comment, share, message)
+
+3. LISTING DESCRIPTION:
+   - Professional MLS-style description, 150-300 words
+   - Feature-focused: lead with the most impressive detail
+   - Mention room flow, finishes, upgrades, lot details
+   - End with location benefits and lifestyle appeal
+   - No hashtags, no CTA — just the description
+
+4. EMAIL PROMO:
+   - Compelling subject line (under 60 chars, no spam triggers)
+   - Body: 100-200 words, benefit-driven, personal tone
+   - Build urgency without being pushy
+   - Clear CTA (schedule showing, reply for details, etc.)
+
+RULES:
+- Use REAL details from the property — never invent or assume
+- No cliches: avoid "dream home", "don't miss out", "act now", "stunning", "gorgeous"
+- Each piece should feel distinct — not just reformatted versions of the same text
+- Soft CTAs only — never aggressive or high-pressure
+- Match the local market tone — sound like a knowledgeable local agent`);
+
+  lines.push("\nRespond with JSON matching the listing_campaign schema.");
+
+  return lines.join("\n");
+}
+
+/**
+ * Return the OpenAI `response_format` for a listing campaign request.
+ */
+export function buildCampaignResponseFormat() {
+  return {
+    type: "json_schema",
+    json_schema: CAMPAIGN_OUTPUT_SCHEMA,
+  };
+}

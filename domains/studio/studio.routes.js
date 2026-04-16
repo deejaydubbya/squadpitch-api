@@ -2643,6 +2643,102 @@ studioRouter.post(
   }
 );
 
+// ── Listing Campaign ──────────────────────────────────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/listing-campaign/generate
+ * Generate a full listing marketing campaign (Instagram, Facebook, listing description, email)
+ * from property data in a single AI call.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listing-campaign/generate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { propertyData } = req.body;
+      if (!propertyData || typeof propertyData !== "object") {
+        return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
+      }
+
+      // Service health pre-flight
+      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+
+      // Usage limit check
+      const allowed = await checkUsageLimit(req.user.id, "posts");
+      if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "You've reached your generation limit. Upgrade to generate more.");
+
+      // Dedup
+      const dedupKey = await acquireDedup(req.user.id, "listing-campaign", propertyData);
+      if (!dedupKey) return sendError(res, 409, "DUPLICATE_REQUEST", "Campaign generation already in progress.");
+
+      try {
+        const clientId = req.params.id;
+        const actorSub = getAuth0Sub(req);
+
+        // Save property as a data item via existing ingestion
+        const listingResult = await listingIngestion.ingestManualListing(clientId, {
+          address: propertyData.address || "",
+          price: propertyData.price ? Number(propertyData.price) : undefined,
+          beds: propertyData.beds ? Number(propertyData.beds) : undefined,
+          baths: propertyData.baths ? Number(propertyData.baths) : undefined,
+          sqft: propertyData.sqft ? Number(propertyData.sqft) : undefined,
+          description: propertyData.description || "",
+          highlights: propertyData.highlights ? propertyData.highlights.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          propertyType: propertyData.propertyType || undefined,
+        });
+
+        // Load generation context + RE assets
+        const { loadClientGenerationContext } = await import("./generation/clientOrchestrator.js");
+        const { buildSystemPrompt, buildCampaignUserPrompt, buildCampaignResponseFormat } = await import("./generation/promptBuilder.js");
+        const { generateStructuredContent } = await import("./generation/openai.provider.js");
+        const { loadRealEstateGenerationAssets } = await import("../industry/realEstateGeneration.js");
+
+        const ctx = await loadClientGenerationContext(clientId);
+
+        let realEstateAssets = null;
+        if (ctx.realEstateContext) {
+          try { realEstateAssets = await loadRealEstateGenerationAssets(clientId, ctx.realEstateContext); } catch {}
+        }
+
+        const systemPrompt = buildSystemPrompt(ctx);
+        const userPrompt = buildCampaignUserPrompt(ctx, propertyData);
+        const responseFormat = buildCampaignResponseFormat();
+
+        const result = await generateStructuredContent({
+          systemPrompt,
+          userPrompt,
+          responseFormat,
+          taskType: "generation",
+          temperature: 0.7,
+        });
+
+        // Track usage
+        if (req.user.id) {
+          trackAiUsage({
+            userId: req.user.id,
+            clientId,
+            actionType: "GENERATE_CAMPAIGN",
+            model: result.model,
+            promptTokens: result.usage?.prompt_tokens ?? 0,
+            completionTokens: result.usage?.completion_tokens ?? 0,
+          });
+        }
+        await incrementUsage(req.user.id, "posts");
+
+        res.json({
+          dataItemId: listingResult.dataItem?.id ?? null,
+          campaign: result.parsed,
+        });
+      } finally {
+        await releaseDedup(dedupKey);
+      }
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── Google Business Profile Integration ───────────────────────────────────
 
 /**
@@ -2949,6 +3045,54 @@ studioRouter.get(
           lastError: crm.lastError,
         } : { status: "not_connected" },
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Integration Requests ──────────────────────────────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/request
+ * Record a request for a coming-soon integration. One per workspace per provider.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/request`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { providerKey, providerLabel } = req.body;
+      if (!providerKey || typeof providerKey !== "string") {
+        return validationError(res, [{ path: ["providerKey"], message: "providerKey is required" }]);
+      }
+
+      const clientId = req.params.id;
+
+      // Check for existing request to prevent duplicates
+      const existing = await prisma.workspaceTechStackConnection.findUnique({
+        where: { workspaceId_providerKey: { workspaceId: clientId, providerKey } },
+      });
+
+      if (existing && existing.connectionStatus === "requested") {
+        return res.json({ alreadyRequested: true });
+      }
+
+      // Only allow requests for non-connected providers
+      if (existing && existing.connectionStatus === "connected") {
+        return res.json({ alreadyConnected: true });
+      }
+
+      await upsertWorkspaceTechStackConnection(clientId, providerKey, "requested", {
+        metadataJson: {
+          providerLabel: providerLabel || providerKey,
+          requestedAt: new Date().toISOString(),
+          requestedBy: getAuth0Sub(req),
+          source: "crm_integration_request",
+        },
+      });
+
+      res.json({ requested: true });
     } catch (err) {
       next(err);
     }

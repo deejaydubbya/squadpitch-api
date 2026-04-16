@@ -111,10 +111,18 @@ export async function getDashboardRecommendations(clientId) {
     realEstateContext = await resolveRealEstateContext(clientId).catch(() => null);
   }
 
-  // Count unused data items (usageCount = 0)
-  const unusedDataCount = await prisma.workspaceDataItem.count({
-    where: { clientId, status: "ACTIVE", usageCount: 0 },
-  });
+  // Count unused data items (usageCount = 0) + load top 3 for specifics
+  const [unusedDataCount, topUnusedItems] = await Promise.all([
+    prisma.workspaceDataItem.count({
+      where: { clientId, status: "ACTIVE", usageCount: 0 },
+    }),
+    prisma.workspaceDataItem.findMany({
+      where: { clientId, status: "ACTIVE", usageCount: 0 },
+      orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
+      take: 3,
+      select: { id: true, type: true, title: true, summary: true, dataJson: true },
+    }),
+  ]);
 
   // Cadence awareness — days since last generation
   const lastGeneratedAt = lastGeneratedDraft?.createdAt ?? null;
@@ -315,9 +323,21 @@ export async function getDashboardRecommendations(clientId) {
 
   // ── Real estate asset-aware recommendations ───────────────────────
   let reAssets = null;
+  let reviewItems = null;
   if (industryKey === "real_estate" && realEstateContext) {
     try {
       reAssets = await loadRealEstateGenerationAssets(clientId, realEstateContext);
+    } catch {
+      // Non-critical
+    }
+
+    // Load raw testimonial items for specific review recommendations
+    try {
+      reviewItems = await prisma.workspaceDataItem.findMany({
+        where: { clientId, type: "TESTIMONIAL", status: "ACTIVE" },
+        orderBy: [{ usageCount: "asc" }, { createdAt: "desc" }],
+        take: 5,
+      });
     } catch {
       // Non-critical
     }
@@ -372,14 +392,51 @@ export async function getDashboardRecommendations(clientId) {
         }
       }
 
-      // Review-based recommendation
+      // Milestone / Just Sold recommendation
+      if (reAssets.bestMilestone && reAssets.bestMilestoneSource) {
+        const ms = reAssets.bestMilestone;
+        const msSource = reAssets.bestMilestoneSource;
+        const msLabel = ms.address || ms.achievement || msSource.title || "a recent sale";
+        const targetChannel = hasFB ? "FACEBOOK" : hasIG ? "INSTAGRAM" : enabledChannels[0]?.channel;
+        if (targetChannel) {
+          recommendations.push({
+            id: "re_milestone_post",
+            title: `Celebrate your sale at ${msLabel}`,
+            description: ms.price
+              ? `Just Sold posts build credibility and attract new clients. This ${ms.dealType?.toLowerCase() || "sale"} closed${ms.closingDate ? ` on ${ms.closingDate}` : ""}.`
+              : `Create a Just Sold post to celebrate this milestone and attract new clients.`,
+            reason: "Closed deal posts are high-performing content in real estate.",
+            action: "generate_post",
+            actionLabel: "Create Just Sold Post",
+            priority: 93,
+            category: "real_estate",
+            metadata: {
+              templateType: "milestone_post",
+              channel: targetChannel,
+              dataItemId: msSource.id,
+              guidance: `Create a "Just Sold" celebration post for the property at ${msLabel}. Emphasize success and invite new clients.`,
+              recommendationId: "re_milestone_post",
+            },
+          });
+        }
+      }
+
+      // Review-based recommendation — link to specific review
       if (reAssets.reviewCount > 0) {
         const targetChannel = hasIG ? "INSTAGRAM" : hasFB ? "FACEBOOK" : enabledChannels[0]?.channel;
         if (targetChannel) {
+          // Find least-used testimonial with a quote
+          const bestReview = reviewItems?.find((r) => r.usageCount === 0) ?? reviewItems?.[0] ?? null;
+          const reviewQuote = bestReview?.dataJson?.quote || bestReview?.summary || null;
+          const reviewAuthor = bestReview?.dataJson?.author || bestReview?.dataJson?.name || null;
           recommendations.push({
             id: "re_testimonial_post",
-            title: "Turn a client review into a post",
-            description: `You have ${reAssets.reviewCount} client review${reAssets.reviewCount === 1 ? "" : "s"}. Testimonial posts build trust and credibility.`,
+            title: reviewAuthor
+              ? `Share ${reviewAuthor}'s review`
+              : "Turn a client review into a post",
+            description: reviewQuote
+              ? `"${reviewQuote.length > 80 ? reviewQuote.slice(0, 77) + "..." : reviewQuote}" — build trust with social proof.`
+              : `You have ${reAssets.reviewCount} client review${reAssets.reviewCount === 1 ? "" : "s"}. Testimonial posts build trust and credibility.`,
             reason: "Real client reviews are powerful social proof for real estate.",
             action: "generate_post",
             actionLabel: "Create Testimonial Post",
@@ -388,7 +445,10 @@ export async function getDashboardRecommendations(clientId) {
             metadata: {
               templateType: "client_testimonial",
               channel: targetChannel,
-              guidance: "Create a testimonial post using a real client review. Quote accurately and build trust.",
+              dataItemId: bestReview?.id ?? undefined,
+              guidance: reviewQuote
+                ? `Create a social proof post featuring this client review: "${reviewQuote}"${reviewAuthor ? ` from ${reviewAuthor}` : ""}. Build trust and encourage inquiries.`
+                : "Create a testimonial post using a real client review. Quote accurately and build trust.",
               recommendationId: "re_testimonial_post",
             },
           });
@@ -472,6 +532,17 @@ export async function getDashboardRecommendations(clientId) {
     lastAutopilotAt: lastAutopilotDraft?.createdAt?.toISOString() ?? null,
     lastGeneratedAt: lastGeneratedAt?.toISOString() ?? null,
     daysSinceLastGeneration,
+    // Top unused items for specific Create Content recommendations
+    topUnusedItems: topUnusedItems.map((item) => ({
+      id: item.id,
+      type: item.type,
+      title: item.title,
+      summary: item.summary,
+      address: item.dataJson?.address ?? null,
+      quote: item.dataJson?.quote ?? item.dataJson?.testimonial ?? null,
+      author: item.dataJson?.author ?? item.dataJson?.name ?? null,
+      achievement: item.dataJson?.achievement ?? null,
+    })),
   };
 
   // Real estate asset summary + autopilot status
@@ -480,6 +551,7 @@ export async function getDashboardRecommendations(clientId) {
       Promise.resolve({
         listingCount: reAssets?.listingCount ?? realEstateContext?.assets?.listingCount ?? 0,
         reviewCount: reAssets?.reviewCount ?? realEstateContext?.assets?.reviewCount ?? 0,
+        milestoneCount: reAssets?.milestoneCount ?? 0,
         listingFeedConnected: realEstateContext?.techStack?.listingFeed?.status === "connected",
         websiteConnected: realEstateContext?.techStack?.website?.status === "connected",
         availableChannels: realEstateContext?.publishing?.availableChannels ?? [],

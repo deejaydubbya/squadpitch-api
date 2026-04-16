@@ -6,7 +6,7 @@ import pinoHttp from "pino-http";
 import { rateLimit } from "express-rate-limit";
 
 import { env, bootEnvWarnings } from "./config/env.js";
-import { prisma } from "./prisma.js";
+import { prisma, isConnected } from "./prisma.js";
 import { getRedis } from "./redis.js";
 
 // Domain routers
@@ -106,8 +106,10 @@ app.use(
 // ===== Routes =====
 
 // Health check — no auth
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok", service: "squadpitch-api" });
+app.get("/health", async (_req, res) => {
+  const dbOk = await isConnected();
+  const status = dbOk ? "ok" : "degraded";
+  res.status(dbOk ? 200 : 503).json({ status, service: "squadpitch-api", db: dbOk });
 });
 
 // Public notification routes (no auth) — VAPID key
@@ -266,3 +268,15 @@ const shutdown = (sig) => async () => {
 };
 process.on("SIGINT", shutdown("SIGINT"));
 process.on("SIGTERM", shutdown("SIGTERM"));
+
+// ── Crash handlers ──────────────────────────────────────────────────────
+// Prevent silent process death from unhandled promise rejections (common
+// with stale DB connections in fire-and-forget paths like workers).
+process.on("unhandledRejection", (reason) => {
+  console.error("[PROCESS] Unhandled rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[PROCESS] Uncaught exception — shutting down:", err);
+  // Give logs time to flush, then exit (systemd/Fly will restart us)
+  setTimeout(() => process.exit(1), 1000);
+});

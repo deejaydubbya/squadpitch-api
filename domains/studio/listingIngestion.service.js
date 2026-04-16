@@ -1,5 +1,5 @@
-// Listing Ingestion Service — unified pipeline for importing listings
-// from manual entry, CSV, URL scraping, and future MLS/IDX integrations.
+// Property Ingestion Service — unified pipeline for importing property data
+// from manual entry, CSV, and best-effort URL extraction.
 //
 // All sources → ONE normalized listing model → WorkspaceDataItems (type=CUSTOM)
 //

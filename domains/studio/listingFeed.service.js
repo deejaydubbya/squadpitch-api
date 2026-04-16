@@ -1,10 +1,10 @@
-// Listing Feeds Service — multi-source listing management.
+// Property Sources Service — multi-source property data management.
 //
-// Each listing source is a WorkspaceDataSource record with sync metadata
+// Each property source is a WorkspaceDataSource record with refresh metadata
 // in the `config` JSON field. All sources feed the same canonical listing
 // pipeline (listingIngestion.service.js).
 //
-// Supported source types: URL, CSV, MANUAL (future: MLS, API)
+// Supported source types: URL, CSV, MANUAL
 //
 // Config shape:
 //   { sourceUrl, label, syncStatus, lastSyncedAt, lastError, isEnabled, listingCount }
