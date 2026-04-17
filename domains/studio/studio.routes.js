@@ -2000,7 +2000,15 @@ studioRouter.post(
       const result = await extractFromImage({ base64: asset.url, prompt });
       const suggestedTags = Array.isArray(result?.parsed?.tags) ? result.parsed.tags : [];
 
-      res.json({ suggestedTags });
+      // Merge with existing tags and save directly so callers don't need a
+      // second round-trip.  This fixes the multi-upload race where only the
+      // last mutation's onSuccess callback fired.
+      const merged = Array.from(new Set([...(asset.tags ?? []), ...suggestedTags]));
+      if (merged.length > 0) {
+        await service.updateAssetTags(req.params.assetId, merged);
+      }
+
+      res.json({ suggestedTags, savedTags: merged });
     } catch (err) {
       next(err);
     }
