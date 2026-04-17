@@ -729,7 +729,7 @@ export function buildResponseFormat() {
 
 /**
  * JSON schema for multi-post campaign sequence response.
- * A single AI call returns 3–6 coordinated posts across days/channels.
+ * A single AI call returns 1–10 coordinated posts across days/channels.
  */
 export const CAMPAIGN_OUTPUT_SCHEMA = {
   name: "listing_campaign",
@@ -744,7 +744,7 @@ export const CAMPAIGN_OUTPUT_SCHEMA = {
       },
       posts: {
         type: "array",
-        description: "3–6 coordinated posts forming the campaign sequence.",
+        description: "Coordinated marketing posts for the campaign.",
         items: {
           type: "object",
           additionalProperties: false,
@@ -771,6 +771,23 @@ export const CAMPAIGN_OUTPUT_SCHEMA = {
               type: "string",
               description: "The full post/caption text.",
             },
+            bodyAlt: {
+              type: "string",
+              description: "An alternate version of the body text with a different angle or hook",
+            },
+            hookScore: {
+              type: "integer",
+              description: "Quality score 0-100 for the opening hook of this post",
+            },
+            imageHint: {
+              type: "string",
+              description: "Label of the suggested image for this post (e.g. 'exterior', 'kitchen')",
+            },
+            slotType: {
+              type: "string",
+              enum: ["social_post", "email", "listing_description"],
+              description: "The type of content slot",
+            },
             hashtags: {
               type: "array",
               items: { type: "string" },
@@ -785,7 +802,7 @@ export const CAMPAIGN_OUTPUT_SCHEMA = {
               description: "Email subject line. Empty string if not an email post.",
             },
           },
-          required: ["campaignDay", "channel", "angle", "label", "body", "hashtags", "cta", "subject"],
+          required: ["campaignDay", "channel", "angle", "label", "body", "bodyAlt", "hookScore", "imageHint", "slotType", "hashtags", "cta", "subject"],
         },
       },
     },
@@ -838,7 +855,7 @@ const CAMPAIGN_TYPE_INSTRUCTIONS = {
 - Paint a picture of life in this home and neighborhood`,
 };
 
-export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageContext = null) {
+export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageContext = null, slots = null) {
   const lines = [];
 
   // Property details
@@ -871,7 +888,17 @@ export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageCon
       lines.push(`${idx + 1}. ${label}${desc}`);
     });
     lines.push(`--- END AVAILABLE IMAGES ---`);
-    lines.push(`Reference the available images in each post where appropriate. Assign image labels to posts via the "imageHint" field (use the label like "exterior", "kitchen", etc.) so the feature image matches the post's angle.`);
+    lines.push(`Reference the available images in each post where appropriate.`);
+  }
+
+  // Custom slots section (when provided by the user)
+  if (Array.isArray(slots) && slots.length > 0) {
+    lines.push(`\nCAMPAIGN STRUCTURE:
+Generate exactly ${slots.length} posts matching these slot specifications:
+
+${slots.map((s, i) => `${i + 1}. Day ${s.campaignDay}: "${s.label}" on ${s.channel}${s.slotType ? ` (${s.slotType})` : ''}${s.angle ? ` — angle: ${s.angle}` : ''}`).join('\n')}
+
+Each post must match its slot's channel, campaignDay, and label. Use the label as the creative direction for that post's angle and content.`);
   }
 
   // Campaign type instructions
@@ -882,7 +909,21 @@ export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageCon
   }
 
   // Multi-post campaign instructions
-  lines.push(`
+  if (Array.isArray(slots) && slots.length > 0) {
+    // Slots provided — use custom structure, skip default post sequence
+    lines.push(`
+Generate a multi-post marketing campaign sequence. Use the property details above as the foundation — do not invent features not listed.
+
+PLATFORM GUIDELINES:
+- Instagram: Short, punchy, 15-20 hashtags, soft CTA (DM, link in bio)
+- Facebook: Longer storytelling, 3-5 hashtags, community engagement CTA
+- LinkedIn: Professional tone, market insights, 3-5 hashtags
+- X: Concise, punchy, 2-3 hashtags max
+
+RULES:`);
+  } else {
+    // No slots — use default 5-post structure
+    lines.push(`
 Generate a multi-post marketing campaign sequence. Use the property details above as the foundation — do not invent features not listed.
 
 CAMPAIGN STRUCTURE:
@@ -921,14 +962,21 @@ PLATFORM GUIDELINES:
 - LinkedIn: Professional tone, market insights, 3-5 hashtags
 - X: Concise, punchy, 2-3 hashtags max
 
-RULES:
+RULES:`);
+  }
+
+  lines.push(`\
 - Use REAL details from the property — never invent or assume
 - No cliches: "dream home", "don't miss out", "act now", "stunning", "gorgeous"
 - Each post must feel distinct — different angle, different hook, different value
 - Soft CTAs only — never aggressive or high-pressure
 - Match the local market tone — sound like a knowledgeable local agent
 - Coordinate messaging across posts — they should build on each other
-- Set "subject" to empty string for non-email posts`);
+- Set "subject" to empty string for non-email posts
+- For each post, also generate a \`bodyAlt\` — an alternate version of the body text with a distinctly different hook or angle. The alternate should not be a minor rewording but a genuinely different take.
+- For each post, score the opening hook 0-100 in \`hookScore\` (100 = extremely compelling, 0 = generic).
+- For each post, suggest which property image best fits this post in \`imageHint\` — use the image labels provided above (e.g. 'exterior', 'kitchen'). If no images were provided, leave imageHint empty.
+- Set \`slotType\` to 'social_post' for all social media posts, 'email' for email content, 'listing_description' for MLS/website listings.`);
 
   lines.push("\nRespond with JSON matching the listing_campaign schema.");
 
@@ -942,6 +990,174 @@ export function buildCampaignResponseFormat() {
   return {
     type: "json_schema",
     json_schema: CAMPAIGN_OUTPUT_SCHEMA,
+  };
+}
+
+// ── Single Post Regeneration ──────────────────────────────────────────
+
+/**
+ * JSON schema for a single regenerated campaign post.
+ * Mirrors the post item shape inside CAMPAIGN_OUTPUT_SCHEMA.
+ */
+export const SINGLE_POST_SCHEMA = {
+  name: "single_campaign_post",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      post: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          campaignDay: {
+            type: "integer",
+            description: "Day number in the campaign sequence (1, 2, 3, etc.).",
+          },
+          channel: {
+            type: "string",
+            enum: ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "X"],
+            description: "Target platform for this post.",
+          },
+          angle: {
+            type: "string",
+            enum: ["promotional", "lifestyle", "urgency", "storytelling", "authority", "social_proof"],
+            description: "Content angle/purpose for this post.",
+          },
+          label: {
+            type: "string",
+            description: "Short label describing this post's purpose.",
+          },
+          body: {
+            type: "string",
+            description: "The full post/caption text.",
+          },
+          bodyAlt: {
+            type: "string",
+            description: "An alternate version of the body text with a different angle or hook",
+          },
+          hookScore: {
+            type: "integer",
+            description: "Quality score 0-100 for the opening hook of this post",
+          },
+          imageHint: {
+            type: "string",
+            description: "Label of the suggested image for this post (e.g. 'exterior', 'kitchen')",
+          },
+          slotType: {
+            type: "string",
+            enum: ["social_post", "email", "listing_description"],
+            description: "The type of content slot",
+          },
+          hashtags: {
+            type: "array",
+            items: { type: "string" },
+            description: "Hashtags without leading '#'. Empty array if not applicable.",
+          },
+          cta: {
+            type: "string",
+            description: "Call to action. Empty string if not applicable.",
+          },
+          subject: {
+            type: "string",
+            description: "Email subject line. Empty string if not an email post.",
+          },
+        },
+        required: ["campaignDay", "channel", "angle", "label", "body", "bodyAlt", "hookScore", "imageHint", "slotType", "hashtags", "cta", "subject"],
+      },
+    },
+    required: ["post"],
+  },
+};
+
+/**
+ * Build the user prompt for regenerating a single campaign post.
+ * Includes property details, the specific slot info, campaign context, and image context.
+ */
+export function buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, slot, campaignSummary, imageContext = null) {
+  const lines = [];
+
+  // Property details (same as full campaign prompt)
+  lines.push(`--- PROPERTY DETAILS ---`);
+  if (propertyData.address) lines.push(`Address: ${propertyData.address}`);
+  if (propertyData.price) lines.push(`Price: $${Number(propertyData.price).toLocaleString()}`);
+
+  const specs = [];
+  if (propertyData.beds) specs.push(`${propertyData.beds} bed`);
+  if (propertyData.baths) specs.push(`${propertyData.baths} bath`);
+  if (propertyData.sqft) specs.push(`${Number(propertyData.sqft).toLocaleString()} sq ft`);
+  if (specs.length > 0) lines.push(`Specs: ${specs.join(" / ")}`);
+
+  if (propertyData.propertyType) lines.push(`Property type: ${propertyData.propertyType}`);
+  if (propertyData.description) lines.push(`Description: ${propertyData.description}`);
+  if (propertyData.highlights) lines.push(`Notable features: ${propertyData.highlights}`);
+  if (propertyData.neighborhood) lines.push(`Neighborhood: ${propertyData.neighborhood}`);
+  if (propertyData.cta) lines.push(`Preferred CTA: ${propertyData.cta}`);
+  if (propertyData.agentName) lines.push(`Agent: ${propertyData.agentName}`);
+  if (propertyData.brokerage) lines.push(`Brokerage: ${propertyData.brokerage}`);
+  if (propertyData.campaignNotes) lines.push(`Special instructions: ${propertyData.campaignNotes}`);
+  lines.push(`--- END PROPERTY DETAILS ---`);
+
+  // Available images (optional)
+  if (Array.isArray(imageContext) && imageContext.length > 0) {
+    lines.push(`\n--- AVAILABLE PROPERTY IMAGES ---`);
+    imageContext.slice(0, 8).forEach((img, idx) => {
+      const label = (img.label || "photo").replace(/_/g, " ");
+      const desc = img.description ? ` — ${img.description}` : "";
+      lines.push(`${idx + 1}. ${label}${desc}`);
+    });
+    lines.push(`--- END AVAILABLE IMAGES ---`);
+    lines.push(`Reference the available images where appropriate.`);
+  }
+
+  // Campaign type instructions
+  const typeKey = campaignType ?? "just_listed";
+  const typeInstructions = CAMPAIGN_TYPE_INSTRUCTIONS[typeKey];
+  if (typeInstructions) {
+    lines.push(`\n${typeInstructions}\n`);
+  }
+
+  // Slot-specific instructions
+  lines.push(`--- SLOT TO REGENERATE ---`);
+  lines.push(`Channel: ${slot.channel}`);
+  lines.push(`Day: ${slot.day}`);
+  lines.push(`Label: ${slot.label}`);
+  if (slot.angle) lines.push(`Angle: ${slot.angle}`);
+  lines.push(`--- END SLOT ---`);
+
+  // Campaign context (other posts for coordination)
+  if (Array.isArray(campaignSummary) && campaignSummary.length > 0) {
+    lines.push(`\n--- OTHER POSTS IN THIS CAMPAIGN (for coordination — do NOT duplicate these) ---`);
+    campaignSummary.forEach((s) => lines.push(`- Day ${s.day || "?"}: ${s.label || "Untitled"} (${s.channel || "?"}) — ${s.angle || "?"}`));
+    lines.push(`--- END CAMPAIGN CONTEXT ---`);
+  }
+
+  lines.push(`
+Generate ONE replacement post for the slot described above. It must be fresh — do not repeat hooks or angles from the other posts in the campaign.
+
+RULES:
+- Use REAL details from the property — never invent or assume
+- No cliches: "dream home", "don't miss out", "act now", "stunning", "gorgeous"
+- Soft CTAs only — never aggressive or high-pressure
+- Match the local market tone — sound like a knowledgeable local agent
+- Generate a \`bodyAlt\` — an alternate version of the body with a distinctly different hook or angle (not a minor rewording)
+- Score the opening hook 0-100 in \`hookScore\` (100 = extremely compelling, 0 = generic)
+- Suggest which property image best fits this post in \`imageHint\` — use the image labels provided above. If no images were provided, leave imageHint empty.
+- Set \`slotType\` to 'social_post' for social media posts, 'email' for email content, 'listing_description' for MLS/website listings.
+- Set "subject" to empty string for non-email posts
+
+Respond with JSON matching the single_campaign_post schema.`);
+
+  return lines.join("\n");
+}
+
+/**
+ * Return the OpenAI `response_format` for a single-post regeneration request.
+ */
+export function buildRegeneratePostResponseFormat() {
+  return {
+    type: "json_schema",
+    json_schema: SINGLE_POST_SCHEMA,
   };
 }
 

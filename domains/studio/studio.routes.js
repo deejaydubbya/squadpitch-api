@@ -2860,7 +2860,7 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { propertyData, campaignType, imageContext } = req.body;
+      const { propertyData, campaignType, imageContext, slots } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
         return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
       }
@@ -2913,14 +2913,14 @@ studioRouter.post(
               description: typeof img?.description === "string" ? img.description.slice(0, 100) : "",
             }))
           : null;
-        const userPrompt = buildCampaignUserPrompt(ctx, propertyData, campaignType, safeImageContext);
+        const userPrompt = buildCampaignUserPrompt(ctx, propertyData, campaignType, safeImageContext, slots);
         const responseFormat = buildCampaignResponseFormat();
 
         const result = await generateStructuredContent({
           systemPrompt,
           userPrompt,
           responseFormat,
-          taskType: "generation",
+          taskType: "campaign_generation",
           temperature: 0.7,
         });
 
@@ -2941,6 +2941,90 @@ studioRouter.post(
           dataItemId: listingResult.dataItem?.id ?? null,
           campaign: result.parsed,
         });
+      } finally {
+        await releaseDedup(dedupKey);
+      }
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Listing Campaign — Regenerate Single Post ─────────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/listing-campaign/regenerate-post
+ * Regenerate a single campaign post using the same property/campaign context.
+ * Accepts: { propertyData, campaignType, slot: { channel, day, label, angle }, campaignSummary, imageContext }
+ * Returns: { post: CampaignPost }
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listing-campaign/regenerate-post`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { propertyData, campaignType, slot, campaignSummary, imageContext } = req.body;
+      if (!propertyData || typeof propertyData !== "object") {
+        return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
+      }
+      if (!slot || typeof slot !== "object" || !slot.channel || !slot.day || !slot.label) {
+        return validationError(res, [{ path: ["slot"], message: "Slot with channel, day, and label is required" }]);
+      }
+
+      // Service health pre-flight
+      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+
+      // Usage limit check
+      const allowed = await checkUsageLimit(req.user.id, "posts");
+      if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "You've reached your generation limit. Upgrade to generate more.");
+
+      // Dedup
+      const dedupKey = await acquireDedup(req.user.id, "regenerate-post", { ...propertyData, slot });
+      if (!dedupKey) return sendError(res, 409, "DUPLICATE_REQUEST", "Post regeneration already in progress.");
+
+      try {
+        const clientId = req.params.id;
+
+        // Load generation context
+        const { loadClientGenerationContext } = await import("./generation/clientOrchestrator.js");
+        const { buildSystemPrompt, buildRegeneratePostUserPrompt, buildRegeneratePostResponseFormat } = await import("./generation/promptBuilder.js");
+        const { generateStructuredContent } = await import("./generation/openai.provider.js");
+
+        const ctx = await loadClientGenerationContext(clientId);
+
+        const systemPrompt = buildSystemPrompt(ctx);
+        const safeImageContext = Array.isArray(imageContext)
+          ? imageContext.slice(0, 8).map((img) => ({
+              label: typeof img?.label === "string" ? img.label.slice(0, 30) : "other",
+              description: typeof img?.description === "string" ? img.description.slice(0, 100) : "",
+            }))
+          : null;
+        const userPrompt = buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, slot, campaignSummary, safeImageContext);
+        const responseFormat = buildRegeneratePostResponseFormat();
+
+        const result = await generateStructuredContent({
+          systemPrompt,
+          userPrompt,
+          responseFormat,
+          taskType: "campaign_generation",
+          temperature: 0.7,
+        });
+
+        // Track usage
+        if (req.user.id) {
+          trackAiUsage({
+            userId: req.user.id,
+            clientId,
+            actionType: "REGENERATE_POST",
+            model: result.model,
+            promptTokens: result.usage?.prompt_tokens ?? 0,
+            completionTokens: result.usage?.completion_tokens ?? 0,
+          });
+        }
+        await incrementUsage(req.user.id, "posts");
+
+        res.json({ post: result.parsed?.post ?? result.parsed });
       } finally {
         await releaseDedup(dedupKey);
       }
@@ -3277,6 +3361,16 @@ studioRouter.post(
               hooks: [],
               hashtags: post.hashtags || [],
               cta: post.cta || null,
+              // Persist bodyAlt, subject, hookScore, imageHint, slotType in
+              // the variations JSON so they survive save/reload. The Draft
+              // schema uses variations as free-form extension storage.
+              variations: {
+                ...(post.bodyAlt ? { bodyAlt: post.bodyAlt } : {}),
+                ...(post.subject ? { subject: post.subject } : {}),
+                ...(post.hookScore != null ? { hookScore: post.hookScore } : {}),
+                ...(post.imageHint ? { imageHint: post.imageHint } : {}),
+                ...(post.slotType ? { slotType: post.slotType } : {}),
+              },
               warnings: [...warnings, `angle:${post.angle || "promotional"}`],
               createdBy: req.user.id,
               // Campaign fields
@@ -3292,15 +3386,24 @@ studioRouter.post(
         })
       );
 
-      // Link selected media assets to each draft (one DraftAsset per asset per draft)
-      // The first asset is marked as "primary" for each post.
+      // Link selected media assets to each draft (one DraftAsset per asset per draft).
+      // If a post has per-post `assignedImageIds`, use only those assets.
+      // Otherwise fall back to linking all `mediaAssetIds` (backward compat).
       if (validAssetIds.length > 0) {
+        const validAssetIdSet = new Set(validAssetIds);
         const draftAssetRows = [];
-        for (const draft of drafts) {
-          for (let i = 0; i < validAssetIds.length; i += 1) {
+        for (let dIdx = 0; dIdx < drafts.length; dIdx += 1) {
+          const draft = drafts[dIdx];
+          const post = campaign.posts[dIdx];
+          // Per-post assigned images take priority
+          const perPost = Array.isArray(post?.assignedImageIds) && post.assignedImageIds.length > 0
+            ? post.assignedImageIds.filter((id) => validAssetIdSet.has(id))
+            : null;
+          const idsForThisDraft = perPost || validAssetIds;
+          for (let i = 0; i < idsForThisDraft.length; i += 1) {
             draftAssetRows.push({
               draftId: draft.id,
-              assetId: validAssetIds[i],
+              assetId: idsForThisDraft[i],
               role: i === 0 ? "primary" : null,
               orderIndex: i,
             });

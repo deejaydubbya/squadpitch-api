@@ -17,12 +17,13 @@ const TASK_TYPE_MODEL_MAP = {
   parsing: "gpt-4o-mini",
   lightweight: "gpt-4o-mini",
   generation: "gpt-4o-mini",
+  campaign_generation: "gpt-4o",
   high_quality: "gpt-4o",
 };
 
 /**
  * Select the model ID for a given task type.
- * @param {string} taskType — one of: parsing, lightweight, generation, high_quality
+ * @param {string} taskType — one of: parsing, lightweight, generation, campaign_generation, high_quality
  * @returns {string} model ID
  */
 export function selectModel(taskType) {
