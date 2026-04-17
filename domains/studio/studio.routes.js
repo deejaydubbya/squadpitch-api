@@ -3608,6 +3608,34 @@ studioRouter.post(
         if (draftAssetRows.length > 0) {
           await prisma.draftAsset.createMany({ data: draftAssetRows, skipDuplicates: true });
         }
+
+        // Hydrate each draft's mediaUrl from its primary asset so downstream
+        // views (Content Library, Planner) show the image without joining DraftAsset.
+        const primaryByDraft = new Map();
+        for (const row of draftAssetRows) {
+          if (row.role === "primary") primaryByDraft.set(row.draftId, row.assetId);
+        }
+        if (primaryByDraft.size > 0) {
+          const assets = await prisma.mediaAsset.findMany({
+            where: { id: { in: Array.from(primaryByDraft.values()) } },
+            select: { id: true, url: true, assetType: true },
+          });
+          const assetUrlMap = new Map();
+          for (const a of assets) assetUrlMap.set(a.id, { url: a.url, type: a.assetType });
+          const updates = [];
+          for (const [draftId, assetId] of primaryByDraft.entries()) {
+            const info = assetUrlMap.get(assetId);
+            if (info?.url) {
+              updates.push(
+                prisma.draft.update({
+                  where: { id: draftId },
+                  data: { mediaUrl: info.url, mediaType: info.type || "image" },
+                })
+              );
+            }
+          }
+          if (updates.length > 0) await Promise.all(updates);
+        }
       }
 
       res.json({ drafts, campaignId, campaignName, attachedAssetCount: validAssetIds.length });
