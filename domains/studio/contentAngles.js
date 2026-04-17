@@ -124,6 +124,54 @@ Opening style: Lead with the trend or headline, then give your angle.
 Tone: Thoughtful and opinionated — have a clear point of view.
 CTA: "Agree or disagree? Let me know", "What's your take?".`,
   },
+
+  // GROWTH — audience-building, discovery-focused
+  curiosity_hook: {
+    key: "curiosity_hook",
+    label: "Curiosity Hook",
+    category: "growth",
+    guidance: `This post is designed to stop the scroll and attract NEW followers.
+Focus on: a surprising fact, counter-intuitive insight, or "you won't believe" moment.
+Opening style: Lead with a bold, curiosity-driven first line that creates an information gap.
+Tone: Conversational and intriguing — make readers NEED to keep reading.
+CTA: "Follow for more", "Save this for later", "Share with someone who needs this".
+Examples of good hooks:
+- "You won't believe what $400k gets you in [area]"
+- "The #1 mistake first-time buyers make"
+- "I just saved a client $30k. Here's how."`,
+  },
+  value_tips: {
+    key: "value_tips",
+    label: "Value Tips",
+    category: "growth",
+    guidance: `This post delivers quick, actionable value that makes people follow for more.
+Focus on: practical tips, insider knowledge, "things I wish I knew" insights.
+Opening style: Lead with a numbered tip, a bold claim, or a "here's what most people get wrong" framing.
+Tone: Generous and expert — give away real value freely.
+CTA: "Follow for daily tips", "Save this post", "Which tip surprised you?".
+Structure: Listicle or single-tip deep dive. Make each point specific and actionable.`,
+  },
+  myth_busting: {
+    key: "myth_busting",
+    label: "Myth Busting",
+    category: "growth",
+    guidance: `This post busts a common misconception to position you as a trusted authority.
+Focus on: a widely-held belief that's wrong or misleading, then the truth.
+Opening style: Lead with the myth stated as fact, then flip it — "Actually, here's what's really going on."
+Tone: Confident and educational — you're the expert setting the record straight.
+CTA: "Follow for more real talk", "What myths have you heard?", "Share this with someone who still believes this".`,
+  },
+  community_question: {
+    key: "community_question",
+    label: "Community Question",
+    category: "growth",
+    guidance: `This post sparks conversation and engagement to boost reach through comments.
+Focus on: an opinion-generating question, a "this or that" choice, or a relatable scenario.
+Opening style: Lead with a polarizing or thought-provoking question.
+Tone: Casual and inviting — make people feel comfortable weighing in.
+CTA: "Drop your answer below", "Comment your pick", "Tag someone who'd disagree".
+Engagement bait done right — genuine curiosity, not clickbait.`,
+  },
 };
 
 // Flat array for iteration
@@ -173,6 +221,13 @@ function getAnglesForSource(sourceType) {
       return [
         CONTENT_ANGLES.local_expertise,
         CONTENT_ANGLES.market_insight,
+      ];
+    case "growth":
+      return [
+        CONTENT_ANGLES.curiosity_hook,
+        CONTENT_ANGLES.value_tips,
+        CONTENT_ANGLES.myth_busting,
+        CONTENT_ANGLES.community_question,
       ];
     case "fallback":
     default:

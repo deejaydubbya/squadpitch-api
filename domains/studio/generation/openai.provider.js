@@ -126,3 +126,91 @@ export async function generateStructuredContent({
     usage: completion.usage ?? null,
   };
 }
+
+/**
+ * Extract structured data from an image using GPT-4o Vision.
+ * Best-effort — returns partial data, never throws on missing fields.
+ *
+ * @param {object} params
+ * @param {string} params.base64 - Base64 data URL (e.g. "data:image/png;base64,...")
+ * @param {string} params.prompt - Extraction instructions
+ * @param {object} [params.responseFormat] - OpenAI `response_format` object
+ * @param {number} [params.timeoutMs]
+ * @returns {Promise<{ parsed: object, model: string, usage: object }>}
+ */
+export async function extractFromImage({
+  base64,
+  prompt,
+  responseFormat,
+  timeoutMs,
+}) {
+  const client = getClient();
+  const model = "gpt-4o";
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    timeoutMs ?? DEFAULT_TIMEOUT_MS
+  );
+
+  let completion;
+  try {
+    completion = await client.chat.completions.create(
+      {
+        model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: base64, detail: "high" } },
+              { type: "text", text: prompt },
+            ],
+          },
+        ],
+        response_format: responseFormat ?? { type: "json_object" },
+        max_tokens: 2000,
+      },
+      { signal: controller.signal }
+    );
+  } catch (err) {
+    clearTimeout(timer);
+    if (err?.name === "AbortError") {
+      recordServiceFailure("openai").catch(() => {});
+      throw new OpenAIProviderError(
+        `OpenAI Vision request timed out after ${timeoutMs ?? DEFAULT_TIMEOUT_MS}ms`,
+        { code: "OPENAI_TIMEOUT", cause: err }
+      );
+    }
+    if (err instanceof OpenAIProviderError) throw err;
+    recordServiceFailure("openai").catch(() => {});
+    throw new OpenAIProviderError(
+      `OpenAI Vision request failed: ${err?.message ?? String(err)}`,
+      { code: "OPENAI_REQUEST_FAILED", status: err?.status, cause: err }
+    );
+  }
+  clearTimeout(timer);
+  recordServiceSuccess("openai").catch(() => {});
+
+  const choice = completion?.choices?.[0];
+  const content = choice?.message?.content;
+  if (!content || typeof content !== "string") {
+    throw new OpenAIProviderError("OpenAI Vision returned empty response body", {
+      code: "OPENAI_EMPTY_BODY",
+    });
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err) {
+    throw new OpenAIProviderError("OpenAI Vision returned invalid JSON", {
+      code: "OPENAI_INVALID_JSON",
+      cause: err,
+    });
+  }
+
+  return {
+    parsed,
+    model: completion.model ?? model,
+    usage: completion.usage ?? null,
+  };
+}

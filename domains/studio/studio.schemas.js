@@ -540,6 +540,22 @@ export const SwapSuggestionSchema = z.object({
   channel: ChannelEnum.optional(),
 });
 
+// ── Series Builder ──────────────────────────────────────────────────────
+
+export const GenerateSeriesSchema = z.object({
+  topic: z.string().min(1).max(200),
+  templateId: z.string().min(1),
+  parts: z.number().int().min(2).max(7).optional(),
+  channel: ChannelEnum,
+  kind: z.enum(["POST", "CAPTION", "VIDEO_SCRIPT", "CAROUSEL"]).optional(),
+});
+
+// ── Performance Feedback ─────────────────────────────────────────────────
+
+export const RatePerformanceSchema = z.object({
+  rating: z.enum(["HIGH", "AVERAGE", "LOW"]),
+});
+
 // ── Listing Ingestion ───────────────────────────────────────────────────
 
 export const ManualListingSchema = z.object({

@@ -65,6 +65,8 @@ import {
   CRMConnectSchema,
   CreateListingSourceSchema,
   UpdateListingSourceSchema,
+  RatePerformanceSchema,
+  GenerateSeriesSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import * as dataService from "./data.service.js";
@@ -75,6 +77,7 @@ import { generateInsights } from "./insights.service.js";
 import { generateRecommendations } from "./recommendations.service.js";
 import { previewAutopilot, executeAutopilot } from "./dataAwareAutopilot.service.js";
 import { getDashboardRecommendations, getDashboardActions } from "./dashboard.service.js";
+import { getRecommendations } from "./recommendationEngine.service.js";
 import { getUnusedData, getDataSuggestions } from "./dataUsage.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
@@ -98,6 +101,7 @@ import {
 import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus } from "./autopilot.service.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
+import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
 import * as gbpProvider from "../integrations/providers/gbpProvider.js";
 import { syncGBP } from "./gbpSync.service.js";
@@ -1105,6 +1109,48 @@ studioRouter.get(`${BASE}/workspaces/:id/dashboard/actions`, requireClientOwner,
   }
 });
 
+/**
+ * GET /api/v1/workspaces/:id/recommendations?surface=dashboard|create_content|listing_campaign
+ * Unified recommendation engine endpoint. Returns recommendations in the
+ * shared format with actionPayload, reasons, and surface filtering.
+ */
+studioRouter.get(`${BASE}/workspaces/:id/recommendations`, requireClientOwner, async (req, res, next) => {
+  try {
+    const surface = req.query.surface || undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : 6;
+    const validSurfaces = ["dashboard", "create_content", "listing_campaign", "planner"];
+    if (surface && !validSurfaces.includes(surface)) {
+      return validationError(res, [{ path: ["surface"], message: `Must be one of: ${validSurfaces.join(", ")}` }]);
+    }
+    const result = await getRecommendations(req.params.id, { surface, limit });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/workspaces/:id/recommendations/:recId/accept
+ * Track that a recommendation was acted on. Lightweight Redis tracking.
+ */
+studioRouter.post(`${BASE}/workspaces/:id/recommendations/:recId/accept`, requireClientOwner, async (req, res, next) => {
+  try {
+    const { redisSet: rSet, redisGet: rGet } = await import("../../redis.js");
+    const trackKey = `sp:rec:accepted:${req.params.id}`;
+    let existing = [];
+    try {
+      const raw = await rGet(trackKey);
+      if (raw) existing = JSON.parse(raw);
+    } catch { /* ignore */ }
+    existing.push({ id: req.params.recId, at: new Date().toISOString() });
+    if (existing.length > 50) existing = existing.slice(-50);
+    await rSet(trackKey, JSON.stringify(existing), 604800); // 7 days
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── Analytics ───────────────────────────────────────────────────────────
 
 studioRouter.get(`${BASE}/workspaces/:id/analytics`, requireClientOwner, async (req, res, next) => {
@@ -1212,6 +1258,165 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     next(err);
   }
 });
+
+// ── Content Remix ────────────────────────────────────────────────────
+
+studioRouter.post(`${BASE}/workspaces/:id/remix`, requireClientOwner, async (req, res, next) => {
+  try {
+    const { draftId } = req.body;
+    if (!draftId || typeof draftId !== "string") return sendError(res, 400, "VALIDATION_ERROR", "draftId is required.");
+
+    // Service health pre-flight
+    if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+    const throttle = await getThrottlePolicy();
+    if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
+    if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+
+    const dedupKey = await acquireDedup(req.user.id, "remix", { draftId });
+    if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A remix is already in progress. Please wait.");
+
+    const allowed = await checkUsageLimit(req.user.id, "posts");
+    if (!allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit."); }
+
+    const actorSub = getAuth0Sub(req);
+    const drafts = await service.remixDraft({
+      clientId: req.params.id,
+      draftId,
+      createdBy: actorSub,
+      userId: req.user.id,
+    });
+
+    await releaseDedup(dedupKey);
+    await incrementUsage(req.user.id, "posts");
+
+    recordActivity({
+      userId: req.user.id,
+      clientId: req.params.id,
+      eventType: "CONTENT_REMIXED",
+      payload: { draftId, formats: drafts.length },
+      resourceType: "draft",
+      resourceId: draftId,
+    }).catch(() => {});
+
+    res.status(201).json({ drafts });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Post Timing ──────────────────────────────────────────────────────
+
+studioRouter.get(`${BASE}/timing-suggestions`, (req, res) => {
+  res.json(getAllTimingSuggestions());
+});
+
+// ── Series Builder ───────────────────────────────────────────────────
+
+studioRouter.get(`${BASE}/series-templates`, (req, res) => {
+  res.json({ templates: service.SERIES_TEMPLATES.map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    defaultParts: t.defaultParts,
+    maxParts: t.maxParts,
+  }))});
+});
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/series`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = GenerateSeriesSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      // Service health pre-flight
+      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable.");
+      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI generation temporarily unavailable due to budget limits.");
+
+      const dedupKey = await acquireDedup(req.user.id, "series", parsed.data);
+      if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A series is already being generated. Please wait.");
+
+      const allowed = await checkUsageLimit(req.user.id, "posts");
+      if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "Post limit reached for this billing period.");
+
+      const actorSub = getAuth0Sub(req);
+      const result = await service.generateSeries(req.params.id, actorSub, {
+        ...parsed.data,
+        userId: req.user.id,
+      });
+
+      await releaseDedup(dedupKey);
+
+      // Track usage for each generated draft
+      const successCount = result.drafts.filter((d) => d.status !== "FAILED").length;
+      if (successCount > 0) {
+        incrementUsage(req.user.id, "posts", successCount).catch(() => {});
+      }
+
+      recordActivity({
+        userId: req.user.id,
+        clientId: req.params.id,
+        eventType: "SERIES_GENERATED",
+        title: `Generated series: ${result.seriesName}`,
+        description: `${result.totalParts} parts created`,
+        icon: "layers",
+        resourceType: "series",
+        resourceId: result.seriesId,
+      }).catch(() => {});
+
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Performance Feedback ──────────────────────────────────────────────
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/drafts/:draftId/rate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = RatePerformanceSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const draft = await service.ratePerformance(req.params.draftId, {
+        rating: parsed.data.rating,
+      });
+      res.json(service.formatDraft(draft));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/performance/insights`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await service.getPerformanceInsights(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/performance/profile`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const profile = await service.getPerformanceProfile(req.params.id);
+      res.json(profile);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // ── Content Ideas ──────────────────────────────────────────────────────
 
@@ -2647,7 +2852,7 @@ studioRouter.post(
 
 /**
  * POST /api/v1/workspaces/:id/listing-campaign/generate
- * Generate a full listing marketing campaign (Instagram, Facebook, listing description, email)
+ * Generate a multi-post listing marketing campaign sequence (3-6 coordinated posts)
  * from property data in a single AI call.
  */
 studioRouter.post(
@@ -2655,7 +2860,7 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { propertyData } = req.body;
+      const { propertyData, campaignType, imageContext } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
         return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
       }
@@ -2702,7 +2907,13 @@ studioRouter.post(
         }
 
         const systemPrompt = buildSystemPrompt(ctx);
-        const userPrompt = buildCampaignUserPrompt(ctx, propertyData);
+        const safeImageContext = Array.isArray(imageContext)
+          ? imageContext.slice(0, 8).map((img) => ({
+              label: typeof img?.label === "string" ? img.label.slice(0, 30) : "other",
+              description: typeof img?.description === "string" ? img.description.slice(0, 100) : "",
+            }))
+          : null;
+        const userPrompt = buildCampaignUserPrompt(ctx, propertyData, campaignType, safeImageContext);
         const responseFormat = buildCampaignResponseFormat();
 
         const result = await generateStructuredContent({
@@ -2733,6 +2944,374 @@ studioRouter.post(
       } finally {
         await releaseDedup(dedupKey);
       }
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Listing Campaign — Image Extraction ────────────────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/listing-campaign/extract-image
+ *
+ * Replicate + SAM 2 based extraction (spinstr101). OpenAI is NOT used for
+ * image region / bbox / gallery detection anymore. OpenAI Vision is still
+ * used for extracting the TEXT listing fields (address, price, beds, etc.)
+ * from the screenshot — that is a different job from image extraction.
+ *
+ * Pipeline:
+ *   1) In parallel:
+ *      a) SAM 2 on Replicate → individual_masks → bboxes → filter → rank
+ *      b) OpenAI Vision (text-only prompt) → property fields
+ *   2) Merge results, preserve the existing response shape so the frontend
+ *      crop pipeline keeps working unchanged.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listing-campaign/extract-image`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { image } = req.body;
+      if (!image || typeof image !== "string") {
+        return validationError(res, [{ path: ["image"], message: "Base64 image data URL is required" }]);
+      }
+
+      const debug = String(req.query.debug ?? "") === "1";
+
+      // Budget / health guards. OpenAI is gated for the text extractor; the
+      // SAM 2 path only runs if Replicate is reachable.
+      const openaiDown = (await getServiceStatus("openai")) === "down" || (await isProviderBudgetExceeded("openai"));
+      const { extractListingScreenshot, emptyExtraction } = await import(
+        "./segmentation/listingScreenshotExtraction.service.js"
+      );
+      const { extractFromImage } = await import("./generation/openai.provider.js");
+
+      // ─── 1a. SAM 2 segmentation (primary image extractor) ─────────────
+      const runSegmentation = extractListingScreenshot({ imageUrl: image, debug })
+        .catch((err) => {
+          req.log?.warn?.({ err }, "sam2 segmentation failed");
+          return emptyExtraction({ reason: err?.code ?? "error" });
+        });
+
+      // ─── 1b. OpenAI Vision — TEXT FIELDS ONLY (no bbox work) ──────────
+      const textPrompt = `You are extracting listing details from a real estate page screenshot. Return ONLY the text fields listed below as JSON. Do NOT return any bounding boxes, regions, or image locations.
+
+Return this JSON exactly:
+{
+  "address": "Full street address or null",
+  "price": number or null,
+  "beds": number or null,
+  "baths": number or null,
+  "sqft": number or null,
+  "propertyType": "Single Family | Condo | Townhouse | Multi-Family | Land | Commercial | Other or null",
+  "description": "Brief property description or null",
+  "highlights": "Comma-separated notable features or null",
+  "neighborhood": "Neighborhood or area name or null",
+  "cta": "Call-to-action text or null",
+  "agentName": "Agent name or null",
+  "brokerage": "Brokerage name or null"
+}
+
+If a field is not clearly visible on the page, return null for that field. Never fabricate.`;
+
+      const runTextExtract = openaiDown
+        ? Promise.resolve({ parsed: {}, model: null, usage: null, skipped: true })
+        : extractFromImage({ base64: image, prompt: textPrompt }).catch((err) => {
+            req.log?.warn?.({ err }, "openai text extraction failed");
+            return { parsed: {}, model: null, usage: null, error: err?.message ?? String(err) };
+          });
+
+      const [segResult, textResult] = await Promise.all([runSegmentation, runTextExtract]);
+
+      // Always log segmentation diagnostics so prod failures surface a reason
+      // without needing ?debug=1 on the request.
+      req.log?.info?.(
+        {
+          diagnostics: segResult?.diagnostics ?? null,
+          detectedCount: segResult?.detectedCount ?? 0,
+          heroFound: !!segResult?.heroImage,
+          galleryCount: segResult?.galleryImages?.length ?? 0,
+          textExtract: {
+            skipped: !!textResult?.skipped,
+            error: textResult?.error ?? null,
+            model: textResult?.model ?? null,
+          },
+          imageKind: typeof image === "string"
+            ? (image.startsWith("data:") ? "dataUrl" : "http")
+            : "unknown",
+          imageBytes: typeof image === "string" ? image.length : 0,
+        },
+        "listing extract-image complete",
+      );
+
+      // ─── 2. Merge ────────────────────────────────────────────────────
+      const extracted = textResult?.parsed && typeof textResult.parsed === "object"
+        ? textResult.parsed
+        : {};
+      const keyFields = ["address", "price", "beds", "baths", "sqft"];
+      const filledKeys = keyFields.filter((k) => extracted[k] != null);
+      const confidence = filledKeys.length >= 4 ? "full" : "partial";
+
+      if (req.user?.id && textResult?.usage) {
+        trackAiUsage({
+          userId: req.user.id,
+          clientId: req.params.id,
+          actionType: "EXTRACT_IMAGE",
+          model: textResult.model,
+          promptTokens: textResult.usage?.prompt_tokens ?? 0,
+          completionTokens: textResult.usage?.completion_tokens ?? 0,
+        });
+      }
+
+      const responseBody = {
+        extracted,
+        confidence,
+        galleryContainer: segResult.galleryContainer,
+        heroImage: segResult.heroImage,
+        galleryImages: segResult.galleryImages,
+        imageRegions: segResult.imageRegions,
+        detectedCount: segResult.detectedCount,
+        extractionSource: segResult.extractionSource,
+        // Always expose lightweight diagnostics so the frontend can display
+        // a useful reason when no regions were detected.
+        diagnostics: segResult.diagnostics ?? null,
+        // Legacy fields kept null for backward-compat with the frontend.
+        didSecondPass: false,
+        suspicionReason: null,
+      };
+
+      if (debug) {
+        responseBody.debug = {
+          containerFound: !!segResult.galleryContainer,
+          hero: !!segResult.heroImage,
+          galleryTileCount: segResult.galleryImages.length,
+          extractionSource: segResult.extractionSource,
+          segmentation: segResult.debug ?? null,
+          textExtract: {
+            skipped: !!textResult?.skipped,
+            error: textResult?.error ?? null,
+            model: textResult?.model ?? null,
+            usage: textResult?.usage ?? null,
+          },
+        };
+      }
+
+      return res.json(responseBody);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+
+// ── Listing Campaign — Upload Selected Image Crops ────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/listing-campaign/upload-images
+ * Accept an array of selected image crops (base64 data URLs) from the client,
+ * upload each to Cloudinary, and create MediaAsset records with source=IMPORTED.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listing-campaign/upload-images`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { images } = req.body;
+      if (!Array.isArray(images) || images.length === 0) {
+        return validationError(res, [{ path: ["images"], message: "images array is required" }]);
+      }
+      if (images.length > 12) {
+        return sendError(res, 400, "TOO_MANY_IMAGES", "Maximum 12 images per upload");
+      }
+
+      const { getImageStorageService } = await import("../../services/storage/imageStorage.js");
+      const storage = getImageStorageService();
+
+      const clientId = req.params.id;
+      const userId = req.user.id;
+
+      const uploaded = [];
+      for (const img of images) {
+        if (!img || typeof img !== "object") continue;
+        const { dataUrl, label, caption, isEnhanced, qualityScore, qualityLabel } = img;
+        if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) continue;
+
+        // Parse data URL → buffer + mime
+        const commaIdx = dataUrl.indexOf(",");
+        if (commaIdx < 0) continue;
+        const meta = dataUrl.slice(5, commaIdx); // e.g. "image/png;base64"
+        const mimeType = meta.split(";")[0] || "image/png";
+        const base64Data = dataUrl.slice(commaIdx + 1);
+        const buffer = Buffer.from(base64Data, "base64");
+        if (buffer.length === 0 || buffer.length > 15 * 1024 * 1024) continue; // 15MB cap
+
+        // Validate + sanitize enhancement metadata (spinstr97)
+        const safeIsEnhanced = isEnhanced === true;
+        const safeQualityScore = typeof qualityScore === "number" && Number.isFinite(qualityScore)
+          ? Math.max(0, Math.min(100, qualityScore))
+          : null;
+        const safeQualityLabel = ["good", "fair", "low"].includes(qualityLabel) ? qualityLabel : null;
+
+        try {
+          const result = await storage.upload(buffer, {
+            folder: `squadpitch/listing-campaigns/${clientId}`,
+          });
+          const asset = await prisma.mediaAsset.create({
+            data: {
+              clientId,
+              source: "IMPORTED",
+              status: "READY",
+              url: result.url,
+              publicId: result.publicId,
+              width: result.width ?? null,
+              height: result.height ?? null,
+              bytes: result.bytes ?? buffer.length,
+              mimeType,
+              assetType: "image",
+              filename: typeof label === "string" && label
+                ? `listing-${label}${safeIsEnhanced ? "-enhanced" : ""}.${result.format ?? "jpg"}`
+                : `listing-image${safeIsEnhanced ? "-enhanced" : ""}.${result.format ?? "jpg"}`,
+              altText: typeof caption === "string" ? caption.slice(0, 200) : null,
+              caption: typeof label === "string" ? label.slice(0, 50) : null,
+              isEnhanced: safeIsEnhanced,
+              qualityScore: safeQualityScore,
+              qualityLabel: safeQualityLabel,
+              createdBy: userId,
+            },
+          });
+          uploaded.push({
+            id: asset.id,
+            url: asset.url,
+            label: asset.caption,
+            description: asset.altText,
+            width: asset.width,
+            height: asset.height,
+            isEnhanced: asset.isEnhanced,
+            qualityScore: asset.qualityScore,
+            qualityLabel: asset.qualityLabel,
+          });
+        } catch (err) {
+          console.error("[upload-images] Cloudinary upload failed:", err?.message ?? err);
+          // Continue with other images — best effort (do NOT block flow if enhancement or upload fails)
+        }
+      }
+
+      if (uploaded.length === 0) {
+        return sendError(res, 502, "UPLOAD_FAILED", "Could not upload any of the selected images");
+      }
+
+      res.json({ assets: uploaded });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Listing Campaign — Save Drafts ────────────────────────────────────────
+
+/**
+ * POST /api/v1/workspaces/:id/listing-campaign/save-drafts
+ * Save multi-post campaign as Draft records with campaign fields.
+ * Accepts schedule preset (7/10/14 days) for automatic date spacing.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listing-campaign/save-drafts`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { campaign, propertyData, campaignType, dataItemId, schedulePreset, addToPlanner, mediaAssetIds } = req.body;
+      if (!campaign || !Array.isArray(campaign.posts) || campaign.posts.length === 0) {
+        return validationError(res, [{ path: ["campaign"], message: "Campaign with posts array is required" }]);
+      }
+
+      const clientId = req.params.id;
+
+      // Validate that any supplied mediaAssetIds belong to this workspace
+      let validAssetIds = [];
+      if (Array.isArray(mediaAssetIds) && mediaAssetIds.length > 0) {
+        const assets = await prisma.mediaAsset.findMany({
+          where: { id: { in: mediaAssetIds.slice(0, 12) }, clientId },
+          select: { id: true },
+        });
+        validAssetIds = assets.map((a) => a.id);
+      }
+      const address = propertyData?.address || "Listing Campaign";
+      const campaignId = `camp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const campaignName = campaign.campaignName || `${address} — ${(campaignType || "just_listed").replace(/_/g, " ")}`;
+      const totalPosts = campaign.posts.length;
+
+      const warnings = [
+        "source:listing-campaign",
+        `campaignType:${campaignType || "just_listed"}`,
+        `address:${address}`,
+      ];
+      if (dataItemId) warnings.push(`dataItemId:${dataItemId}`);
+
+      // Schedule spacing: map campaignDay to real dates based on preset
+      const presetDays = schedulePreset === 14 ? 14 : schedulePreset === 10 ? 10 : 7;
+      const maxCampaignDay = Math.max(...campaign.posts.map((p) => p.campaignDay || 1));
+
+      function computeScheduledDate(campaignDay) {
+        if (!addToPlanner) return null;
+        // Scale campaign days to fit within the preset window
+        const dayOffset = maxCampaignDay > 1
+          ? Math.round(((campaignDay - 1) / (maxCampaignDay - 1)) * (presetDays - 1))
+          : 0;
+        const date = new Date(Date.now() + (dayOffset + 1) * 24 * 60 * 60 * 1000);
+        date.setUTCHours(10, 0, 0, 0);
+        return date;
+      }
+
+      const drafts = await Promise.all(
+        campaign.posts.map((post, idx) => {
+          const scheduledFor = computeScheduledDate(post.campaignDay || idx + 1);
+          return prisma.draft.create({
+            data: {
+              clientId,
+              kind: "POST",
+              status: addToPlanner ? "SCHEDULED" : "DRAFT",
+              channel: post.channel || "INSTAGRAM",
+              generationGuidance: `${campaignName} — ${post.label || `Post ${idx + 1}`}`,
+              body: post.body || "",
+              hooks: [],
+              hashtags: post.hashtags || [],
+              cta: post.cta || null,
+              warnings: [...warnings, `angle:${post.angle || "promotional"}`],
+              createdBy: req.user.id,
+              // Campaign fields
+              campaignId,
+              campaignName,
+              campaignType: campaignType || "just_listed",
+              campaignDay: post.campaignDay || idx + 1,
+              campaignOrder: idx + 1,
+              campaignTotal: totalPosts,
+              ...(scheduledFor ? { scheduledFor } : {}),
+            },
+          });
+        })
+      );
+
+      // Link selected media assets to each draft (one DraftAsset per asset per draft)
+      // The first asset is marked as "primary" for each post.
+      if (validAssetIds.length > 0) {
+        const draftAssetRows = [];
+        for (const draft of drafts) {
+          for (let i = 0; i < validAssetIds.length; i += 1) {
+            draftAssetRows.push({
+              draftId: draft.id,
+              assetId: validAssetIds[i],
+              role: i === 0 ? "primary" : null,
+              orderIndex: i,
+            });
+          }
+        }
+        if (draftAssetRows.length > 0) {
+          await prisma.draftAsset.createMany({ data: draftAssetRows, skipDuplicates: true });
+        }
+      }
+
+      res.json({ drafts, campaignId, campaignName, attachedAssetCount: validAssetIds.length });
     } catch (err) {
       next(err);
     }

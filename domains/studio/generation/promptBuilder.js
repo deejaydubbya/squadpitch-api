@@ -6,6 +6,7 @@
 // routes and services must NEVER assemble prompts inline.
 
 import { buildContentContext } from "../../industry/contentContextBuilder.js";
+import { buildPatternPromptBlock } from "../viralPatterns.js";
 
 /**
  * JSON schema consumed by OpenAI's response_format: { type: "json_schema" }.
@@ -67,6 +68,20 @@ export const CONTENT_OUTPUT_SCHEMA = {
         items: VARIATION_OBJECT_SCHEMA,
         description: "Two additional complete variations (Version B and Version C) of the content, each with a different angle, tone, or structure.",
       },
+      scoredHooks: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string", description: "The hook text — a compelling opening line." },
+            hookScore: { type: "integer", description: "Quality score from 0–10 based on curiosity gap, clarity, emotional pull, and platform fit." },
+            reason: { type: "string", description: "One sentence explaining why this hook is strong or weak." },
+          },
+          required: ["text", "hookScore", "reason"],
+        },
+        description: "5–10 opening hooks scored by quality. Sorted by hookScore descending.",
+      },
       altText: {
         type: "string",
         description: "Image alt text for accessibility. Empty string if not applicable.",
@@ -77,7 +92,7 @@ export const CONTENT_OUTPUT_SCHEMA = {
           "Detailed visual description for AI image generation — describe the ideal composition, lighting, color palette, mood, and style of an image that would accompany this post. Be specific about what the viewer should see. Empty string if not applicable.",
       },
     },
-    required: ["body", "hooks", "hashtags", "cta", "variations", "altText", "imageGuidance"],
+    required: ["body", "hooks", "hashtags", "cta", "variations", "scoredHooks", "altText", "imageGuidance"],
   },
 };
 
@@ -216,6 +231,69 @@ export function buildSystemPrompt(ctx) {
     lines.push(`- Keep listings grounded — highlight real features, not superlatives`);
     lines.push(`- Include a soft CTA (schedule a showing, DM for details, link in bio) — never aggressive`);
     lines.push(`--- END REAL ESTATE SPECIALIZATION ---`);
+  }
+
+  // Performance feedback context — what works for this workspace.
+  const perf = ctx.performanceProfile;
+  if (perf && perf.totalRated >= 3) {
+    lines.push(`\n--- PERFORMANCE INSIGHTS (adapt your style based on what works) ---`);
+
+    if (perf.topContentTypes.length > 0) {
+      const topLabels = perf.topContentTypes.map((t) => t.type).join(", ");
+      lines.push(`Best-performing content types: ${topLabels} — lean into these styles when appropriate.`);
+    }
+
+    if (perf.weakContentTypes.length > 0) {
+      const weakLabels = perf.weakContentTypes.map((t) => t.type).join(", ");
+      lines.push(`Lower-performing content types: ${weakLabels} — try a fresh approach if writing in these categories.`);
+    }
+
+    if (perf.topHookStyles.length > 0) {
+      lines.push(`Strongest hook styles: ${perf.topHookStyles.join(", ")} — prefer these opening patterns.`);
+    }
+
+    if (perf.topChannels.length > 0) {
+      const bestChannel = perf.topChannels[0];
+      lines.push(`Best channel: ${bestChannel.channel} — optimize especially for this platform.`);
+    }
+
+    // Variety guard — prevent overfitting
+    lines.push(`Note: While adapting to performance patterns, maintain variety. Don't use the same hook style or structure every time.`);
+    lines.push(`--- END PERFORMANCE INSIGHTS ---`);
+  }
+
+  // Voice consistency — recent published posts as style reference
+  const recentPosts = ctx.recentPosts;
+  if (Array.isArray(recentPosts) && recentPosts.length > 0) {
+    lines.push(`\n--- VOICE REFERENCE (recent published posts — match this style) ---`);
+    for (let i = 0; i < Math.min(recentPosts.length, 3); i++) {
+      const post = recentPosts[i];
+      const excerpt = post.body.length > 200 ? post.body.slice(0, 200) + "…" : post.body;
+      lines.push(`[${post.channel}] ${excerpt}`);
+    }
+    lines.push(`Match the tone, sentence rhythm, and personality of these posts. The new content should feel like it came from the same person.`);
+    lines.push(`--- END VOICE REFERENCE ---`);
+  }
+
+  // Local authority context — location-based content intelligence
+  if (ctx.industryKey === "real_estate" && reCtx) {
+    const bp = reCtx?.businessProfile;
+    const city = bp?.city;
+    const marketArea = bp?.marketArea;
+    const state = bp?.state;
+
+    if (city || marketArea) {
+      lines.push(`\n--- LOCAL AUTHORITY ---`);
+      lines.push(`You are a LOCAL EXPERT in ${marketArea || city}${state ? `, ${state}` : ""}.`);
+      lines.push(`When creating content, demonstrate deep local knowledge:`);
+      if (city) lines.push(`- Reference specific neighborhoods, streets, and landmarks in ${city}`);
+      if (marketArea) lines.push(`- Mention local market trends, price ranges, and buyer/seller dynamics in ${marketArea}`);
+      lines.push(`- Include "hidden gems" — local restaurants, parks, schools, community features`);
+      lines.push(`- Use local terminology naturally (area nicknames, landmark references)`);
+      lines.push(`- Position every post as coming from someone who LIVES and WORKS in this area`);
+      lines.push(`- Never write generic content that could apply to any city — be specific`);
+      lines.push(`--- END LOCAL AUTHORITY ---`);
+    }
   }
 
   // Anti-patterns to reduce generic AI tone + variety instructions.
@@ -572,13 +650,64 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templ
     }
   }
 
+  // Growth content type — override tone and CTA style for audience building
+  if (guidance && guidance.includes("[Type: growth]")) {
+    lines.push(`
+--- GROWTH CONTENT MODE ---
+This content is designed to GROW the audience — attract new followers, maximize reach, and encourage discovery.
+
+HOOK RULES:
+- The first line MUST create a curiosity gap or information gap
+- Use bold claims, surprising facts, or counter-intuitive statements
+- Examples: "You won't believe what $400k gets you…", "3 mistakes buyers make…", "Is now a good time to buy?"
+- Never open with a generic question + emoji pattern
+
+TONE:
+- Generous, value-first — give away real insights freely
+- Conversational, not corporate — write like a trusted friend who happens to be an expert
+- Avoid sales language, property pitches, or listing-specific promotion
+- Focus on tips, insights, education, and relatable scenarios
+
+CTA STYLE:
+- Follow-oriented: "Follow for more", "Follow for daily tips"
+- Save-oriented: "Save this for later", "Bookmark this"
+- Share-oriented: "Share with someone who needs this", "Tag a friend"
+- NEVER use aggressive sales CTAs ("Schedule a showing", "Contact me today")
+
+CONTENT APPROACH:
+- Prioritize broad audience topics over niche/specific ones
+- Think: what would make a non-follower stop scrolling and hit follow?
+- Include practical takeaways people can use immediately
+- Use numbers, lists, and specific examples over vague generalizations
+--- END GROWTH CONTENT MODE ---`);
+  }
+
+  // Viral patterns + engagement boosters — proven hook structures
+  const patternBlock = buildPatternPromptBlock(templateType, channel);
+  if (patternBlock) lines.push(patternBlock);
+
   if (guidance && guidance.trim().length > 0) {
     lines.push(`\nGuidance from operator:\n${guidance.trim()}`);
+  }
+
+  // Follow CTA injection — when goal is Growth, add follow-oriented CTA even for listing/testimonial content
+  if (guidance && guidance.includes("[Goal: Growth]") && !guidance.includes("[Type: growth]")) {
+    lines.push(`\nGROWTH GOAL: Include a subtle follow-oriented CTA alongside the primary CTA. Examples: "Follow for more homes like this", "Follow for daily real estate tips". Keep it natural — one line at the end, not forced.`);
   }
 
   lines.push(
     "\nGenerate 3 distinct variations of the content. The primary fields (body, hooks, hashtags, cta) are Version A. Include 2 additional complete variations in the 'variations' array (Version B and Version C). Each variation should take a different angle, tone, or structure while staying on-brand."
   );
+
+  lines.push(`
+HOOKS — generate 5–10 scored opening hooks in the 'scoredHooks' array:
+- Each hook must be a distinct opening line (one sentence or phrase)
+- Score each 0–10 based on: curiosity gap, clarity, emotional pull, platform fit
+- Include a one-sentence reason explaining the score
+- Sort by hookScore descending (best first)
+- Vary styles: bold claims, questions, numbers, stories, surprises, contrarian takes
+- The best hook should also be the first line of the Version A body`);
+
   lines.push(
     "\nRespond with JSON matching the draft schema."
   );
@@ -599,8 +728,8 @@ export function buildResponseFormat() {
 // ── Listing Campaign ────────────────────────────────────────────────────
 
 /**
- * JSON schema for multi-output listing campaign response.
- * A single AI call returns all 4 content types.
+ * JSON schema for multi-post campaign sequence response.
+ * A single AI call returns 3–6 coordinated posts across days/channels.
  */
 export const CAMPAIGN_OUTPUT_SCHEMA = {
   name: "listing_campaign",
@@ -609,46 +738,58 @@ export const CAMPAIGN_OUTPUT_SCHEMA = {
     type: "object",
     additionalProperties: false,
     properties: {
-      instagramCaption: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          body: { type: "string", description: "Instagram caption text." },
-          hashtags: { type: "array", items: { type: "string" }, description: "Hashtags without leading '#'." },
-          cta: { type: "string", description: "Call to action." },
-        },
-        required: ["body", "hashtags", "cta"],
+      campaignName: {
+        type: "string",
+        description: "Short campaign name for display, e.g. '123 Main St — Just Listed'.",
       },
-      facebookPost: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          body: { type: "string", description: "Facebook post text." },
-          hashtags: { type: "array", items: { type: "string" }, description: "Hashtags without leading '#'." },
-          cta: { type: "string", description: "Call to action." },
+      posts: {
+        type: "array",
+        description: "3–6 coordinated posts forming the campaign sequence.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            campaignDay: {
+              type: "integer",
+              description: "Day number in the campaign sequence (1, 2, 3, etc.).",
+            },
+            channel: {
+              type: "string",
+              enum: ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "X"],
+              description: "Target platform for this post.",
+            },
+            angle: {
+              type: "string",
+              enum: ["promotional", "lifestyle", "urgency", "storytelling", "authority", "social_proof"],
+              description: "Content angle/purpose for this post.",
+            },
+            label: {
+              type: "string",
+              description: "Short label describing this post's purpose, e.g. 'Just Listed Announcement', 'Feature Highlight', 'Open House Reminder'.",
+            },
+            body: {
+              type: "string",
+              description: "The full post/caption text.",
+            },
+            hashtags: {
+              type: "array",
+              items: { type: "string" },
+              description: "Hashtags without leading '#'. Empty array if not applicable.",
+            },
+            cta: {
+              type: "string",
+              description: "Call to action. Empty string if not applicable.",
+            },
+            subject: {
+              type: "string",
+              description: "Email subject line. Empty string if not an email post.",
+            },
+          },
+          required: ["campaignDay", "channel", "angle", "label", "body", "hashtags", "cta", "subject"],
         },
-        required: ["body", "hashtags", "cta"],
-      },
-      listingDescription: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          body: { type: "string", description: "Professional MLS-style listing description." },
-        },
-        required: ["body"],
-      },
-      emailPromo: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          subject: { type: "string", description: "Email subject line." },
-          body: { type: "string", description: "Email body text." },
-          cta: { type: "string", description: "Call to action." },
-        },
-        required: ["subject", "body", "cta"],
       },
     },
-    required: ["instagramCaption", "facebookPost", "listingDescription", "emailPromo"],
+    required: ["campaignName", "posts"],
   },
 };
 
@@ -656,7 +797,48 @@ export const CAMPAIGN_OUTPUT_SCHEMA = {
  * Build the user prompt for a listing campaign. Injects property details
  * and asks for 4 distinct content pieces with channel-specific instructions.
  */
-export function buildCampaignUserPrompt(ctx, listingData) {
+/**
+ * Campaign-type-specific prompt instructions.
+ * Each type changes tone, CTA language, urgency, and output structure.
+ */
+const CAMPAIGN_TYPE_INSTRUCTIONS = {
+  just_listed: `CAMPAIGN TYPE: JUST LISTED
+- Tone: Excitement, fresh-to-market energy
+- Emphasize unique features and first-look exclusivity
+- CTA: "Schedule a showing", "See it before it's gone", "DM for details"
+- Urgency: Fresh-to-market, don't wait
+- Every channel should convey the thrill of a brand-new listing`,
+
+  open_house: `CAMPAIGN TYPE: OPEN HOUSE
+- Tone: Event-focused, inviting, warm
+- Include date/time if provided, emphasize attendance
+- CTA: "Join us", "Mark your calendar", "RSVP", "Stop by"
+- Urgency: Limited-time event, specific date/time
+- Make the reader feel personally invited`,
+
+  price_drop: `CAMPAIGN TYPE: PRICE DROP
+- Tone: Value-driven, opportunity-focused
+- Lead with the new price or savings amount
+- CTA: "New price", "Now within reach", "Don't miss this value"
+- Urgency: Price won't last, act-now energy
+- Frame as an opportunity, not a sign of desperation`,
+
+  just_sold: `CAMPAIGN TYPE: JUST SOLD
+- Tone: Celebration, confidence, proof of results
+- Highlight speed of sale, final price if appropriate
+- CTA: "Thinking of selling?", "Ready to be next?", "Let's talk about your home"
+- Urgency: None — this is trust-building, not time-pressure
+- Position the agent as effective and reliable`,
+
+  listing_spotlight: `CAMPAIGN TYPE: LISTING SPOTLIGHT
+- Tone: Lifestyle/showcase, aspirational, storytelling
+- Focus on the neighborhood, lifestyle, and emotional appeal
+- CTA: "Imagine living here", "Discover this home", "Learn more"
+- Urgency: Low — focus on aspiration and desire
+- Paint a picture of life in this home and neighborhood`,
+};
+
+export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageContext = null) {
   const lines = [];
 
   // Property details
@@ -677,45 +859,76 @@ export function buildCampaignUserPrompt(ctx, listingData) {
   if (listingData.cta) lines.push(`Preferred CTA: ${listingData.cta}`);
   if (listingData.agentName) lines.push(`Agent: ${listingData.agentName}`);
   if (listingData.brokerage) lines.push(`Brokerage: ${listingData.brokerage}`);
+  if (listingData.campaignNotes) lines.push(`Special instructions: ${listingData.campaignNotes}`);
   lines.push(`--- END PROPERTY DETAILS ---`);
 
-  // Campaign instructions
+  // Available images (optional — from screenshot extraction)
+  if (Array.isArray(imageContext) && imageContext.length > 0) {
+    lines.push(`\n--- AVAILABLE PROPERTY IMAGES ---`);
+    imageContext.slice(0, 8).forEach((img, idx) => {
+      const label = (img.label || "photo").replace(/_/g, " ");
+      const desc = img.description ? ` — ${img.description}` : "";
+      lines.push(`${idx + 1}. ${label}${desc}`);
+    });
+    lines.push(`--- END AVAILABLE IMAGES ---`);
+    lines.push(`Reference the available images in each post where appropriate. Assign image labels to posts via the "imageHint" field (use the label like "exterior", "kitchen", etc.) so the feature image matches the post's angle.`);
+  }
+
+  // Campaign type instructions
+  const typeKey = campaignType ?? "just_listed";
+  const typeInstructions = CAMPAIGN_TYPE_INSTRUCTIONS[typeKey];
+  if (typeInstructions) {
+    lines.push(`\n${typeInstructions}\n`);
+  }
+
+  // Multi-post campaign instructions
   lines.push(`
-Generate a complete listing marketing campaign with 4 distinct content pieces. Use the property details above as the foundation — do not invent features not listed.
+Generate a multi-post marketing campaign sequence. Use the property details above as the foundation — do not invent features not listed.
 
-1. INSTAGRAM CAPTION:
-   - Short, punchy, scroll-stopping hook in the first line
-   - Highlight 2-3 most compelling features
-   - Keep under 150 words
-   - Include 15-20 relevant hashtags (mix of broad + local + real estate)
-   - Soft CTA (DM, link in bio, comment)
+CAMPAIGN STRUCTURE:
+Generate exactly 5 coordinated posts that roll out over multiple days. Each post must have a DIFFERENT angle and purpose — no repetition.
 
-2. FACEBOOK POST:
-   - Longer storytelling format, 150-250 words
-   - Community-focused — reference neighborhood, lifestyle, local appeal
-   - Conversational tone that feels personal, not corporate
-   - 3-5 hashtags max
-   - CTA that encourages engagement (comment, share, message)
+POST SEQUENCE (follow this structure):
 
-3. LISTING DESCRIPTION:
-   - Professional MLS-style description, 150-300 words
-   - Feature-focused: lead with the most impressive detail
-   - Mention room flow, finishes, upgrades, lot details
-   - End with location benefits and lifestyle appeal
-   - No hashtags, no CTA — just the description
+Day 1 — LAUNCH POST (Instagram or Facebook)
+  Angle: promotional
+  Purpose: First announcement, showcase the property, create excitement
+  Style: Strong hook, key features, scroll-stopping first line
 
-4. EMAIL PROMO:
-   - Compelling subject line (under 60 chars, no spam triggers)
-   - Body: 100-200 words, benefit-driven, personal tone
-   - Build urgency without being pushy
-   - Clear CTA (schedule showing, reply for details, etc.)
+Day 2 — FEATURE HIGHLIGHT (Facebook or Instagram)
+  Angle: storytelling
+  Purpose: Deep dive into standout features, neighborhood, or lifestyle
+  Style: Longer storytelling format, paint a picture of living here
+
+Day 3 — LIFESTYLE / SOCIAL PROOF (Instagram)
+  Angle: lifestyle or social_proof
+  Purpose: Emotional appeal — neighborhood, community, aspirational living
+  Style: Conversational, relatable, community-focused
+
+Day 5 — VALUE / AUTHORITY (LinkedIn or Facebook)
+  Angle: authority or social_proof
+  Purpose: Market context, agent expertise, why this listing matters
+  Style: Professional, data-informed, trust-building
+
+Day 7 — URGENCY / CTA (Instagram or Facebook)
+  Angle: urgency
+  Purpose: Drive action — open house, schedule showing, final push
+  Style: Direct, time-sensitive, clear call to action
+
+PLATFORM GUIDELINES:
+- Instagram: Short, punchy, 15-20 hashtags, soft CTA (DM, link in bio)
+- Facebook: Longer storytelling, 3-5 hashtags, community engagement CTA
+- LinkedIn: Professional tone, market insights, 3-5 hashtags
+- X: Concise, punchy, 2-3 hashtags max
 
 RULES:
 - Use REAL details from the property — never invent or assume
-- No cliches: avoid "dream home", "don't miss out", "act now", "stunning", "gorgeous"
-- Each piece should feel distinct — not just reformatted versions of the same text
+- No cliches: "dream home", "don't miss out", "act now", "stunning", "gorgeous"
+- Each post must feel distinct — different angle, different hook, different value
 - Soft CTAs only — never aggressive or high-pressure
-- Match the local market tone — sound like a knowledgeable local agent`);
+- Match the local market tone — sound like a knowledgeable local agent
+- Coordinate messaging across posts — they should build on each other
+- Set "subject" to empty string for non-email posts`);
 
   lines.push("\nRespond with JSON matching the listing_campaign schema.");
 
@@ -729,5 +942,121 @@ export function buildCampaignResponseFormat() {
   return {
     type: "json_schema",
     json_schema: CAMPAIGN_OUTPUT_SCHEMA,
+  };
+}
+
+// ── Content Remix ─────────────────────────────────────────────────────
+
+const REMIX_FORMAT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    body: { type: "string", description: "Full post/caption/script text for this format." },
+    hooks: {
+      type: "array",
+      items: { type: "string" },
+      description: "2-3 opening hooks optimized for this format.",
+    },
+    hashtags: {
+      type: "array",
+      items: { type: "string" },
+      description: "Hashtags without leading '#'. Empty array if not applicable.",
+    },
+    cta: { type: "string", description: "Call to action. Empty string if not applicable." },
+  },
+  required: ["body", "hooks", "hashtags", "cta"],
+};
+
+export const REMIX_OUTPUT_SCHEMA = {
+  name: "content_remix",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      post: {
+        ...REMIX_FORMAT_SCHEMA,
+        description: "Standard social media post — concise, punchy, platform-ready.",
+      },
+      carousel: {
+        ...REMIX_FORMAT_SCHEMA,
+        description: "Carousel post — numbered slides separated by '---'. Slide 1 = hook, middle = value, last = CTA.",
+      },
+      videoScript: {
+        ...REMIX_FORMAT_SCHEMA,
+        description: "Short-form video script (30-60s) — written as spoken word. Hook → beats → payoff → CTA.",
+      },
+      storyCaption: {
+        ...REMIX_FORMAT_SCHEMA,
+        description: "Story/reel caption — ultra-short, punchy, 1-3 sentences with urgency.",
+      },
+    },
+    required: ["post", "carousel", "videoScript", "storyCaption"],
+  },
+};
+
+/**
+ * Build the user prompt for content remixing.
+ * Takes the original post body and remixes it into 4 formats.
+ */
+export function buildRemixUserPrompt(originalBody, channel) {
+  const lines = [];
+
+  lines.push(`--- ORIGINAL CONTENT ---`);
+  lines.push(originalBody);
+  lines.push(`--- END ORIGINAL CONTENT ---`);
+
+  lines.push(`
+Remix this content into 4 distinct formats. Keep the core message, facts, and value — but adapt the structure, length, and style for each format.
+
+FORMAT REQUIREMENTS:
+
+1. POST — Standard social media post
+   - Platform-ready for ${channel || "any platform"}
+   - Strong hook first line
+   - 100-250 words
+   - Natural paragraph breaks
+   - Relevant hashtags
+
+2. CAROUSEL — Multi-slide post
+   - Separate slides with '---'
+   - Slide 1: Attention-grabbing hook
+   - Slides 2-5: Key points, one idea per slide
+   - Last slide: Clear CTA
+   - Each slide: 1-3 short sentences max
+   - 5-7 slides total
+
+3. VIDEO SCRIPT — Short-form video (30-60 seconds)
+   - Written exactly as someone would say it aloud
+   - Hook (first 3 seconds): bold statement or question
+   - Body (20-40 seconds): 2-3 key beats, conversational
+   - Payoff + CTA (last 10 seconds): clear takeaway
+   - Use short sentences, natural pauses
+   - No emojis or hashtags in the script body
+
+4. STORY CAPTION — Ultra-short story/reel caption
+   - 1-3 sentences maximum
+   - Punchy, immediate, creates urgency
+   - Works without context (viewer may not see original post)
+   - Strong CTA or engagement prompt
+
+RULES:
+- Each format must feel native to its medium — not a copy-paste resize
+- Maintain the original tone and key facts
+- Vary the opening hook for each format
+- Include relevant hashtags for post and carousel only`);
+
+  lines.push("\nRespond with JSON matching the content_remix schema.");
+
+  return lines.join("\n");
+}
+
+/**
+ * Return the OpenAI `response_format` for a remix request.
+ */
+export function buildRemixResponseFormat() {
+  return {
+    type: "json_schema",
+    json_schema: REMIX_OUTPUT_SCHEMA,
   };
 }

@@ -255,9 +255,18 @@ model Draft {
   hashtags             String[]
   cta                  String?
   variations           Json?
+  scoredHooks          Json?
   altText              String?     @db.Text
   imageGuidance        String?     @db.Text
   warnings             String[]
+
+  // Campaign fields — nullable for non-campaign drafts
+  campaignId           String?
+  campaignName         String?
+  campaignType         String?
+  campaignDay          Int?
+  campaignOrder        Int?
+  campaignTotal        Int?
 
   mediaUrl             String?
   mediaType            String?
@@ -268,6 +277,9 @@ model Draft {
   lastPublishAttemptAt DateTime?
   idempotencyKey       String?     @unique
   publishSource        String?
+
+  performanceRating    String?
+  ratedAt              DateTime?
 
   createdBy            String
   approvedBy           String?
@@ -292,6 +304,7 @@ model Draft {
   @@index([clientId, status])
   @@index([clientId, channel])
   @@index([status, scheduledFor])
+  @@index([clientId, campaignId])
   @@map("drafts")
 }
 
@@ -374,6 +387,11 @@ model MediaAsset {
   loraSnapshot      String?
   loraScaleSnapshot Float?
   seed              BigInt?
+
+  // Screenshot-import enhancement metadata (spinstr97)
+  isEnhanced        Boolean          @default(false)
+  qualityScore      Float?
+  qualityLabel      String?          // "good" | "fair" | "low"
   externalJobId     String?
   durationMs        Int?
   errorMessage      String?          @db.Text

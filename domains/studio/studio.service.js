@@ -62,7 +62,7 @@ export {
 
 export { getClientAnalytics } from "./analytics.service.js";
 
-export { generateDraft } from "./generation/aiGenerationService.js";
+export { generateDraft, remixDraft } from "./generation/aiGenerationService.js";
 export { generateContentIdeas } from "./generation/ideasService.js";
 
 export {
@@ -91,3 +91,14 @@ export {
 } from "./postMetrics.service.js";
 
 export { getMetricsSyncStatus } from "./metricsSyncService.js";
+
+export {
+  generateSeries,
+  SERIES_TEMPLATES,
+} from "./seriesBuilder.service.js";
+
+export {
+  rateDraft as ratePerformance,
+  getPerformanceProfile,
+  getPerformanceInsights,
+} from "./performanceFeedback.service.js";

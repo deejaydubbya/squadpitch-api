@@ -9,8 +9,10 @@
 import { prisma } from "../../prisma.js";
 import { previewAutopilot, executeAutopilot } from "./dataAwareAutopilot.service.js";
 import { CONTENT_ANGLES } from "./contentAngles.js";
+import { getOptimalHours } from "./postTiming.js";
+import { getRecommendations } from "./recommendationEngine.service.js";
 
-const OPTIMAL_HOURS = [9, 12, 15, 18];
+const DEFAULT_OPTIMAL_HOURS = [9, 12, 15, 18];
 const WEEKLY_TARGET = 5;
 const MAX_PER_DAY = 2;
 
@@ -85,9 +87,10 @@ async function evaluatePlannerCoverage(clientId, weekStart, weekEnd) {
     if (ws.some((w) => w.includes("listing"))) angleCategories.add("listing");
     if (ws.some((w) => w.includes("testimonial") || w.includes("review"))) angleCategories.add("social_proof");
     if (ws.some((w) => w.includes("fallback") || w.includes("market"))) angleCategories.add("authority");
+    if (ws.some((w) => w.includes("growth") || w.includes("Type: growth"))) angleCategories.add("growth");
   }
 
-  const allAngleCategories = ["listing", "buyer", "lifestyle", "authority"];
+  const allAngleCategories = ["listing", "buyer", "lifestyle", "authority", "growth"];
   const missingAngleCategories = allAngleCategories.filter((c) => !angleCategories.has(c));
 
   // Find gap days (< MAX_PER_DAY posts)
@@ -132,11 +135,19 @@ export async function getPlannerSuggestions(clientId, { weekStart, weekEnd }) {
     };
   }
 
-  // Distribute suggestions across gap days at optimal hours
+  // Distribute suggestions across gap days at channel-aware optimal hours
   const distributed = [];
   let gapIdx = 0;
   let hourIdx = 0;
   const daySlotCount = {}; // track how many suggestions per day
+
+  // Use channel-aware timing when possible, fall back to defaults
+  const primaryChannel = coverage.channelSet.size > 0
+    ? [...coverage.channelSet][0]
+    : null;
+  const optimalHours = primaryChannel
+    ? getOptimalHours(primaryChannel, 4)
+    : DEFAULT_OPTIMAL_HOURS;
 
   for (const suggestion of suggestions) {
     if (gapIdx >= coverage.gapDays.length) break;
@@ -149,7 +160,7 @@ export async function getPlannerSuggestions(clientId, { weekStart, weekEnd }) {
     distributed.push({
       id: `ps_${Date.now()}_${distributed.length}`,
       suggestedDate: targetDay,
-      suggestedHour: OPTIMAL_HOURS[hourIdx % OPTIMAL_HOURS.length],
+      suggestedHour: optimalHours[hourIdx % optimalHours.length],
       rank: suggestion.rank,
       dataItem: suggestion.dataItem,
       blueprint: suggestion.blueprint,
@@ -170,8 +181,53 @@ export async function getPlannerSuggestions(clientId, { weekStart, weekEnd }) {
     }
   }
 
+  // ── Fetch campaign + action recommendations from unified engine ─────
+  let campaignSuggestions = [];
+  let engineInsights = null;
+  try {
+    const { recommendations: engineRecs, summary } = await getRecommendations(clientId, {
+      surface: "planner",
+      limit: 4,
+    });
+
+    // Separate campaign recommendations from other signals
+    const campaignTypes = new Set([
+      "listing_campaign", "milestone_campaign",
+      "open_house_campaign", "price_drop_campaign",
+    ]);
+
+    campaignSuggestions = engineRecs
+      .filter((r) => campaignTypes.has(r.type))
+      .slice(0, 2)
+      .map((r) => ({
+        id: `pc_${Date.now()}_${r.id}`,
+        type: r.type,
+        title: r.title,
+        description: r.description,
+        sourceId: r.sourceId,
+        sourceLabel: r.sourceLabel,
+        priorityScore: r.priorityScore,
+        confidence: r.confidence,
+        actionLabel: r.actionLabel,
+        actionPayload: r.actionPayload,
+        suggestedCampaignType: r.suggestedCampaignType,
+        reasons: r.reasons,
+      }));
+
+    // Extract engine insights for content mix health
+    engineInsights = {
+      growthScore: summary.growthScore ?? null,
+      daysSinceLastGeneration: summary.daysSinceLastGeneration ?? null,
+      contentMixHealth: summary.publishedThisWeek >= 3 ? "healthy" : summary.publishedThisWeek >= 1 ? "fair" : "low",
+    };
+  } catch {
+    // Non-critical — planner works without engine intelligence
+  }
+
   return {
     suggestions: distributed,
+    campaignSuggestions,
+    engineInsights,
     weekSummary: buildWeekSummary(coverage, distributed.length),
   };
 }
@@ -185,12 +241,51 @@ function buildWeekSummary(coverage, projected) {
   else if (total >= WEEKLY_TARGET) status = "on_track";
   else status = "below";
 
-  // Re-derive coverageGaps from missingAngleCategories
-  const coverageGaps = [];
-  if (coverage.missingAngleCategories.includes("listing")) coverageGaps.push("No listing content");
-  if (coverage.missingAngleCategories.includes("authority")) coverageGaps.push("No authority/insight content");
-  if (coverage.missingAngleCategories.includes("lifestyle")) coverageGaps.push("No lifestyle content");
-  if (coverage.missingAngleCategories.includes("buyer")) coverageGaps.push("No buyer-focused content");
+  // Re-derive coverageGaps with auto-fill suggestions
+  const GAP_SUGGESTIONS = {
+    listing: {
+      label: "No listing content",
+      suggestion: "Feature a property listing",
+      guidance: "Create a listing spotlight post featuring a property with key details, photos, and a showing CTA",
+      contentType: "listing",
+    },
+    authority: {
+      label: "No authority/insight content",
+      suggestion: "Share a market insight",
+      guidance: "Create a market update post sharing current trends and data that demonstrates your local expertise",
+      contentType: "market_update",
+    },
+    lifestyle: {
+      label: "No lifestyle content",
+      suggestion: "Highlight a neighborhood",
+      guidance: "Create a neighborhood lifestyle post painting a picture of what it's like to live in a specific area",
+      contentType: "personal",
+    },
+    buyer: {
+      label: "No buyer-focused content",
+      suggestion: "Post a buyer tip",
+      guidance: "Create an educational post with practical tips for home buyers — first-time buyer advice or investment insights",
+      contentType: "educational",
+    },
+    growth: {
+      label: "No growth/discovery content",
+      suggestion: "Create a curiosity-driven post",
+      guidance: "[Type: growth] Create a post designed to attract new followers — use a curiosity hook, share surprising value, and include a follow CTA",
+      contentType: "growth",
+    },
+  };
+
+  const coverageGaps = coverage.missingAngleCategories.map((cat) => {
+    const config = GAP_SUGGESTIONS[cat];
+    if (!config) return { label: `No ${cat} content`, category: cat };
+    return {
+      label: config.label,
+      category: cat,
+      suggestion: config.suggestion,
+      guidance: config.guidance,
+      contentType: config.contentType,
+    };
+  });
 
   return {
     published: coverage.published,
@@ -264,7 +359,7 @@ export async function swapSuggestion(clientId, { excludeDataItemIds, targetDate,
     suggestion: {
       id: `ps_${Date.now()}_swap`,
       suggestedDate: targetDate,
-      suggestedHour: OPTIMAL_HOURS[0],
+      suggestedHour: (channel ? getOptimalHours(channel, 1) : DEFAULT_OPTIMAL_HOURS)[0],
       rank: s.rank,
       dataItem: s.dataItem,
       blueprint: s.blueprint,

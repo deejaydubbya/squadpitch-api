@@ -10,6 +10,7 @@ import { prisma } from "../../../prisma.js";
 import { redisGet, redisSet, redisDel } from "../../../redis.js";
 import { getContentContext } from "../../industry/industry.service.js";
 import { buildTechStackContentContext, resolveRealEstateContext } from "../../industry/techStack.service.js";
+import { getPerformanceProfile } from "../performanceFeedback.service.js";
 
 const CACHE_TTL = 1800; // 30 minutes
 const CACHE_PREFIX = "sp:client:ctx:";
@@ -101,12 +102,40 @@ export async function loadClientGenerationContext(clientId) {
     }
   }
 
+  // Load recent published posts for voice consistency
+  let recentPosts = [];
+  try {
+    const published = await prisma.draft.findMany({
+      where: {
+        clientId,
+        status: "PUBLISHED",
+        performanceRating: { in: ["HIGH", "AVERAGE"] },
+      },
+      orderBy: { publishedAt: "desc" },
+      take: 3,
+      select: { body: true, channel: true, hooks: true },
+    });
+    recentPosts = published.filter((d) => d.body && d.body.length > 20);
+  } catch {
+    // Non-critical
+  }
+
+  // Load performance feedback profile (adapts generation to what works)
+  let performanceProfile = null;
+  try {
+    performanceProfile = await getPerformanceProfile(clientId);
+  } catch {
+    // Non-critical — generation works without performance data
+  }
+
   const ctx = {
     client,
     industryKey: client.industryKey ?? null,
     industryContext,
     techStackContext,
     realEstateContext,
+    performanceProfile,
+    recentPosts,
     brand: client.brandProfile ?? null,
     voice: client.voiceProfile ?? null,
     media: client.mediaProfile ?? null,

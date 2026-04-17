@@ -25,6 +25,17 @@ export const env = {
   FAL_API_KEY: process.env.FAL_API_KEY,
   FAL_DEFAULT_MODEL: process.env.FAL_DEFAULT_MODEL ?? "fal-ai/flux/dev",
 
+  // Replicate — SAM 2 screenshot segmentation (listing media extraction).
+  //
+  // The versionless `meta/sam-2` slug is only valid for models flagged as
+  // `official` by Replicate. `meta/sam-2` is NOT official, so the default
+  // version route 404s — we have to pin the version hash. Override via env
+  // if Replicate publishes a newer version.
+  REPLICATE_API_TOKEN: process.env.REPLICATE_API_TOKEN,
+  REPLICATE_SAM2_MODEL:
+    process.env.REPLICATE_SAM2_MODEL ??
+    "meta/sam-2:fe97b453a6455861e3bac769b441ca1f1086110da7466dbb65cf1eecfd60dc83",
+
   // Meta / Instagram / Facebook OAuth
   META_APP_ID: process.env.META_APP_ID,
   META_APP_SECRET: process.env.META_APP_SECRET,
