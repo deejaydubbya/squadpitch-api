@@ -79,6 +79,12 @@ export {
   getAssetUsage,
   enqueueGeneration,
   formatAsset,
+  listFolders,
+  createFolder,
+  renameFolder,
+  deleteFolder,
+  moveAssetToFolder,
+  updateAssetTags,
 } from "./mediaGeneration.service.js";
 
 export { enqueueVideoGeneration } from "./videoGeneration.service.js";
