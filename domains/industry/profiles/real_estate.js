@@ -66,6 +66,12 @@ export default {
     { type: "business_intro", tier: "secondary", title: "Introduce Your Services", description: "Tell your audience who you are and what you offer.", priority: "medium", guidance: "Write an introduction post for this real estate business. Highlight key services, years of experience, areas served, and what sets them apart from other agents.", conditions: { noPublished: true } },
     { type: "neighborhood_highlight", tier: "advanced", title: "Highlight a Neighborhood", description: "Showcase a local area to attract buyers to your market.", priority: "low", guidance: "Create a neighborhood highlight post. Feature local amenities, schools, dining, parks, and what makes the area special for homebuyers.", conditions: {} },
   ],
+  assetTags: [
+    'exterior', 'kitchen', 'living_room', 'dining_room',
+    'bedroom', 'bathroom', 'backyard', 'garage',
+    'pool', 'office', 'laundry', 'floorplan',
+    'aerial', 'neighborhood', 'detail',
+  ],
   ui: { icon: "Home" },
   techStack: [
     // ── Import Your Data ──

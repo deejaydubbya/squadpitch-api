@@ -21,6 +21,8 @@ export async function listAssets({
   draftId,
   assetType,
   search,
+  folderId,
+  tag,
   limit = 50,
   cursor,
 }) {
@@ -29,6 +31,14 @@ export async function listAssets({
   if (status) where.status = status;
   if (draftId) where.draftId = draftId;
   if (assetType) where.assetType = assetType;
+  if (folderId === "UNFILED") {
+    where.folderId = null;
+  } else if (folderId) {
+    where.folderId = folderId;
+  }
+  if (tag) {
+    where.tags = { has: tag };
+  }
   if (search) {
     where.OR = [
       { renderedPrompt: { contains: search, mode: "insensitive" } },
@@ -61,6 +71,8 @@ export async function uploadAsset({
   altText,
   caption,
   draftId,
+  folderId,
+  tags,
   createdBy,
 }) {
   const storage = getImageStorageService();
@@ -83,6 +95,8 @@ export async function uploadAsset({
       altText: altText ?? null,
       caption: caption ?? null,
       draftId: draftId ?? null,
+      folderId: folderId ?? null,
+      tags: tags ?? [],
       createdBy,
     },
   });
@@ -407,6 +421,8 @@ export function formatAsset(asset) {
     filename: asset.filename,
     altText: asset.altText,
     caption: asset.caption,
+    folderId: asset.folderId ?? null,
+    tags: asset.tags ?? [],
     draftId: asset.draftId,
     displayOrder: asset.displayOrder,
     falModelId: asset.falModelId,
@@ -420,6 +436,53 @@ export function formatAsset(asset) {
     createdAt: asset.createdAt,
     updatedAt: asset.updatedAt,
   };
+}
+
+// ── Folders ──────────────────────────────────────────────────────────────
+
+export async function listFolders(clientId) {
+  return prisma.assetFolder.findMany({
+    where: { clientId },
+    include: { _count: { select: { assets: true } } },
+    orderBy: { name: "asc" },
+  });
+}
+
+export async function createFolder({ clientId, name }) {
+  return prisma.assetFolder.create({
+    data: { clientId, name: name.trim() },
+    include: { _count: { select: { assets: true } } },
+  });
+}
+
+export async function renameFolder(folderId, name) {
+  return prisma.assetFolder.update({
+    where: { id: folderId },
+    data: { name: name.trim() },
+    include: { _count: { select: { assets: true } } },
+  });
+}
+
+export async function deleteFolder(folderId) {
+  return prisma.assetFolder.delete({
+    where: { id: folderId },
+  });
+}
+
+export async function moveAssetToFolder(assetId, folderId) {
+  return prisma.mediaAsset.update({
+    where: { id: assetId },
+    data: { folderId: folderId ?? null },
+  });
+}
+
+// ── Tags ─────────────────────────────────────────────────────────────────
+
+export async function updateAssetTags(assetId, tags) {
+  return prisma.mediaAsset.update({
+    where: { id: assetId },
+    data: { tags },
+  });
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────

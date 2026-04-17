@@ -317,6 +317,8 @@ export const ListAssetsQuerySchema = z.object({
   status: MediaAssetStatusEnum.optional(),
   assetType: z.enum(["image", "video"]).optional(),
   draftId: z.string().optional(),
+  folderId: z.string().optional(),
+  tag: z.string().optional(),
   search: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   cursor: z.string().optional(),

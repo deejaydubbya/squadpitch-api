@@ -152,6 +152,7 @@ model Client {
   moderationLogs    ModerationLog[]
   connections       ChannelConnection[]
   mediaAssets       MediaAsset[]
+  assetFolders      AssetFolder[]
   postMetrics       PostMetrics[]
   rawMetrics        RawMetric[]
   normalizedMetrics NormalizedMetric[]
@@ -377,6 +378,10 @@ model MediaAsset {
   altText           String?          @db.Text
   caption           String?
 
+  folderId          String?
+  folder            AssetFolder?     @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  tags              String[]         @default([])
+
   draftId           String?
   draft             Draft?           @relation(fields: [draftId], references: [id], onDelete: SetNull)
   displayOrder      Int              @default(0)
@@ -405,8 +410,26 @@ model MediaAsset {
 
   @@index([clientId, status])
   @@index([clientId, source])
+  @@index([clientId, folderId])
   @@index([draftId])
   @@map("media_assets")
+}
+
+// ── Asset Folders ─────────────────────────────────────────────────────
+
+model AssetFolder {
+  id        String       @id @default(cuid())
+  clientId  String
+  name      String
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  client    Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  assets    MediaAsset[]
+
+  @@unique([clientId, name])
+  @@index([clientId])
+  @@map("asset_folders")
 }
 
 // ── Draft-Asset Join Table ────────────────────────────────────────────

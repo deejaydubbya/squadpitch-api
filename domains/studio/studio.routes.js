@@ -92,7 +92,7 @@ import { enqueueNotification, recordActivity } from "../notifications/notificati
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
 import { crawlWebsite } from "./crawlWebsite.js";
-import { getStarterAngles, getIndustryTechStack, getRecommendationTemplates } from "../industry/industry.service.js";
+import { getStarterAngles, getIndustryTechStack, getRecommendationTemplates, getAssetTagDefaults } from "../industry/industry.service.js";
 import { RE_CAPABILITY_MAP } from "../industry/realEstateContext.js";
 import {
   getWorkspaceTechStackView,
@@ -1813,6 +1813,7 @@ studioRouter.post(
           altText: req.query.altText ?? null,
           caption: req.query.caption ?? null,
           draftId: req.query.draftId ?? null,
+          folderId: req.query.folderId ?? null,
           createdBy: actorSub,
         });
       }
@@ -1830,6 +1831,193 @@ studioRouter.delete(
       const asset = await service.deleteAsset(req.params.assetId);
       if (!asset) return sendError(res, 404, "NOT_FOUND", "Asset not found");
       res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Asset folders ─────────────────────────────────────────────────────
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/folders`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const folders = await service.listFolders(req.params.id);
+      res.json({
+        folders: folders.map((f) => ({
+          id: f.id,
+          clientId: f.clientId,
+          name: f.name,
+          assetCount: f._count.assets,
+          createdAt: f.createdAt,
+          updatedAt: f.updatedAt,
+        })),
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/folders`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { name } = req.body;
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return validationError(res, [{ path: ["name"], message: "Folder name is required" }]);
+      }
+      const folder = await service.createFolder({ clientId: req.params.id, name });
+      res.status(201).json({
+        id: folder.id,
+        clientId: folder.clientId,
+        name: folder.name,
+        assetCount: folder._count.assets,
+        createdAt: folder.createdAt,
+        updatedAt: folder.updatedAt,
+      });
+    } catch (err) {
+      if (err?.code === "P2002") {
+        return sendError(res, 409, "DUPLICATE_FOLDER", "A folder with that name already exists");
+      }
+      next(err);
+    }
+  }
+);
+
+studioRouter.patch(
+  `${BASE}/workspaces/:id/folders/:folderId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { name } = req.body;
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return validationError(res, [{ path: ["name"], message: "Folder name is required" }]);
+      }
+      const folder = await service.renameFolder(req.params.folderId, name);
+      res.json({
+        id: folder.id,
+        clientId: folder.clientId,
+        name: folder.name,
+        assetCount: folder._count.assets,
+        createdAt: folder.createdAt,
+        updatedAt: folder.updatedAt,
+      });
+    } catch (err) {
+      if (err?.code === "P2002") {
+        return sendError(res, 409, "DUPLICATE_FOLDER", "A folder with that name already exists");
+      }
+      if (err?.code === "P2025") {
+        return sendError(res, 404, "NOT_FOUND", "Folder not found");
+      }
+      next(err);
+    }
+  }
+);
+
+studioRouter.delete(
+  `${BASE}/workspaces/:id/folders/:folderId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      await service.deleteFolder(req.params.folderId);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err?.code === "P2025") {
+        return sendError(res, 404, "NOT_FOUND", "Folder not found");
+      }
+      next(err);
+    }
+  }
+);
+
+// ── Asset folder / tag operations ─────────────────────────────────────
+
+studioRouter.patch(
+  `${BASE}/assets/:assetId/folder`,
+  async (req, res, next) => {
+    try {
+      const { folderId } = req.body;
+      const asset = await service.moveAssetToFolder(req.params.assetId, folderId ?? null);
+      res.json(service.formatAsset(asset));
+    } catch (err) {
+      if (err?.code === "P2025") {
+        return sendError(res, 404, "NOT_FOUND", "Asset not found");
+      }
+      next(err);
+    }
+  }
+);
+
+studioRouter.patch(
+  `${BASE}/assets/:assetId/tags`,
+  async (req, res, next) => {
+    try {
+      const { tags } = req.body;
+      if (!Array.isArray(tags)) {
+        return validationError(res, [{ path: ["tags"], message: "tags must be an array of strings" }]);
+      }
+      const asset = await service.updateAssetTags(req.params.assetId, tags);
+      res.json(service.formatAsset(asset));
+    } catch (err) {
+      if (err?.code === "P2025") {
+        return sendError(res, 404, "NOT_FOUND", "Asset not found");
+      }
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/assets/:assetId/auto-tag`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const asset = await service.getAsset(req.params.assetId);
+      if (!asset || asset.clientId !== req.params.id) {
+        return sendError(res, 404, "NOT_FOUND", "Asset not found");
+      }
+      if (!asset.url) {
+        return sendError(res, 422, "NO_URL", "Asset has no URL for classification");
+      }
+
+      // Get industry tag defaults for the workspace
+      const client = await prisma.client.findUnique({
+        where: { id: req.params.id },
+        select: { industryKey: true },
+      });
+      const tagDefaults = getAssetTagDefaults(client?.industryKey);
+      const tagList = tagDefaults.length > 0
+        ? tagDefaults.join(", ")
+        : "exterior, kitchen, living_room, dining_room, bedroom, bathroom, backyard, garage, pool, office, laundry, floorplan, aerial, neighborhood, detail, other";
+
+      const { extractFromImage } = await import("./generation/openai.provider.js");
+      const prompt = `Classify this image. Return a JSON object with "tags" (array of strings) from ONLY these options: [${tagList}]. Pick 1-3 tags that best describe what's shown. If unsure, use "other".`;
+
+      const result = await extractFromImage({ base64: asset.url, prompt });
+      const suggestedTags = Array.isArray(result?.parsed?.tags) ? result.parsed.tags : [];
+
+      res.json({ suggestedTags });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/asset-tag-defaults`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const client = await prisma.client.findUnique({
+        where: { id: req.params.id },
+        select: { industryKey: true },
+      });
+      const tags = getAssetTagDefaults(client?.industryKey);
+      res.json({ tags });
     } catch (err) {
       next(err);
     }

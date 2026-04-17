@@ -311,6 +311,21 @@ export function getIndustryContentTypeLabels(industryKey) {
   return profile.contentTypeLabels ?? [];
 }
 
+// ── Asset tag defaults ────────────────────────────────────────────────
+
+/**
+ * Get default asset tags for an industry key.
+ * Returns an empty array if no industry key is provided or no tags are defined.
+ *
+ * @param {string | null | undefined} industryKey
+ * @returns {string[]}
+ */
+export function getAssetTagDefaults(industryKey) {
+  if (!industryKey) return [];
+  const profile = getIndustryProfile(industryKey);
+  return profile?.assetTags ?? [];
+}
+
 // ── Recommendation templates ─────────────────────────────────────────
 
 /**
