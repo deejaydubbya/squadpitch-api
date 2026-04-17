@@ -150,6 +150,14 @@ function parseSourceMeta(warnings, createdBy) {
       meta.contentAngle = w.slice("autopilot_angle_label:".length).trim();
     } else if (w.startsWith("autopilot_angle:")) {
       meta.contentAngleKey = w.slice("autopilot_angle:".length).trim();
+    // Listing campaign warnings
+    } else if (w === "source:listing-campaign") {
+      meta.source = "listing";
+      meta.listingCampaign = true;
+    } else if (w.startsWith("address:")) {
+      meta.listingTitle = w.slice("address:".length).trim();
+    } else if (w.startsWith("campaignType:")) {
+      meta.campaignType = w.slice("campaignType:".length).trim();
     }
   }
 
@@ -213,5 +221,12 @@ export function formatDraft(draft) {
     publishedAt: draft.publishedAt,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
+    // Campaign fields
+    campaignId: draft.campaignId ?? null,
+    campaignName: draft.campaignName ?? null,
+    campaignType: draft.campaignType ?? null,
+    campaignDay: draft.campaignDay ?? null,
+    campaignOrder: draft.campaignOrder ?? null,
+    campaignTotal: draft.campaignTotal ?? null,
   };
 }
