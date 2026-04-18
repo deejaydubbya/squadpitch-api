@@ -1654,6 +1654,26 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
   try {
     const parsed = ScheduleDraftSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    // Pre-validate: ensure the draft's channel has an active connection
+    const draftRecord = await prisma.draft.findUnique({
+      where: { id: req.params.id },
+      select: { channel: true, clientId: true },
+    });
+    if (draftRecord) {
+      const conn = await prisma.channelConnection.findUnique({
+        where: { clientId_channel: { clientId: draftRecord.clientId, channel: draftRecord.channel } },
+      });
+      if (!conn || conn.status !== 'CONNECTED') {
+        return sendError(
+          res,
+          422,
+          'SCHEDULE_NO_CONNECTION',
+          `Cannot schedule: your ${draftRecord.channel} account is not connected. Please connect it in Settings → Channels before scheduling.`
+        );
+      }
+    }
+
     const actorSub = getAuth0Sub(req);
     const draft = await service.scheduleDraft(
       req.params.id,
