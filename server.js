@@ -64,6 +64,16 @@ app.use(
   express.raw({ type: "application/json" })
 );
 
+// Larger JSON body limit for campaign image uploads (base64 payloads can be 10-30MB)
+const largeJsonParser = express.json({ limit: "50mb" });
+app.use((req, _res, next) => {
+  if (req.url.includes("/listing-campaign/upload-images")) {
+    largeJsonParser(req, _res, next);
+  } else {
+    next();
+  }
+});
+
 // body parsing
 app.use(express.json({ limit: "1mb" }));
 
