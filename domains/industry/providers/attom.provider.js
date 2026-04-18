@@ -1,7 +1,7 @@
 // ATTOM Data Property Enrichment Provider
 //
 // Uses the ATTOM Data API for property data lookup by address.
-// API key comes from per-workspace tech stack connection (encrypted in DB).
+// Requires ATTOM_API_KEY environment variable.
 // Gracefully returns null on any failure.
 
 const PROVIDER_NAME = "attom";
@@ -11,19 +11,18 @@ const TIMEOUT_MS = 10000;
 export const attomProvider = {
   name: PROVIDER_NAME,
 
-  isAvailable(apiKey) {
-    return Boolean(apiKey);
+  isAvailable() {
+    return Boolean(process.env.ATTOM_API_KEY);
   },
 
   /**
    * Look up property data by address.
    *
    * @param {{ street?: string, city?: string, state?: string, zip?: string }} address
-   * @param {string} apiKey
    * @returns {Promise<object|null>}
    */
-  async lookupByAddress({ street, city, state, zip }, apiKey) {
-    if (!apiKey) return null;
+  async lookupByAddress({ street, city, state, zip }) {
+    if (!process.env.ATTOM_API_KEY) return null;
 
     if (!street) return null;
     const params = new URLSearchParams();
@@ -39,7 +38,7 @@ export const attomProvider = {
       const response = await fetch(url, {
         method: "GET",
         headers: {
-          apikey: apiKey,
+          apikey: process.env.ATTOM_API_KEY,
           Accept: "application/json",
         },
         signal: controller.signal,
