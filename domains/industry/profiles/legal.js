@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["legal-tip", "case-result", "attorney-spotlight"],
     starterChannels: ["LINKEDIN", "FACEBOOK", "INSTAGRAM"],
+    channelRecommendations: {
+      primary: ["LINKEDIN"],
+      secondary: ["YOUTUBE", "FACEBOOK"],
+      optional: ["INSTAGRAM", "X"],
+    },
     starterAngles: [
       "Share a practical legal tip that educates your audience about their rights or common mistakes.",
       "Highlight a case result or settlement that demonstrates your firm's expertise (no confidential details).",

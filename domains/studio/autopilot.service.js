@@ -33,6 +33,7 @@ import { getRecentAssetCount } from "../industry/realEstateAssets.js";
 import { generateDraft } from "./generation/aiGenerationService.js";
 import { formatDraft } from "./draft.service.js";
 import { pickAngleForSource } from "./contentAngles.js";
+import { getGBPSignals } from "./gbpSync.service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AUTOPILOT_PROVIDER_KEY = "_autopilot_settings";
@@ -131,13 +132,20 @@ async function evaluateTriggers(workspaceId, reAssets, settings) {
 
   // C. new_review
   if (settings.allowTestimonialPosts && reAssets.reviewCount > 0) {
+    // Include unreplied review count from GBP signals if available
+    let unrepliedCount = 0;
+    try {
+      const gbpSignals = await getGBPSignals(workspaceId);
+      unrepliedCount = gbpSignals.unrepliedCount || 0;
+    } catch { /* non-critical */ }
+
     triggers.push({
       triggerType: "new_review",
       reason: recentNewReviews > 0
         ? `${recentNewReviews} new review${recentNewReviews === 1 ? "" : "s"} added recently`
         : `${reAssets.reviewCount} review${reAssets.reviewCount === 1 ? "" : "s"} available`,
       eligible: recentNewReviews > 0,
-      supportingData: { newCount: recentNewReviews, totalCount: reAssets.reviewCount },
+      supportingData: { newCount: recentNewReviews, totalCount: reAssets.reviewCount, unrepliedCount },
     });
   }
 

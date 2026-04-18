@@ -172,6 +172,7 @@ export const DataItemTypeEnum = z.enum([
   "TEAM_SPOTLIGHT",
   "INDUSTRY_NEWS",
   "EVENT",
+  "PROPERTY",
   "CUSTOM",
 ]);
 
@@ -462,12 +463,59 @@ export const ImportFromNotionSchema = z.object({
 
 // ── Onboarding ──────────────────────────────────────────────────────────
 
+export const AgentProfileDraftSchema = z.object({
+  sourceType: z.enum(["website", "zillow_profile", "license_lookup", "crm_import", "documents", "manual"]).optional(),
+  agentName: z.string().max(200).optional(),
+  brokerageName: z.string().max(200).optional(),
+  teamName: z.string().max(200).optional(),
+  bio: z.string().max(5000).optional(),
+  specialties: z.array(z.string().max(200)).optional(),
+  serviceAreas: z.array(z.string().max(200)).optional(),
+  primaryCity: z.string().max(100).optional(),
+  primaryState: z.string().max(2).optional(),
+  licenseNumber: z.string().max(30).optional(),
+  licenseState: z.string().max(2).optional(),
+  licenseStatus: z.string().max(50).optional(),
+  websiteUrl: z.string().max(500).optional(),
+  zillowProfileUrl: z.string().max(500).optional(),
+  socialLinks: z.object({
+    instagram: z.string().max(500).optional(),
+    facebook: z.string().max(500).optional(),
+    linkedin: z.string().max(500).optional(),
+    youtube: z.string().max(500).optional(),
+  }).optional(),
+  exampleListings: z.array(z.object({
+    address: z.string().max(200).optional(),
+    city: z.string().max(100).optional(),
+    state: z.string().max(50).optional(),
+    price: z.number().optional(),
+  })).optional(),
+  inferredAudience: z.array(z.string().max(200)).optional(),
+  inferredPriceBands: z.array(z.string().max(100)).optional(),
+  notes: z.array(z.string().max(1000)).optional(),
+  confidence: z.record(z.string(), z.number()).optional(),
+}).optional();
+
+export const ZillowExtractSchema = z.object({
+  url: z.string().url().max(500),
+});
+
+export const LicenseLookupSchema = z.object({
+  state: z.string().length(2),
+  licenseNumber: z.string().min(3).max(30),
+});
+
+export const CrmAnalyzeSchema = z.object({
+  csvText: z.string().max(2_000_000),
+});
+
 export const OnboardingAnalyzeSchema = z
   .object({
     input: z.string().max(5000).optional().default(""),
     inputType: z.enum(["url", "text"]),
     documentTexts: z.array(z.string().max(200000)).max(5).optional().default([]),
     industryKey: z.string().max(40).optional(),
+    agentProfileDraft: AgentProfileDraftSchema,
   })
   .refine(
     (d) => d.input.length >= 3 || (d.documentTexts && d.documentTexts.length > 0),
@@ -636,6 +684,19 @@ export const GBPSetLocationSchema = z.object({
   accountId: z.string().min(1),
   locationId: z.string().min(1),
   locationName: z.string().optional(),
+});
+
+export const GBPReplySchema = z.object({
+  reviewId: z.string().min(1).max(200),
+  replyText: z.string().min(1).max(4096),
+});
+
+export const GBPPostSchema = z.object({
+  summary: z.string().min(1).max(1500),
+  callToAction: z.object({
+    actionType: z.enum(["LEARN_MORE", "BOOK", "ORDER", "SHOP", "SIGN_UP", "CALL"]).optional(),
+    url: z.string().url().optional(),
+  }).optional(),
 });
 
 // ── CRM Integration ─────────────────────────────────────────────────────

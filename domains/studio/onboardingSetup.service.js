@@ -192,8 +192,14 @@ export async function crawlAndCombine({ url, text, documentTexts = [], onProgres
 /**
  * Extract brand data from scraped website content via AI.
  */
-export async function extractBrandData(content, { url, industryKey } = {}) {
-  let userPrompt = `Analyze the following website content and extract brand profile data:\n\n${content.slice(0, MAX_TEXT_LENGTH)}`;
+export async function extractBrandData(content, { url, industryKey, agentContext } = {}) {
+  let userPrompt = "";
+
+  if (agentContext) {
+    userPrompt += `\n\nPre-extracted agent profile data (use this to inform your extraction):\n${agentContext}\n\n`;
+  }
+
+  userPrompt += `Analyze the following website content and extract brand profile data:\n\n${content.slice(0, MAX_TEXT_LENGTH)}`;
   if (url) {
     userPrompt += `\n\nSource URL: ${url}`;
     const profilePatterns = /\/(agents?|team|advisors?|attorneys?|staff|people|professionals?|brokers?|trainers?|coaches|instructors?)\//i;
@@ -222,8 +228,14 @@ export async function extractBrandData(content, { url, industryKey } = {}) {
 /**
  * Extract brand data from a text description via AI.
  */
-export async function extractBrandFromText(description, { industryKey } = {}) {
-  let userPrompt = `Analyze the following business description and extract brand profile data:\n\n${description.slice(0, MAX_TEXT_LENGTH)}`;
+export async function extractBrandFromText(description, { industryKey, agentContext } = {}) {
+  let userPrompt = "";
+
+  if (agentContext) {
+    userPrompt += `\n\nPre-extracted agent profile data (use this to inform your extraction):\n${agentContext}\n\n`;
+  }
+
+  userPrompt += `Analyze the following business description and extract brand profile data:\n\n${description.slice(0, MAX_TEXT_LENGTH)}`;
 
   const industryHints = getExtractionHints(industryKey);
   if (industryHints) {

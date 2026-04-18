@@ -283,6 +283,94 @@ export async function fetchBusinessInfo(config, accountId, locationId) {
   };
 }
 
+// ── Reply & Post ────────────────────────────────────────────────────────
+
+/**
+ * Reply to a GBP review.
+ * @param {object} config — connection metadata with encrypted tokens
+ * @param {string} accountId — e.g. "accounts/xxx"
+ * @param {string} locationId — e.g. "locations/yyy"
+ * @param {string} reviewId — the review ID
+ * @param {string} replyText — reply body (max 4096 chars)
+ * @returns {Promise<{ comment: string, updateTime: string }>}
+ */
+export async function replyToReview(config, accountId, locationId, reviewId, replyText) {
+  const token = await getAccessToken(config);
+  const locationPath = `${accountId}/${locationId}`;
+
+  const res = await fetch(
+    `${REVIEWS_API_BASE}/${locationPath}/reviews/${reviewId}/reply`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ comment: replyText }),
+      signal: AbortSignal.timeout(10_000),
+    }
+  );
+
+  if (!res.ok) {
+    const status = res.status;
+    const text = await res.text().catch(() => "");
+    if (status === 401) {
+      throw Object.assign(new Error("Token expired — reconnect required"), { permanent: true });
+    }
+    throw new Error(`Failed to reply to review (${status}): ${text.slice(0, 200)}`);
+  }
+
+  return res.json();
+}
+
+/**
+ * Create a local post (Google Business post).
+ * @param {object} config — connection metadata
+ * @param {string} accountId
+ * @param {string} locationId
+ * @param {{ summary: string, callToAction?: { actionType?: string, url?: string }, topicType?: string }} post
+ * @returns {Promise<object>} — created post object
+ */
+export async function createLocalPost(config, accountId, locationId, post) {
+  const token = await getAccessToken(config);
+  const locationPath = `${accountId}/${locationId}`;
+
+  const body = {
+    summary: post.summary,
+    topicType: post.topicType || "STANDARD",
+  };
+  if (post.callToAction?.actionType) {
+    body.callToAction = {
+      actionType: post.callToAction.actionType,
+      ...(post.callToAction.url ? { url: post.callToAction.url } : {}),
+    };
+  }
+
+  const res = await fetch(
+    `${REVIEWS_API_BASE}/${locationPath}/localPosts`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    }
+  );
+
+  if (!res.ok) {
+    const status = res.status;
+    const text = await res.text().catch(() => "");
+    if (status === 401) {
+      throw Object.assign(new Error("Token expired — reconnect required"), { permanent: true });
+    }
+    throw new Error(`Failed to create local post (${status}): ${text.slice(0, 200)}`);
+  }
+
+  return res.json();
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 function mapStarRating(rating) {

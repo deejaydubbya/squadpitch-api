@@ -41,6 +41,7 @@ function formatProfilePublic(profile) {
     content: {
       starterBlueprintSlugs: profile.content.starterBlueprintSlugs,
       starterChannels: profile.content.starterChannels,
+      channelRecommendations: profile.content.channelRecommendations ?? null,
       // starterAngles omitted — sent via SSE done event, not static endpoint
     },
     integrations: profile.integrations,

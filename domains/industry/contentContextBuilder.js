@@ -126,14 +126,33 @@ function transformRealEstateTestimonial(item) {
   if (d.context) highlights.push(d.context);
   if (d._sourceType === "gbp") highlights.push("Google Business Profile review");
   if (d._sourceType === "crm") highlights.push("CRM client feedback");
+  // Append AI-extracted themes (up to 3)
+  if (d.extractedThemes?.length > 0) {
+    highlights.push(...d.extractedThemes.slice(0, 3));
+  }
+  // Append client type / use case
+  if (d.useCases?.length > 0) {
+    highlights.push(`Client type: ${d.useCases.join(", ")}`);
+  }
+
+  // Use AI-extracted strong quote for emotional hook when available
+  const emotionalHook = d.strongQuotes?.[0]
+    ? (d.strongQuotes[0].length > 80 ? d.strongQuotes[0].slice(0, 77) + "..." : d.strongQuotes[0])
+    : quote
+      ? extractHook(quote)
+      : "Happy client experience";
+
+  // Surface location mentions
+  const location = d.locationMentions?.length > 0
+    ? d.locationMentions.join(", ")
+    : undefined;
 
   return {
     headline,
     highlights,
     trustSignals: trustSignals.slice(0, 4),
-    emotionalHook: quote
-      ? extractHook(quote)
-      : "Happy client experience",
+    emotionalHook,
+    ...(location && { location }),
   };
 }
 

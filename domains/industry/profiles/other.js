@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["brand-story", "value-post", "social-proof"],
     starterChannels: ["INSTAGRAM", "LINKEDIN", "FACEBOOK"],
+    channelRecommendations: {
+      primary: ["INSTAGRAM", "FACEBOOK"],
+      secondary: ["LINKEDIN", "TIKTOK"],
+      optional: ["X", "THREADS", "YOUTUBE"],
+    },
     starterAngles: [
       "Share your brand's origin story — what inspired you to start and what drives your mission.",
       "Create an educational post that positions you as an expert in your field.",

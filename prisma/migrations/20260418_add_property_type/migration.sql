@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "DataItemType" ADD VALUE 'PROPERTY' BEFORE 'CUSTOM';

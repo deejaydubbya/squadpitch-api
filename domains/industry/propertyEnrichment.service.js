@@ -192,16 +192,22 @@ export async function enrichAllListings(clientId, limit = 20) {
   const items = await prisma.workspaceDataItem.findMany({
     where: {
       clientId,
-      type: "CUSTOM",
+      type: { in: ["PROPERTY", "CUSTOM"] },
       status: "ACTIVE",
     },
     orderBy: { createdAt: "desc" },
     take: limit * 2, // Fetch extra to filter enriched ones
   });
 
-  // Filter to un-enriched items
+  // Filter to items that haven't been enriched, or were enriched > 7 days ago
+  const ENRICHMENT_FRESHNESS_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  const now = Date.now();
   const unenriched = items
-    .filter((item) => !item.dataJson?._enrichedAt)
+    .filter((item) => {
+      const enrichedAt = item.dataJson?._enrichedAt;
+      if (!enrichedAt) return true; // Never enriched
+      return (now - new Date(enrichedAt).getTime()) > ENRICHMENT_FRESHNESS_MS;
+    })
     .slice(0, limit);
 
   const results = [];

@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["owner-story", "product-highlight", "community-post"],
     starterChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"],
+    channelRecommendations: {
+      primary: ["FACEBOOK", "INSTAGRAM"],
+      secondary: ["TIKTOK"],
+      optional: ["LINKEDIN", "PINTEREST", "X"],
+    },
     starterAngles: [
       "Tell the story behind your business — why you started and what keeps you going.",
       "Highlight a product or service that your customers love, with real details and benefits.",

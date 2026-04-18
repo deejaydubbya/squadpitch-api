@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["personal-story", "value-post", "community-engagement"],
     starterChannels: ["INSTAGRAM", "TIKTOK", "YOUTUBE"],
+    channelRecommendations: {
+      primary: ["TIKTOK", "INSTAGRAM", "YOUTUBE"],
+      secondary: ["X", "THREADS"],
+      optional: ["REDDIT", "PINTEREST"],
+    },
     starterAngles: [
       "Share a personal story or lesson learned that resonates with your audience's values.",
       "Create a high-value tip or insight post in your niche that followers will save and share.",

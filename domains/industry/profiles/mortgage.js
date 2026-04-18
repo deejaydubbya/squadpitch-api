@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["rate-update", "homebuyer-tip", "closing-celebration"],
     starterChannels: ["LINKEDIN", "FACEBOOK", "INSTAGRAM"],
+    channelRecommendations: {
+      primary: ["LINKEDIN", "FACEBOOK"],
+      secondary: ["INSTAGRAM", "YOUTUBE"],
+      optional: ["TIKTOK", "X"],
+    },
     starterAngles: [
       "Share a rate update or market trend that helps buyers understand today's mortgage landscape.",
       "Post a first-time homebuyer tip — break down a confusing part of the loan process simply.",

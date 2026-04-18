@@ -339,6 +339,11 @@ export function formatBusinessDataForPrompt(dataItem) {
       if (d.author) lines.push(`Author: ${d.author}`);
       if (d.role) lines.push(`Role: ${d.role}`);
       if (d.result) lines.push(`Result: ${d.result}`);
+      if (d.extractedThemes?.length > 0) lines.push(`Themes: ${d.extractedThemes.join(", ")}`);
+      if (d.strongQuotes?.length > 0) lines.push(`Key Quotes: ${d.strongQuotes.map((q) => `"${q}"`).join(" | ")}`);
+      if (d.sentiment) lines.push(`Sentiment: ${d.sentiment}`);
+      if (d.useCases?.length > 0) lines.push(`Client Type: ${d.useCases.join(", ")}`);
+      if (d.locationMentions?.length > 0) lines.push(`Location: ${d.locationMentions.join(", ")}`);
       break;
     case "STATISTIC":
       if (d.metric) lines.push(`Metric: ${d.metric}`);
@@ -855,33 +860,73 @@ const CAMPAIGN_TYPE_INSTRUCTIONS = {
 - Paint a picture of life in this home and neighborhood`,
 };
 
+/**
+ * Build a normalized, structured property context block for AI prompts.
+ * Only includes fields that have values — missing fields are silently skipped.
+ * Shared by both campaign generation and single-post regeneration.
+ *
+ * Sections:
+ *   1. Location — address, city/state/zip, neighborhood
+ *   2. Property Facts — type, beds/baths/sqft, lot size, year built
+ *   3. Pricing & Market — price, listing status, days on market, estimated value
+ *   4. Representation — agent, brokerage
+ *   5. Listing Details — description, highlights
+ *   6. Creative Direction — preferred CTA, special instructions
+ *
+ * TODO (ATTOM enrichment): When ATTOM property data is integrated, this block
+ * can be extended with: assessed value, tax history, school ratings, flood zone,
+ * HOA fees, zoning, ownership history, comparable sales, and AVM confidence.
+ * Gate behind a flag so only verified/normalized ATTOM fields are injected.
+ */
+function buildPropertyContextBlock(data) {
+  const lines = [];
+
+  // — Location —
+  if (data.address) lines.push(`Address: ${data.address}`);
+  if (data.city || data.state || data.zip) {
+    lines.push(`Location: ${[data.city, data.state, data.zip].filter(Boolean).join(", ")}`);
+  }
+  if (data.neighborhood) lines.push(`Neighborhood: ${data.neighborhood}`);
+
+  // — Property Facts —
+  if (data.propertyType) lines.push(`Property type: ${data.propertyType}`);
+  const specs = [];
+  if (data.beds) specs.push(`${data.beds} bed`);
+  if (data.baths) specs.push(`${data.baths} bath`);
+  if (data.sqft) specs.push(`${Number(data.sqft).toLocaleString()} sq ft`);
+  if (specs.length > 0) lines.push(`Specs: ${specs.join(" / ")}`);
+  if (data.lotSize) lines.push(`Lot size: ${data.lotSize}`);
+  if (data.yearBuilt) lines.push(`Year built: ${data.yearBuilt}`);
+
+  // — Pricing & Market Context —
+  if (data.price) lines.push(`Price: $${Number(data.price).toLocaleString()}`);
+  if (data.listingStatus) lines.push(`Listing status: ${data.listingStatus}`);
+  if (data.daysOnMarket) lines.push(`Days on market: ${data.daysOnMarket}`);
+  if (data.estimatedValue) lines.push(`Estimated value: $${Number(data.estimatedValue).toLocaleString()}`);
+  // TODO (ATTOM): comparable sales summary, AVM confidence score
+
+  // — Representation —
+  if (data.agentName) lines.push(`Agent: ${data.agentName}`);
+  if (data.brokerage) lines.push(`Brokerage: ${data.brokerage}`);
+
+  // — Listing Details —
+  if (data.description) lines.push(`Description: ${data.description}`);
+  if (data.highlights) lines.push(`Notable features: ${data.highlights}`);
+
+  // — Creative Direction —
+  if (data.cta) lines.push(`Preferred CTA: ${data.cta}`);
+  if (data.campaignNotes) lines.push(`Special instructions: ${data.campaignNotes}`);
+
+  return lines;
+}
+
 export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageContext = null, slots = null) {
   const lines = [];
 
-  // Property details
-  lines.push(`--- PROPERTY DETAILS ---`);
-  if (listingData.address) lines.push(`Address: ${listingData.address}`);
-  if (listingData.price) lines.push(`Price: $${Number(listingData.price).toLocaleString()}`);
-
-  const specs = [];
-  if (listingData.beds) specs.push(`${listingData.beds} bed`);
-  if (listingData.baths) specs.push(`${listingData.baths} bath`);
-  if (listingData.sqft) specs.push(`${Number(listingData.sqft).toLocaleString()} sq ft`);
-  if (specs.length > 0) lines.push(`Specs: ${specs.join(" / ")}`);
-
-  if (listingData.propertyType) lines.push(`Property type: ${listingData.propertyType}`);
-  if (listingData.description) lines.push(`Description: ${listingData.description}`);
-  if (listingData.highlights) lines.push(`Notable features: ${listingData.highlights}`);
-  if (listingData.neighborhood) lines.push(`Neighborhood: ${listingData.neighborhood}`);
-  if (listingData.cta) lines.push(`Preferred CTA: ${listingData.cta}`);
-  if (listingData.agentName) lines.push(`Agent: ${listingData.agentName}`);
-  if (listingData.brokerage) lines.push(`Brokerage: ${listingData.brokerage}`);
-  if (listingData.yearBuilt) lines.push(`Year built: ${listingData.yearBuilt}`);
-  if (listingData.lotSize) lines.push(`Lot size: ${listingData.lotSize}`);
-  if (listingData.estimatedValue) lines.push(`Estimated value: $${Number(listingData.estimatedValue).toLocaleString()}`);
-  if (listingData.daysOnMarket) lines.push(`Days on market: ${listingData.daysOnMarket}`);
-  if (listingData.campaignNotes) lines.push(`Special instructions: ${listingData.campaignNotes}`);
-  lines.push(`--- END PROPERTY DETAILS ---`);
+  // Structured property context
+  lines.push(`--- PROPERTY CONTEXT ---`);
+  lines.push(...buildPropertyContextBlock(listingData));
+  lines.push(`--- END PROPERTY CONTEXT ---`);
 
   // Available images (optional — from screenshot extraction)
   if (Array.isArray(imageContext) && imageContext.length > 0) {
@@ -1081,30 +1126,10 @@ export const SINGLE_POST_SCHEMA = {
 export function buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, slot, campaignSummary, imageContext = null) {
   const lines = [];
 
-  // Property details (same as full campaign prompt)
-  lines.push(`--- PROPERTY DETAILS ---`);
-  if (propertyData.address) lines.push(`Address: ${propertyData.address}`);
-  if (propertyData.price) lines.push(`Price: $${Number(propertyData.price).toLocaleString()}`);
-
-  const specs = [];
-  if (propertyData.beds) specs.push(`${propertyData.beds} bed`);
-  if (propertyData.baths) specs.push(`${propertyData.baths} bath`);
-  if (propertyData.sqft) specs.push(`${Number(propertyData.sqft).toLocaleString()} sq ft`);
-  if (specs.length > 0) lines.push(`Specs: ${specs.join(" / ")}`);
-
-  if (propertyData.propertyType) lines.push(`Property type: ${propertyData.propertyType}`);
-  if (propertyData.description) lines.push(`Description: ${propertyData.description}`);
-  if (propertyData.highlights) lines.push(`Notable features: ${propertyData.highlights}`);
-  if (propertyData.neighborhood) lines.push(`Neighborhood: ${propertyData.neighborhood}`);
-  if (propertyData.cta) lines.push(`Preferred CTA: ${propertyData.cta}`);
-  if (propertyData.agentName) lines.push(`Agent: ${propertyData.agentName}`);
-  if (propertyData.brokerage) lines.push(`Brokerage: ${propertyData.brokerage}`);
-  if (propertyData.yearBuilt) lines.push(`Year built: ${propertyData.yearBuilt}`);
-  if (propertyData.lotSize) lines.push(`Lot size: ${propertyData.lotSize}`);
-  if (propertyData.estimatedValue) lines.push(`Estimated value: $${Number(propertyData.estimatedValue).toLocaleString()}`);
-  if (propertyData.daysOnMarket) lines.push(`Days on market: ${propertyData.daysOnMarket}`);
-  if (propertyData.campaignNotes) lines.push(`Special instructions: ${propertyData.campaignNotes}`);
-  lines.push(`--- END PROPERTY DETAILS ---`);
+  // Structured property context (shared helper)
+  lines.push(`--- PROPERTY CONTEXT ---`);
+  lines.push(...buildPropertyContextBlock(propertyData));
+  lines.push(`--- END PROPERTY CONTEXT ---`);
 
   // Available images (optional)
   if (Array.isArray(imageContext) && imageContext.length > 0) {

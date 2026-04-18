@@ -41,7 +41,7 @@ export function getStarterAngles(industryKey) {
  * to provide industry-aware guidance beyond onboarding.
  *
  * @param {string | null | undefined} industryKey
- * @returns {{ label: string, description: string, contentAngles: string[], priorityDataTypes: string[], starterChannels: string[] } | null}
+ * @returns {{ label: string, description: string, contentAngles: string[], priorityDataTypes: string[], starterChannels: string[], channelRecommendations: { primary: string[], secondary: string[], optional: string[] } | null } | null}
  */
 export function getContentContext(industryKey) {
   if (!industryKey) return null;
@@ -52,7 +52,22 @@ export function getContentContext(industryKey) {
     contentAngles: profile.content.starterAngles,
     priorityDataTypes: profile.extraction.priorityDataTypes,
     starterChannels: profile.content.starterChannels,
+    channelRecommendations: profile.content.channelRecommendations ?? null,
   };
+}
+
+/**
+ * Get channel recommendations for an industry key.
+ * Returns tiered channel recommendations (primary, secondary, optional),
+ * or null if no industry key is provided.
+ *
+ * @param {string | null | undefined} industryKey
+ * @returns {{ primary: string[], secondary: string[], optional: string[] } | null}
+ */
+export function getChannelRecommendations(industryKey) {
+  if (!industryKey) return null;
+  const profile = getIndustryProfile(industryKey);
+  return profile.content.channelRecommendations ?? null;
 }
 
 /**

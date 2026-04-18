@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["transformation-reveal", "stylist-spotlight", "booking-promo"],
     starterChannels: ["INSTAGRAM", "TIKTOK", "FACEBOOK"],
+    channelRecommendations: {
+      primary: ["INSTAGRAM", "TIKTOK"],
+      secondary: ["PINTEREST"],
+      optional: ["FACEBOOK", "YOUTUBE"],
+    },
     starterAngles: [
       "Share a stunning before/after transformation — let the results speak for themselves.",
       "Spotlight a stylist or technician — share their specialty and what clients love about them.",

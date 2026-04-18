@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["transformation-story", "workout-tip", "class-spotlight"],
     starterChannels: ["INSTAGRAM", "TIKTOK", "FACEBOOK"],
+    channelRecommendations: {
+      primary: ["INSTAGRAM", "TIKTOK"],
+      secondary: ["YOUTUBE"],
+      optional: ["FACEBOOK", "THREADS"],
+    },
     starterAngles: [
       "Share a client transformation story — celebrate their journey and results (with permission).",
       "Post a quick workout tip or exercise demo that followers can try today.",

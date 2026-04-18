@@ -194,6 +194,7 @@ export async function loadRealEstateGenerationAssets(workspaceId, realEstateCont
   return {
     bestListing: selectedEntry?.normalized ?? null,
     bestListingSource: selectedEntry?.source ?? null,
+    listings: normalizedListings,
     reviews,
     milestones: milestones.map((m) => m.normalized),
     bestMilestone: bestMilestone?.normalized ?? null,

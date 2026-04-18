@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["product-spotlight", "customer-review", "behind-the-brand"],
     starterChannels: ["INSTAGRAM", "TIKTOK", "FACEBOOK"],
+    channelRecommendations: {
+      primary: ["INSTAGRAM", "TIKTOK"],
+      secondary: ["FACEBOOK", "PINTEREST"],
+      optional: ["YOUTUBE", "THREADS", "X"],
+    },
     starterAngles: [
       "Spotlight a best-selling product — highlight what makes it unique and why customers love it.",
       "Turn a real customer review into a social proof post with the product front and center.",

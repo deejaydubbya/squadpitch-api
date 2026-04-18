@@ -11,6 +11,7 @@
 import { prisma } from "../../prisma.js";
 import * as gbpProvider from "../integrations/providers/gbpProvider.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
+import { analyzeAndStoreReviews } from "./gbpReviewAnalysis.service.js";
 
 // ── Sync ────────────────────────────────────────────────────────────────
 
@@ -66,7 +67,33 @@ export async function syncGBP(clientId) {
       else if (result === "updated") reviewsUpdated++;
     }
 
-    // 5. Update connection metadata
+    // 5. Fire-and-forget AI analysis on newly created reviews
+    if (reviewsImported > 0) {
+      const sixtySecondsAgo = new Date(Date.now() - 60_000);
+      const recentItems = await prisma.workspaceDataItem.findMany({
+        where: {
+          clientId,
+          type: "TESTIMONIAL",
+          status: "ACTIVE",
+          tags: { hasSome: ["gbp"] },
+          createdAt: { gte: sixtySecondsAgo },
+        },
+      });
+      const unanalyzed = recentItems.filter((item) => !item.dataJson?.analyzedAt);
+      if (unanalyzed.length > 0) {
+        analyzeAndStoreReviews(clientId, unanalyzed).catch((err) => {
+          console.error("[GBP] Review analysis failed (non-blocking):", err.message);
+        });
+      }
+    }
+
+    // 7. Compute review stats
+    const unrepliedReviewCount = allReviews.filter((r) => !r.reply).length;
+    const newAverageRating = allReviews.length > 0
+      ? (allReviews.reduce((sum, r) => sum + (r.starRating || 0), 0) / allReviews.length).toFixed(1)
+      : null;
+
+    // 7. Update connection metadata
     await prisma.workspaceTechStackConnection.update({
       where: { id: connection.id },
       data: {
@@ -74,10 +101,15 @@ export async function syncGBP(clientId) {
           ...config,
           lastSyncedAt: new Date().toISOString(),
           reviewCount: allReviews.length,
-          averageRating: allReviews.length > 0
-            ? (allReviews.reduce((sum, r) => sum + (r.starRating || 0), 0) / allReviews.length).toFixed(1)
-            : null,
+          previousAverageRating: config.averageRating || null,
+          averageRating: newAverageRating,
+          unrepliedReviewCount,
           businessName: businessInfo?.name || config.businessName,
+          businessDescription: businessInfo?.description || config.businessDescription || "",
+          businessPhone: businessInfo?.phone || config.businessPhone || null,
+          businessWebsite: businessInfo?.website || config.businessWebsite || null,
+          businessAddress: businessInfo?.address || config.businessAddress || null,
+          businessHours: businessInfo?.hours || config.businessHours || null,
           businessCategories: businessInfo?.categories || [],
         },
       },
@@ -171,6 +203,145 @@ async function upsertReview(clientId, dataSourceId, review, businessInfo) {
     },
   });
   return "created";
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Get stored GBP reviews from WorkspaceDataItems (no API call).
+ *
+ * @param {string} clientId
+ * @param {{ limit?: number, offset?: number }} [opts]
+ * @returns {Promise<{ reviews: Array, total: number, unrepliedCount: number }>}
+ */
+export async function getGBPReviews(clientId, { limit = 20, offset = 0 } = {}) {
+  const where = {
+    clientId,
+    type: "TESTIMONIAL",
+    status: "ACTIVE",
+    tags: { hasSome: ["gbp"] },
+  };
+
+  const [items, total] = await Promise.all([
+    prisma.workspaceDataItem.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: offset,
+      take: limit,
+    }),
+    prisma.workspaceDataItem.count({ where }),
+  ]);
+
+  const reviews = items.map((item) => ({
+    id: item.dataJson?._externalId || item.id,
+    reviewer: item.dataJson?.author || "Anonymous",
+    rating: item.dataJson?.rating || null,
+    comment: item.dataJson?.quote || "",
+    reviewDate: item.dataJson?.reviewDate || null,
+    reply: item.dataJson?.reply || null,
+    dataItemId: item.id,
+    extractedThemes: item.dataJson?.extractedThemes || [],
+    sentiment: item.dataJson?.sentiment || null,
+    useCases: item.dataJson?.useCases || [],
+    locationMentions: item.dataJson?.locationMentions || [],
+    strongQuotes: item.dataJson?.strongQuotes || [],
+    analyzedAt: item.dataJson?.analyzedAt || null,
+  }));
+
+  const unrepliedCount = reviews.filter((r) => !r.reply).length;
+
+  return { reviews, total, unrepliedCount };
+}
+
+/**
+ * Get stored GBP business profile from connection metadata (no API call).
+ *
+ * @param {string} clientId
+ * @returns {Promise<object|null>}
+ */
+export async function getGBPBusinessProfile(clientId) {
+  const connection = await prisma.workspaceTechStackConnection.findUnique({
+    where: { workspaceId_providerKey: { workspaceId: clientId, providerKey: "google_business_profile" } },
+  });
+
+  if (!connection || connection.connectionStatus !== "connected") return null;
+
+  const meta = connection.metadataJson || {};
+  return {
+    businessName: meta.businessName || "",
+    description: meta.businessDescription || "",
+    categories: meta.businessCategories || [],
+    address: meta.businessAddress || null,
+    phone: meta.businessPhone || null,
+    website: meta.businessWebsite || null,
+    reviewCount: meta.reviewCount || 0,
+    averageRating: meta.averageRating || null,
+    lastSyncedAt: meta.lastSyncedAt || null,
+  };
+}
+
+/**
+ * Get GBP signals for recommendation engine.
+ *
+ * @param {string} clientId
+ * @returns {Promise<object>}
+ */
+export async function getGBPSignals(clientId) {
+  const connection = await prisma.workspaceTechStackConnection.findUnique({
+    where: { workspaceId_providerKey: { workspaceId: clientId, providerKey: "google_business_profile" } },
+  });
+
+  if (!connection || connection.connectionStatus !== "connected") {
+    return { hasGBP: false, reviewCount: 0, averageRating: null, unrepliedCount: 0, recentNewReviews: 0, ratingDelta: 0, lastSyncedAt: null };
+  }
+
+  const meta = connection.metadataJson || {};
+
+  // Count reviews added in the last 7 days
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const recentNewReviews = await prisma.workspaceDataItem.count({
+    where: {
+      clientId,
+      type: "TESTIMONIAL",
+      status: "ACTIVE",
+      tags: { hasSome: ["gbp"] },
+      createdAt: { gte: sevenDaysAgo },
+    },
+  });
+
+  const ratingDelta = meta.previousAverageRating && meta.averageRating
+    ? Number(meta.averageRating) - Number(meta.previousAverageRating)
+    : 0;
+
+  return {
+    hasGBP: true,
+    reviewCount: meta.reviewCount || 0,
+    averageRating: meta.averageRating ? Number(meta.averageRating) : null,
+    unrepliedCount: meta.unrepliedReviewCount || 0,
+    recentNewReviews,
+    ratingDelta,
+    lastSyncedAt: meta.lastSyncedAt || null,
+    topThemes: meta.reviewInsights?.topThemes || [],
+    sentimentBreakdown: meta.reviewInsights?.sentimentBreakdown || null,
+    topUseCases: meta.reviewInsights?.topUseCases || [],
+  };
+}
+
+/**
+ * Get aggregate review insights from connection metadata.
+ *
+ * @param {string} clientId
+ * @returns {Promise<object|null>}
+ */
+export async function getGBPInsights(clientId) {
+  const connection = await prisma.workspaceTechStackConnection.findUnique({
+    where: { workspaceId_providerKey: { workspaceId: clientId, providerKey: "google_business_profile" } },
+  });
+
+  if (!connection || connection.connectionStatus !== "connected") return null;
+
+  const meta = connection.metadataJson || {};
+  return meta.reviewInsights || null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

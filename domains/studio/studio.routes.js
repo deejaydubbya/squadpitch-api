@@ -62,11 +62,16 @@ import {
   ListingConfirmUrlSchema,
   GBPCallbackSchema,
   GBPSetLocationSchema,
+  GBPReplySchema,
+  GBPPostSchema,
   CRMConnectSchema,
   CreateListingSourceSchema,
   UpdateListingSourceSchema,
   RatePerformanceSchema,
   GenerateSeriesSchema,
+  ZillowExtractSchema,
+  LicenseLookupSchema,
+  CrmAnalyzeSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import * as dataService from "./data.service.js";
@@ -91,6 +96,7 @@ import { encryptToken } from "../../lib/tokenCrypto.js";
 import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
+import * as agentOnboarding from "./agentOnboarding.service.js";
 import { crawlWebsite } from "./crawlWebsite.js";
 import { getStarterAngles, getIndustryTechStack, getRecommendationTemplates, getAssetTagDefaults } from "../industry/industry.service.js";
 import { RE_CAPABILITY_MAP } from "../industry/realEstateContext.js";
@@ -104,7 +110,8 @@ import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSugg
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
 import * as gbpProvider from "../integrations/providers/gbpProvider.js";
-import { syncGBP } from "./gbpSync.service.js";
+import { syncGBP, getGBPReviews, getGBPBusinessProfile, getGBPInsights } from "./gbpSync.service.js";
+import { reanalyzeAllReviews } from "./gbpReviewAnalysis.service.js";
 import * as fubProvider from "../integrations/providers/fubProvider.js";
 import { syncCRM } from "./crmSync.service.js";
 import * as listingFeedService from "./listingFeed.service.js";
@@ -112,6 +119,7 @@ import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateA
 import { enrichListingById, enrichAllListings } from "../industry/propertyEnrichment.service.js";
 import { evaluateStaleListings, getEvents } from "./listingEvents.service.js";
 import { generateSampleListings, simulateListingEvent } from "./listingSimulator.service.js";
+import * as propertyDataService from "../industry/propertyData.service.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
 
@@ -816,6 +824,47 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
   }
 });
 
+// ── Agent Onboarding Sources ─────────────────────────────────────────
+
+studioRouter.post(`${BASE}/onboarding/zillow-extract`, async (req, res, next) => {
+  try {
+    const parsed = ZillowExtractSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const draft = await agentOnboarding.extractFromZillow(parsed.data.url);
+    res.json(draft);
+  } catch (err) {
+    if (err.status === 400) return sendError(res, 400, "EXTRACTION_ERROR", err.message);
+    next(err);
+  }
+});
+
+studioRouter.post(`${BASE}/onboarding/license-lookup`, async (req, res, next) => {
+  try {
+    const parsed = LicenseLookupSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const draft = await agentOnboarding.extractFromLicense(parsed.data.state, parsed.data.licenseNumber);
+    res.json(draft);
+  } catch (err) {
+    if (err.status === 400) return sendError(res, 400, "LOOKUP_ERROR", err.message);
+    next(err);
+  }
+});
+
+studioRouter.post(`${BASE}/onboarding/crm-analyze`, async (req, res, next) => {
+  try {
+    const parsed = CrmAnalyzeSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const draft = await agentOnboarding.extractFromCrm(parsed.data.csvText);
+    res.json(draft);
+  } catch (err) {
+    if (err.status === 400) return sendError(res, 400, "CRM_ANALYZE_ERROR", err.message);
+    next(err);
+  }
+});
+
 // ── Onboarding Analyze (SSE streaming) ───────────────────────────────
 
 studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
@@ -838,10 +887,15 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       return res.end();
     }
 
-    const { input, inputType, documentTexts = [], industryKey } = parsed.data;
+    const { input, inputType, documentTexts = [], industryKey, agentProfileDraft } = parsed.data;
     const hasUrl = inputType === "url" && input.length >= 3;
     const hasText = inputType === "text" && input.length >= 3;
     const hasDocs = documentTexts.length > 0;
+
+    // Convert agent profile draft to context text for AI injection
+    const agentContext = agentProfileDraft
+      ? agentOnboarding.draftToContextText(agentProfileDraft)
+      : undefined;
 
     let brandData;
     let dataItems = [];
@@ -869,6 +923,7 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       brandData = await onboardingService.extractBrandData(combinedText, {
         url: hasUrl ? input : undefined,
         industryKey,
+        agentContext,
       });
       sendEvent({ event: "brand:done", brandData, logoUrl });
 
@@ -888,7 +943,7 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       }
     } else {
       sendEvent({ event: "crawl:start", url: null });
-      brandData = await onboardingService.extractBrandFromText(input, { industryKey });
+      brandData = await onboardingService.extractBrandFromText(input, { industryKey, agentContext });
       sendEvent({ event: "brand:done", brandData });
       sendEvent({ event: "data:done", items: [], count: 0 });
     }
@@ -1146,6 +1201,28 @@ studioRouter.post(`${BASE}/workspaces/:id/recommendations/:recId/accept`, requir
       if (raw) existing = JSON.parse(raw);
     } catch { /* ignore */ }
     existing.push({ id: req.params.recId, at: new Date().toISOString() });
+    if (existing.length > 50) existing = existing.slice(-50);
+    await rSet(trackKey, JSON.stringify(existing), 172800); // 48h
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/workspaces/:id/recommendations/:recId/dismiss
+ * Track that a recommendation was dismissed. Redis-backed, 7-day TTL.
+ */
+studioRouter.post(`${BASE}/workspaces/:id/recommendations/:recId/dismiss`, requireClientOwner, async (req, res, next) => {
+  try {
+    const { redisSet: rSet, redisGet: rGet } = await import("../../redis.js");
+    const trackKey = `sp:rec:dismissed:${req.params.id}`;
+    let existing = [];
+    try {
+      const raw = await rGet(trackKey);
+      if (raw) existing = JSON.parse(raw);
+    } catch { /* ignore */ }
+    existing.push({ id: req.params.recId, at: new Date().toISOString(), reason: req.body?.reason ?? null });
     if (existing.length > 50) existing = existing.slice(-50);
     await rSet(trackKey, JSON.stringify(existing), 604800); // 7 days
     res.json({ ok: true });
@@ -3847,6 +3924,146 @@ studioRouter.delete(
   }
 );
 
+/**
+ * GET /api/v1/workspaces/:id/integrations/gbp/reviews
+ * Get stored GBP reviews from WorkspaceDataItems (no API call).
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/integrations/gbp/reviews`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await getGBPReviews(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/workspaces/:id/integrations/gbp/profile
+ * Get stored GBP business profile from connection metadata.
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/integrations/gbp/profile`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const profile = await getGBPBusinessProfile(req.params.id);
+      if (!profile) return sendError(res, 404, "NOT_FOUND", "GBP not connected");
+      res.json(profile);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/gbp/reply
+ * Reply to a GBP review. Body: { reviewId, replyText }.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/gbp/reply`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = GBPReplySchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const connection = await prisma.workspaceTechStackConnection.findUnique({
+        where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "google_business_profile" } },
+      });
+      if (!connection || connection.connectionStatus !== "connected") {
+        return sendError(res, 400, "NOT_CONNECTED", "GBP not connected");
+      }
+
+      const config = connection.metadataJson || {};
+      const result = await gbpProvider.replyToReview(
+        config, config.accountId, config.locationId,
+        parsed.data.reviewId, parsed.data.replyText
+      );
+
+      res.json({ ok: true, reply: result });
+    } catch (err) {
+      if (err.permanent) {
+        return sendError(res, 401, "TOKEN_EXPIRED", err.message);
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/gbp/post
+ * Create a GBP local post. Body: { summary, callToAction? }.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/gbp/post`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = GBPPostSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const connection = await prisma.workspaceTechStackConnection.findUnique({
+        where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "google_business_profile" } },
+      });
+      if (!connection || connection.connectionStatus !== "connected") {
+        return sendError(res, 400, "NOT_CONNECTED", "GBP not connected");
+      }
+
+      const config = connection.metadataJson || {};
+      const result = await gbpProvider.createLocalPost(
+        config, config.accountId, config.locationId,
+        parsed.data
+      );
+
+      res.json({ ok: true, post: result });
+    } catch (err) {
+      if (err.permanent) {
+        return sendError(res, 401, "TOKEN_EXPIRED", err.message);
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/workspaces/:id/integrations/gbp/insights
+ * Returns aggregate review insights from connection metadata.
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/integrations/gbp/insights`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const insights = await getGBPInsights(req.params.id);
+      if (!insights) return sendError(res, 404, "NOT_FOUND", "No review insights available");
+      res.json(insights);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/workspaces/:id/integrations/gbp/analyze
+ * Triggers on-demand re-analysis of all GBP reviews.
+ */
+studioRouter.post(
+  `${BASE}/workspaces/:id/integrations/gbp/analyze`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await reanalyzeAllReviews(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── CRM Integration (Follow Up Boss) ─────────────────────────────────────
 
 /**
@@ -3962,6 +4179,7 @@ studioRouter.get(
           lastSyncedAt: gbp.metadataJson?.lastSyncedAt || null,
           reviewCount: gbp.metadataJson?.reviewCount || 0,
           averageRating: gbp.metadataJson?.averageRating || null,
+          unrepliedReviewCount: gbp.metadataJson?.unrepliedReviewCount || 0,
           lastError: gbp.lastError,
         } : { status: "not_connected" },
         crm: crm ? {
@@ -4203,6 +4421,109 @@ studioRouter.post(
       if (!event) return res.status(400).json({ error: "Missing 'event' field" });
       const result = await simulateListingEvent(req.params.id, req.params.listingId, event, data);
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Property Data ─────────────────────────────────────────────────────────
+
+/** GET /api/v1/workspaces/:id/property-data/lookup?address=... */
+studioRouter.get(
+  `${BASE}/workspaces/:id/property-data/lookup`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { address } = req.query;
+      if (!address) return sendError(res, 400, "MISSING_PARAM", "address query param required");
+      if (propertyDataService.getActivePropertyDataProviderName() === "none") {
+        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+      }
+      const result = await propertyDataService.lookupProperty(address);
+      res.json({ data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** GET /api/v1/workspaces/:id/property-data/listings?city=...&state=...&zipCode=... */
+studioRouter.get(
+  `${BASE}/workspaces/:id/property-data/listings`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { city, state, zipCode, address, propertyType, limit, offset } = req.query;
+      if (!city && !state && !zipCode && !address) {
+        return sendError(res, 400, "MISSING_PARAM", "At least one of city, state, zipCode, or address required");
+      }
+      if (propertyDataService.getActivePropertyDataProviderName() === "none") {
+        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+      }
+      const result = await propertyDataService.searchListings({
+        city, state, zipCode, address, propertyType,
+        limit: limit ? Number(limit) : undefined,
+        offset: offset ? Number(offset) : undefined,
+      });
+      res.json({ data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** GET /api/v1/workspaces/:id/property-data/valuation?address=... */
+studioRouter.get(
+  `${BASE}/workspaces/:id/property-data/valuation`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { address } = req.query;
+      if (!address) return sendError(res, 400, "MISSING_PARAM", "address query param required");
+      if (propertyDataService.getActivePropertyDataProviderName() === "none") {
+        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+      }
+      const result = await propertyDataService.getPropertyValue(address);
+      res.json({ data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** GET /api/v1/workspaces/:id/property-data/rent-estimate?address=... */
+studioRouter.get(
+  `${BASE}/workspaces/:id/property-data/rent-estimate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { address } = req.query;
+      if (!address) return sendError(res, 400, "MISSING_PARAM", "address query param required");
+      if (propertyDataService.getActivePropertyDataProviderName() === "none") {
+        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+      }
+      const result = await propertyDataService.getRentEstimate(address);
+      res.json({ data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** GET /api/v1/workspaces/:id/property-data/market?zipCode=... */
+studioRouter.get(
+  `${BASE}/workspaces/:id/property-data/market`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { zipCode } = req.query;
+      if (!zipCode) return sendError(res, 400, "MISSING_PARAM", "zipCode query param required");
+      if (propertyDataService.getActivePropertyDataProviderName() === "none") {
+        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+      }
+      const result = await propertyDataService.getMarketData(zipCode);
+      res.json({ data: result });
     } catch (err) {
       next(err);
     }

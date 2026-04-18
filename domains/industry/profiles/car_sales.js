@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["new-arrival", "deal-spotlight", "customer-delivery"],
     starterChannels: ["INSTAGRAM", "FACEBOOK", "TIKTOK"],
+    channelRecommendations: {
+      primary: ["FACEBOOK", "INSTAGRAM", "TIKTOK"],
+      secondary: ["YOUTUBE", "X"],
+      optional: ["THREADS", "REDDIT"],
+    },
     starterAngles: [
       "Showcase a new arrival on the lot — highlight key specs, price, and what makes it a great deal.",
       "Create a limited-time financing or trade-in promotion post with urgency.",

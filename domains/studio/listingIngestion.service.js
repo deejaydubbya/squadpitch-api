@@ -239,7 +239,7 @@ async function checkDuplicate(clientId, listing) {
   if (street && street.length > 5) {
     // Can't do normalized comparison with Prisma JSON, so we fetch and compare
     const candidates = await prisma.workspaceDataItem.findMany({
-      where: { clientId, type: "CUSTOM", status: "ACTIVE" },
+      where: { clientId, type: { in: ["PROPERTY", "CUSTOM"] }, status: "ACTIVE" },
       select: { id: true, dataJson: true },
       take: 100,
     });
@@ -257,7 +257,7 @@ async function checkDuplicate(clientId, listing) {
     const existing = await prisma.workspaceDataItem.findFirst({
       where: {
         clientId,
-        type: "CUSTOM",
+        type: { in: ["PROPERTY", "CUSTOM"] },
         status: "ACTIVE",
         OR: conditions,
       },
@@ -369,7 +369,7 @@ function listingToDataItem(listing) {
   if (address?.city) tags.push(address.city);
 
   return {
-    type: "CUSTOM",
+    type: "PROPERTY",
     title: title || "Untitled Listing",
     summary,
     dataJson: stampedDataJson,

@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["project-showcase", "seasonal-tip", "customer-review"],
     starterChannels: ["FACEBOOK", "INSTAGRAM", "TIKTOK"],
+    channelRecommendations: {
+      primary: ["FACEBOOK", "INSTAGRAM"],
+      secondary: ["TIKTOK"],
+      optional: ["YOUTUBE"],
+    },
     starterAngles: [
       "Showcase a completed project with before/after details — highlight the transformation.",
       "Share a seasonal home maintenance tip that positions you as the go-to expert.",

@@ -15,10 +15,13 @@ import { getContentContext, getRecommendationTemplates } from "../industry/indus
 import { buildTechStackContentContext } from "../industry/techStack.service.js";
 import { getAutopilotStatus } from "./autopilot.service.js";
 import { getPerformanceProfile } from "./performanceFeedback.service.js";
+import { getGBPSignals } from "./gbpSync.service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REC_TRACK_PREFIX = "sp:rec:track:";
 const REC_TRACK_TTL = 86400; // 24h
+const REC_DISMISSED_PREFIX = "sp:rec:dismissed:";
+const REC_ACCEPTED_PREFIX = "sp:rec:accepted:";
 
 // ── Surface Definitions ──────────────────────────────────────────────────
 
@@ -28,7 +31,7 @@ const SURFACE_TYPES = {
     "open_house_campaign", "price_drop_campaign",
     "price_drop_alert", "stale_listing_refresh", "unpromoted_listing",
     "testimonial_post", "engagement_post", "growth_post", "scheduling_action",
-    "autopilot_action", "integration_action", "campaign_hint",
+    "autopilot_action", "integration_action", "campaign_hint", "gbp_reply",
   ],
   create_content: [
     "listing_post", "milestone_post", "testimonial_post", "engagement_post",
@@ -61,6 +64,7 @@ const BASE_SCORES = {
   unpromoted_listing: 68,
   autopilot_action: 65,
   campaign_hint: 60,
+  neighborhood_post: 74,
   engagement_post: 55,
   integration_action: 50,
 };
@@ -219,8 +223,11 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
     }
   }
 
-  // Autopilot status
-  const autopilotStatus = await getAutopilotStatus(clientId).catch(() => null);
+  // Autopilot status + GBP signals
+  const [autopilotStatus, gbpSignals] = await Promise.all([
+    getAutopilotStatus(clientId).catch(() => null),
+    getGBPSignals(clientId).catch(() => ({ hasGBP: false, reviewCount: 0, averageRating: null, unrepliedCount: 0, recentNewReviews: 0, ratingDelta: 0, lastSyncedAt: null })),
+  ]);
 
   // ── Build Candidates ───────────────────────────────────────────────────
 
@@ -243,6 +250,7 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
     reAssets,
     techStack,
     autopilotStatus,
+    gbpSignals,
     campaignUsageBySource,
     activeCampaignIds,
   };
@@ -250,6 +258,7 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
   const candidates = [];
 
   candidates.push(...buildListingCandidates(ctx));
+  candidates.push(...buildPropertyLibraryCandidates(ctx));
   candidates.push(...buildEventDrivenCandidates(ctx));
   candidates.push(...buildMilestoneCandidates(ctx));
   candidates.push(...buildTestimonialCandidates(ctx));
@@ -260,6 +269,7 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
   candidates.push(...buildEngagementCandidates(ctx));
   candidates.push(...buildTemplateCandidates(ctx));
   candidates.push(...buildCampaignFollowUpCandidates(ctx));
+  candidates.push(...buildGBPCandidates(ctx));
 
   // ── Score, Deduplicate, Filter ─────────────────────────────────────────
 
@@ -306,24 +316,74 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
     }
   }
 
-  // Apply recommendation recency dampening — reduce score for recently shown recs
+  // Apply recommendation recency dampening + show-count expiration
   let recentlyShown = new Set();
+  let showCounts = {};
   try {
     const trackKey = `${REC_TRACK_PREFIX}${clientId}`;
     const tracked = await redisGet(trackKey);
     if (tracked) {
       const parsed = JSON.parse(tracked);
       recentlyShown = new Set(parsed.ids ?? []);
+      showCounts = parsed.counts ?? {};
       for (const c of candidates) {
         if (recentlyShown.has(c.id)) {
-          c.priorityScore = Math.max(c.priorityScore - 5, 10);
+          // Expire recs shown 3+ times in the 24h window
+          if ((showCounts[c.id] ?? 0) >= 3) {
+            c.priorityScore = -999;
+          } else {
+            c.priorityScore = Math.max(c.priorityScore - 5, 10);
+          }
         }
       }
     }
   } catch { /* non-critical */ }
 
+  // Accept dampening — penalise recently accepted recs
+  try {
+    const acceptedRaw = await redisGet(`${REC_ACCEPTED_PREFIX}${clientId}`);
+    if (acceptedRaw) {
+      const accepted = JSON.parse(acceptedRaw);
+      const now = Date.now();
+      for (const c of candidates) {
+        const entry = accepted.findLast((a) => a.id === c.id);
+        if (!entry) continue;
+        const ageMs = now - new Date(entry.at).getTime();
+        if (ageMs < 6 * 60 * 60 * 1000) {
+          c.priorityScore = -999; // fully exclude < 6h
+        } else if (ageMs < 48 * 60 * 60 * 1000) {
+          c.priorityScore -= 20; // dampen < 48h
+        }
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // Dismiss dampening — penalise dismissed recs (7d window)
+  try {
+    const dismissedRaw = await redisGet(`${REC_DISMISSED_PREFIX}${clientId}`);
+    if (dismissedRaw) {
+      const dismissed = JSON.parse(dismissedRaw);
+      // Count dismissals per rec ID
+      const dismissCounts = {};
+      for (const d of dismissed) {
+        dismissCounts[d.id] = (dismissCounts[d.id] ?? 0) + 1;
+      }
+      for (const c of candidates) {
+        const count = dismissCounts[c.id] ?? 0;
+        if (count >= 2) {
+          c.priorityScore = -999; // fully excluded
+        } else if (count === 1) {
+          c.priorityScore -= 30;
+        }
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // Viability filter — remove candidates that scored below zero
+  const viable = candidates.filter((c) => c.priorityScore > 0);
+
   // Deduplicate: don't show both campaign + post for same source
-  const deduped = deduplicateCandidates(candidates);
+  const deduped = deduplicateCandidates(viable);
 
   // Filter by surface
   const allowedTypes = surface && SURFACE_TYPES[surface]
@@ -337,13 +397,22 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
   filtered.sort((a, b) => b.priorityScore - a.priorityScore);
   const recommendations = filtered.slice(0, limit);
 
-  // Track shown recommendations (fire-and-forget)
+  // Track shown recommendations with counts (fire-and-forget)
   try {
     const shownIds = recommendations.map((r) => r.id);
-    const merged = [...new Set([...recentlyShown, ...shownIds])].slice(-20);
+    const mergedIds = [...new Set([...recentlyShown, ...shownIds])].slice(-40);
+    const updatedCounts = { ...showCounts };
+    for (const id of shownIds) {
+      updatedCounts[id] = (updatedCounts[id] ?? 0) + 1;
+    }
+    // Trim counts to only tracked IDs
+    const mergedSet = new Set(mergedIds);
+    for (const key of Object.keys(updatedCounts)) {
+      if (!mergedSet.has(key)) delete updatedCounts[key];
+    }
     redisSet(
       `${REC_TRACK_PREFIX}${clientId}`,
-      JSON.stringify({ ids: merged, at: new Date().toISOString() }),
+      JSON.stringify({ ids: mergedIds, counts: updatedCounts, at: new Date().toISOString() }),
       REC_TRACK_TTL,
     ).catch(() => {});
   } catch { /* non-critical */ }
@@ -413,10 +482,11 @@ function buildListingCandidates(ctx) {
   const hasIG = enabledChannels.some((c) => c.channel === "INSTAGRAM");
 
   // All normalized listings for multi-candidate generation
-  const listings = [];
-  if (reAssets.bestListing && reAssets.bestListingSource) {
-    listings.push({ normalized: reAssets.bestListing, source: reAssets.bestListingSource });
-  }
+  const listings = reAssets.listings && reAssets.listings.length > 0
+    ? reAssets.listings
+    : reAssets.bestListing && reAssets.bestListingSource
+      ? [{ normalized: reAssets.bestListing, source: reAssets.bestListingSource }]
+      : [];
 
   for (const entry of listings) {
     const listing = entry.normalized;
@@ -615,7 +685,7 @@ function buildListingCandidates(ctx) {
 
   // ── Price Drop Campaigns ──
   for (const item of ctx.topUnusedItems) {
-    if (item.type !== "CUSTOM") continue;
+    if (item.type !== "PROPERTY" && item.type !== "CUSTOM") continue;
 
     // Check for price_drop via _events first, then fall back to tag check
     const events = item.dataJson?._events || [];
@@ -683,7 +753,7 @@ function buildListingCandidates(ctx) {
 
   // ── Open House Campaigns ──
   for (const item of ctx.topUnusedItems) {
-    if (item.type !== "CUSTOM" && item.type !== "EVENT") continue;
+    if (item.type !== "PROPERTY" && item.type !== "CUSTOM" && item.type !== "EVENT") continue;
     const tags = item.dataJson?.tags ?? [];
     const isOpenHouse = (item.type === "EVENT" && item.dataJson?.eventName?.toLowerCase()?.includes("open house"))
       || (Array.isArray(tags) && tags.some((t) =>
@@ -734,6 +804,140 @@ function buildListingCandidates(ctx) {
 }
 
 /**
+ * Build property library recommendations — nudge users to act on saved properties
+ * and generate market/neighborhood content from aggregate listing data.
+ */
+function buildPropertyLibraryCandidates(ctx) {
+  const candidates = [];
+  const { reAssets, enabledChannels, industryKey, campaignUsageBySource, now } = ctx;
+
+  if (industryKey !== "real_estate" || !reAssets) return candidates;
+
+  const allListings = reAssets.listings ?? [];
+  if (allListings.length === 0) return candidates;
+
+  const hasFB = enabledChannels.some((c) => c.channel === "FACEBOOK");
+  const hasIG = enabledChannels.some((c) => c.channel === "INSTAGRAM");
+
+  // ── Saved properties without any campaign ──
+  const noCampaignListings = allListings.filter((entry) => {
+    const campUsage = campaignUsageBySource.get(entry.source.id);
+    return !(campUsage?.hasCampaign);
+  });
+
+  // Nudge for unused properties (up to 3 — avoid noise)
+  for (const entry of noCampaignListings.slice(0, 3)) {
+    const listing = entry.normalized;
+    const source = entry.source;
+    const label = listing.title || listing.address || "a saved property";
+    const isNew = source.createdAt && (now - new Date(source.createdAt)) < 3 * DAY_MS;
+    const isUnused = (source.usageCount ?? 0) === 0;
+
+    if (!isUnused) continue; // Only suggest for truly unused properties
+
+    candidates.push({
+      id: `unpromoted_listing:${source.id}`,
+      type: "unpromoted_listing",
+      title: `Create content for ${label}`,
+      description: "This saved property doesn't have any campaigns or posts yet — use it for a listing post or full campaign.",
+      sourceType: "listing",
+      sourceId: source.id,
+      sourceLabel: label,
+      priorityScore: BASE_SCORES.unpromoted_listing + (isNew ? 5 : 0),
+      confidence: listing.completenessScore >= 3 ? "high" : "medium",
+      freshness: isNew ? "fresh" : "recent",
+      surfaces: ["dashboard", "listing_campaign", "create_content"],
+      suggestedContentType: "listing",
+      suggestedCampaignType: "just_listed",
+      suggestedChannel: hasFB ? "FACEBOOK" : hasIG ? "INSTAGRAM" : null,
+      actionLabel: "Launch Campaign",
+      actionPayload: {
+        action: "openListingCampaign",
+        sourceType: "listing",
+        sourceId: source.id,
+        campaignType: "just_listed",
+        listingDataItemId: source.id,
+      },
+      reasons: [
+        "Saved to your property library",
+        "No campaigns or posts created yet",
+        ...(isNew ? ["Recently added"] : []),
+      ],
+      evaluatedAt: now.toISOString(),
+    });
+  }
+
+  // ── Neighborhood / Market post from aggregate property data ──
+  // Only suggest if user has 2+ saved properties (enough for a market narrative)
+  if (allListings.length >= 2) {
+    // Gather market signals
+    const cities = new Set();
+    const zips = new Set();
+    let activeCount = 0;
+    let totalPrice = 0;
+    let priceCount = 0;
+
+    for (const entry of allListings) {
+      const d = entry.source.dataJson ?? {};
+      if (d.city) cities.add(d.city);
+      if (d.zip) zips.add(d.zip);
+      const status = (d.status ?? "").toLowerCase();
+      if (status === "active" || status === "coming_soon") activeCount++;
+      if (typeof d.price === "number") {
+        totalPrice += d.price;
+        priceCount++;
+      }
+    }
+
+    const avgPrice = priceCount > 0 ? Math.round(totalPrice / priceCount) : null;
+    const areaLabel = cities.size === 1
+      ? [...cities][0]
+      : zips.size === 1
+        ? `ZIP ${[...zips][0]}`
+        : cities.size <= 3
+          ? [...cities].join(", ")
+          : "your market area";
+
+    const description = avgPrice
+      ? `You have ${allListings.length} properties saved in ${areaLabel} — avg price $${avgPrice.toLocaleString()}. Create a market update post showcasing local activity.`
+      : `You have ${allListings.length} properties saved in ${areaLabel}. Create a market update post showcasing local activity.`;
+
+    const reasons = [
+      `${allListings.length} properties saved in your library`,
+      ...(activeCount > 0 ? [`${activeCount} currently active`] : []),
+      "Market posts build authority and engagement",
+    ];
+
+    candidates.push({
+      id: "neighborhood_post:library",
+      type: "neighborhood_post",
+      title: `Create a market update for ${areaLabel}`,
+      description,
+      sourceType: "listing",
+      sourceId: null,
+      sourceLabel: areaLabel,
+      priorityScore: BASE_SCORES.neighborhood_post,
+      confidence: allListings.length >= 4 ? "high" : "medium",
+      freshness: "recent",
+      surfaces: ["dashboard", "create_content", "planner"],
+      suggestedContentType: "listing",
+      suggestedCampaignType: null,
+      suggestedChannel: hasFB ? "FACEBOOK" : hasIG ? "INSTAGRAM" : null,
+      actionLabel: "Create Post",
+      actionPayload: {
+        action: "open_create_content",
+        guidance: `Create a market update post for ${areaLabel}. You have ${allListings.length} properties to reference — highlight pricing trends, inventory activity, and what it means for buyers/sellers.`,
+        templateType: "market_update",
+      },
+      reasons,
+      evaluatedAt: now.toISOString(),
+    });
+  }
+
+  return candidates;
+}
+
+/**
  * Build event-driven recommendation candidates from listing _events.
  * Scans topUnusedItems for recent events and produces actionable recommendations.
  */
@@ -744,7 +948,7 @@ function buildEventDrivenCandidates(ctx) {
   const FOURTEEN_DAYS = 14 * DAY_MS;
 
   for (const item of topUnusedItems) {
-    if (item.type !== "CUSTOM") continue;
+    if (item.type !== "PROPERTY" && item.type !== "CUSTOM") continue;
     const events = item.dataJson?._events || [];
     if (events.length === 0) continue;
 
@@ -1022,7 +1226,7 @@ function buildMilestoneCandidates(ctx) {
 
 function buildTestimonialCandidates(ctx) {
   const candidates = [];
-  const { reAssets, topUnusedItems, enabledChannels } = ctx;
+  const { reAssets, topUnusedItems, enabledChannels, gbpSignals } = ctx;
 
   // From RE assets
   if (reAssets?.reviewCount > 0) {
@@ -1041,6 +1245,10 @@ function buildTestimonialCandidates(ctx) {
       const rating = bestReview.dataJson?.rating;
       if (rating && Number(rating) >= 5) reasons.push("5-star review");
 
+      // Boost when GBP has recent new reviews
+      const gbpRecencyBoost = gbpSignals?.hasGBP && gbpSignals.recentNewReviews > 0 ? 8 : 0;
+      if (gbpRecencyBoost > 0) reasons.push("New Google review received");
+
       candidates.push({
         id: `testimonial_post:${bestReview.id}`,
         type: "testimonial_post",
@@ -1053,7 +1261,8 @@ function buildTestimonialCandidates(ctx) {
         sourceLabel: author || "Client review",
         priorityScore: BASE_SCORES.testimonial_post
           + (Number(rating) >= 5 ? 5 : 0)
-          + ((bestReview.usageCount ?? 0) === 0 ? 3 : 0),
+          + ((bestReview.usageCount ?? 0) === 0 ? 3 : 0)
+          + gbpRecencyBoost,
         confidence: quote ? "high" : "medium",
         freshness: "recent",
         surfaces: ["dashboard", "create_content"],
@@ -1330,6 +1539,132 @@ function buildIntegrationCandidates(ctx) {
         evaluatedAt: ctx.now.toISOString(),
       });
     }
+  }
+
+  return candidates;
+}
+
+function buildGBPCandidates(ctx) {
+  const candidates = [];
+  const { gbpSignals } = ctx;
+
+  // Suggest replying to unreplied reviews
+  if (gbpSignals?.hasGBP && gbpSignals.unrepliedCount > 0) {
+    candidates.push({
+      id: "gbp:unreplied_review",
+      type: "gbp_reply",
+      title: `Reply to ${gbpSignals.unrepliedCount} unreplied review${gbpSignals.unrepliedCount === 1 ? "" : "s"}`,
+      description: "Responding to reviews builds trust and improves your Google ranking.",
+      sourceType: "system",
+      sourceId: null,
+      sourceLabel: "Google Business Profile",
+      priorityScore: BASE_SCORES.integration_action + 35,
+      confidence: "high",
+      freshness: "fresh",
+      surfaces: ["dashboard"],
+      suggestedContentType: null,
+      suggestedCampaignType: null,
+      suggestedChannel: null,
+      actionLabel: "Reply to Reviews",
+      actionPayload: { action: "draft_gbp_reply" },
+      reasons: [
+        `You have ${gbpSignals.unrepliedCount} unreplied review${gbpSignals.unrepliedCount === 1 ? "" : "s"} — responding builds trust`,
+        "Google favors businesses that engage with reviewers",
+      ],
+      evaluatedAt: ctx.now.toISOString(),
+    });
+  }
+
+  // Strong theme detected — when a theme appears in 3+ reviews
+  if (gbpSignals?.hasGBP && gbpSignals.topThemes?.length > 0) {
+    const strongTheme = gbpSignals.topThemes.find((t) => t.count >= 3);
+    if (strongTheme) {
+      candidates.push({
+        id: `gbp:strong_theme:${strongTheme.theme}`,
+        type: "testimonial_post",
+        title: `Your clients keep mentioning "${strongTheme.theme}"`,
+        description: `"${strongTheme.theme}" appears in ${strongTheme.count} reviews — turn this recurring praise into content.`,
+        sourceType: "system",
+        sourceId: null,
+        sourceLabel: "Google Business Profile",
+        priorityScore: BASE_SCORES.testimonial_post + 12,
+        confidence: "high",
+        freshness: "fresh",
+        surfaces: ["dashboard", "create_content"],
+        suggestedContentType: "testimonial",
+        suggestedCampaignType: null,
+        suggestedChannel: null,
+        actionLabel: "Create Theme Post",
+        actionPayload: {
+          action: "open_create_content",
+          guidance: `Create content highlighting your "${strongTheme.theme}" reputation — ${strongTheme.count} clients have praised this. Use real quotes for authenticity.`,
+          templateType: "client_testimonial",
+        },
+        reasons: [
+          `"${strongTheme.theme}" appears in ${strongTheme.count} reviews`,
+          "Recurring themes make compelling, authentic content",
+        ],
+        evaluatedAt: ctx.now.toISOString(),
+      });
+    }
+  }
+
+  // Multiple recent reviews — review surge
+  if (gbpSignals?.hasGBP && gbpSignals.recentNewReviews >= 3) {
+    candidates.push({
+      id: "gbp:recent_review_surge",
+      type: "testimonial_post",
+      title: `You've received ${gbpSignals.recentNewReviews} new reviews this week`,
+      description: "A burst of reviews is perfect for social proof content — capitalize on the momentum.",
+      sourceType: "system",
+      sourceId: null,
+      sourceLabel: "Google Business Profile",
+      priorityScore: BASE_SCORES.testimonial_post + 10,
+      confidence: "high",
+      freshness: "fresh",
+      surfaces: ["dashboard", "create_content"],
+      suggestedContentType: "testimonial",
+      suggestedCampaignType: null,
+      suggestedChannel: null,
+      actionLabel: "Create Review Roundup",
+      actionPayload: {
+        action: "open_create_content",
+        guidance: `You've received ${gbpSignals.recentNewReviews} new Google reviews this week. Create a review roundup or highlight post to showcase the momentum.`,
+        templateType: "client_testimonial",
+      },
+      reasons: [
+        `${gbpSignals.recentNewReviews} new reviews in the last 7 days`,
+        "Review surges are great for momentum-based social proof",
+      ],
+      evaluatedAt: ctx.now.toISOString(),
+    });
+  }
+
+  // Suggest connecting GBP if not connected
+  if (!gbpSignals?.hasGBP) {
+    candidates.push({
+      id: "gbp:connect",
+      type: "integration_action",
+      title: "Connect Google Business Profile",
+      description: "Connect Google Business Profile to import reviews and boost credibility.",
+      sourceType: "system",
+      sourceId: null,
+      sourceLabel: "Integrations",
+      priorityScore: BASE_SCORES.integration_action + 20,
+      confidence: "medium",
+      freshness: "fresh",
+      surfaces: ["dashboard"],
+      suggestedContentType: null,
+      suggestedCampaignType: null,
+      suggestedChannel: null,
+      actionLabel: "Connect GBP",
+      actionPayload: { action: "setup_integrations" },
+      reasons: [
+        "Google Business reviews are powerful social proof",
+        "Automatic review import saves time",
+      ],
+      evaluatedAt: ctx.now.toISOString(),
+    });
   }
 
   return candidates;

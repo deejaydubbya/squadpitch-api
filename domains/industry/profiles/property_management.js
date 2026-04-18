@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["available-unit", "tenant-tip", "community-highlight"],
     starterChannels: ["FACEBOOK", "INSTAGRAM", "LINKEDIN"],
+    channelRecommendations: {
+      primary: ["FACEBOOK", "LINKEDIN"],
+      secondary: ["INSTAGRAM", "YOUTUBE"],
+      optional: ["X", "REDDIT"],
+    },
     starterAngles: [
       "Highlight an available rental unit — feature photos, amenities, and neighborhood perks.",
       "Share a helpful tenant tip about maintenance, move-in, or community living.",

@@ -69,7 +69,7 @@ export async function getRealEstateListings(workspaceId, opts = {}) {
       : [{ createdAt: "desc" }]; // completeness is post-filter
 
   const items = await prisma.workspaceDataItem.findMany({
-    where: { clientId: workspaceId, type: "CUSTOM", status: "ACTIVE" },
+    where: { clientId: workspaceId, type: { in: ["PROPERTY", "CUSTOM"] }, status: "ACTIVE" },
     orderBy: orderClause,
     take: limit,
   });
@@ -103,7 +103,7 @@ export async function getRealEstateTestimonials(workspaceId, opts = {}) {
 export async function getRealEstateAssetCounts(workspaceId) {
   const [listingCount, reviewCount, milestoneCount] = await Promise.all([
     prisma.workspaceDataItem.count({
-      where: { clientId: workspaceId, type: "CUSTOM", status: "ACTIVE" },
+      where: { clientId: workspaceId, type: { in: ["PROPERTY", "CUSTOM"] }, status: "ACTIVE" },
     }),
     prisma.workspaceDataItem.count({
       where: { clientId: workspaceId, type: "TESTIMONIAL", status: "ACTIVE" },

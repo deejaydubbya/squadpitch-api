@@ -105,6 +105,17 @@ export const env = {
   FAL_MONTHLY_BUDGET_CENTS: parseInt(process.env.FAL_MONTHLY_BUDGET_CENTS, 10) || 1000,
   BUDGET_WARNING_THRESHOLD: parseFloat(process.env.BUDGET_WARNING_THRESHOLD) || 0.8,
 
+  // Property data providers — set PROPERTY_DATA_PROVIDER to "rentcast" or "attom"
+  PROPERTY_DATA_PROVIDER: process.env.PROPERTY_DATA_PROVIDER ?? "rentcast",
+
+  // RentCast
+  RENTCAST_API_KEY: process.env.RENTCAST_API_KEY,
+  RENTCAST_API_BASE: process.env.RENTCAST_API_BASE ?? "https://api.rentcast.io/v1",
+
+  // ATTOM (future — set key to enable as fallback or primary)
+  ATTOM_API_KEY: process.env.ATTOM_API_KEY,
+  ATTOM_API_BASE: process.env.ATTOM_API_BASE ?? "https://api.gateway.attomdata.com",
+
   // Stripe billing
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
@@ -147,6 +158,9 @@ export function bootEnvWarnings() {
   }
   if (!env.STRIPE_SECRET_KEY) {
     console.warn("[BOOT] STRIPE_SECRET_KEY missing; billing features disabled");
+  }
+  if (!env.RENTCAST_API_KEY) {
+    console.warn("[BOOT] RENTCAST_API_KEY missing; property data lookups will fail");
   }
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
     console.warn("[BOOT] VAPID keys missing; web push notifications disabled");

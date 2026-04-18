@@ -102,6 +102,7 @@ enum DataItemType {
   TEAM_SPOTLIGHT
   INDUSTRY_NEWS
   EVENT
+  PROPERTY
   CUSTOM
 }
 

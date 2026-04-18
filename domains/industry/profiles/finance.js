@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["market-insight", "financial-tip", "client-milestone"],
     starterChannels: ["LINKEDIN", "FACEBOOK", "INSTAGRAM"],
+    channelRecommendations: {
+      primary: ["LINKEDIN", "YOUTUBE"],
+      secondary: ["FACEBOOK"],
+      optional: ["INSTAGRAM", "X"],
+    },
     starterAngles: [
       "Share a timely market insight or economic trend that affects your clients' financial plans.",
       "Post a practical money tip — budgeting, saving, or tax strategy that anyone can use.",

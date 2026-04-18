@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["coverage-tip", "claims-story", "seasonal-reminder"],
     starterChannels: ["FACEBOOK", "LINKEDIN", "INSTAGRAM"],
+    channelRecommendations: {
+      primary: ["FACEBOOK", "LINKEDIN"],
+      secondary: ["INSTAGRAM"],
+      optional: ["YOUTUBE", "TIKTOK", "X"],
+    },
     starterAngles: [
       "Share a practical insurance tip that helps people understand a coverage gap they might have.",
       "Tell a story about how the right coverage saved a client — make it relatable and real.",

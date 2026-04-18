@@ -15,6 +15,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["dish-spotlight", "behind-the-kitchen", "event-promo"],
     starterChannels: ["INSTAGRAM", "TIKTOK", "FACEBOOK"],
+    channelRecommendations: {
+      primary: ["INSTAGRAM", "TIKTOK"],
+      secondary: ["FACEBOOK"],
+      optional: ["YOUTUBE", "THREADS"],
+    },
     starterAngles: [
       "Spotlight a signature dish — describe the flavors, ingredients, and what makes it a must-try.",
       "Take followers behind the kitchen — show prep, plating, or a day in the life of the team.",

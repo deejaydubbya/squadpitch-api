@@ -8,6 +8,15 @@ export default {
     extraContextPlaceholder: "Describe your market area, specialties, or paste listing details...",
     helperText: "We'll use your website to learn your brand, services, and market expertise.",
   },
+  onboardingSources: [
+    { key: "website", label: "Website / Profile URL", icon: "Globe", default: true },
+    { key: "zillow_profile", label: "Zillow Agent Profile", icon: "Home" },
+    { key: "license_lookup", label: "License Number Lookup", icon: "Shield" },
+    { key: "crm_import", label: "CRM Import (CSV)", icon: "Database" },
+    { key: "mls", label: "MLS Integration", icon: "Building2", comingSoon: true },
+    { key: "documents", label: "Documents / Text", icon: "FileText", default: true },
+    { key: "manual", label: "Manual Setup", icon: "Pencil" },
+  ],
   extraction: {
     hints: "Focus on property listings (address, price, bedrooms, sqft), agent bios, testimonials, market stats, neighborhoods, and open house events.",
     priorityDataTypes: ["CUSTOM", "TESTIMONIAL", "STATISTIC", "EVENT"],
@@ -15,6 +24,11 @@ export default {
   content: {
     starterBlueprintSlugs: ["just-listed", "market-update", "client-success-story"],
     starterChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"],
+    channelRecommendations: {
+      primary: ["INSTAGRAM", "FACEBOOK", "YOUTUBE"],
+      secondary: ["TIKTOK", "LINKEDIN"],
+      optional: ["PINTEREST", "REDDIT", "THREADS", "X"],
+    },
     starterAngles: [
       "Create a 'just listed' post highlighting a property's best features. Use specific details.",
       "Write a local market insight post sharing a surprising housing stat or trend.",

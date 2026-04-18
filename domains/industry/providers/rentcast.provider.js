@@ -1,12 +1,13 @@
 // RentCast Property Enrichment Provider
 //
-// Uses the RentCast API for property data lookup by address.
-// Requires RENTCAST_API_KEY environment variable.
+// Uses the shared RentCast client for property data lookup by address.
+// Returns the enrichment-specific result shape (not the full unified model).
 // Gracefully returns null on any failure.
 
+import { rentcastRequest } from "./rentcast/rentcast.client.js";
+import { normalizePropertyType } from "./rentcast/rentcast.mappers.js";
+
 const PROVIDER_NAME = "rentcast";
-const API_BASE = "https://api.rentcast.io/v1";
-const TIMEOUT_MS = 10000;
 
 export const rentcastProvider = {
   name: PROVIDER_NAME,
@@ -22,42 +23,15 @@ export const rentcastProvider = {
    * @returns {Promise<object|null>}
    */
   async lookupByAddress({ street, city, state, zip }) {
-    if (!process.env.RENTCAST_API_KEY) return null;
-
     if (!street) return null;
-    const params = new URLSearchParams();
-    params.set("address", [street, city, state, zip].filter(Boolean).join(", "));
 
-    const url = `${API_BASE}/properties?${params}`;
+    const address = [street, city, state, zip].filter(Boolean).join(", ");
 
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "X-Api-Key": process.env.RENTCAST_API_KEY,
-          Accept: "application/json",
-        },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        console.warn(`[PropertyEnrichment:rentcast] API responded ${response.status}`);
-        return null;
-      }
-
-      const data = await response.json();
+      const data = await rentcastRequest("/properties", { address });
       return mapResponse(data);
     } catch (err) {
-      if (err.name === "AbortError") {
-        console.warn("[PropertyEnrichment:rentcast] Request timed out");
-      } else {
-        console.warn("[PropertyEnrichment:rentcast] Request failed:", err.message);
-      }
+      console.warn("[PropertyEnrichment:rentcast] Request failed:", err.message);
       return null;
     }
   },
@@ -95,17 +69,4 @@ function mapResponse(data) {
   if (features.length > 0) result.features = features;
 
   return result;
-}
-
-function normalizePropertyType(type) {
-  if (!type) return null;
-  const lower = String(type).toLowerCase();
-  if (lower.includes("single") || lower.includes("house")) return "single_family";
-  if (lower.includes("condo")) return "condo";
-  if (lower.includes("town")) return "townhouse";
-  if (lower.includes("multi") || lower.includes("duplex")) return "multi_family";
-  if (lower.includes("land") || lower.includes("lot")) return "land";
-  if (lower.includes("commercial")) return "commercial";
-  if (lower.includes("apartment")) return "apartment";
-  return "other";
 }
