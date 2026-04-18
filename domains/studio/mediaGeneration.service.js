@@ -307,6 +307,9 @@ export function buildImagePrompt(mediaProfile, guidance) {
   // 2. Visual style (composition, lighting, mood)
   if (mediaProfile.visualStyle) {
     parts.push(mediaProfile.visualStyle);
+  } else {
+    // Baseline quality modifiers when no visual style is configured (e.g. during onboarding)
+    parts.push("professional photography, high quality, sharp focus, well-lit");
   }
 
   // 3. Character prompt (identity details)
