@@ -11,6 +11,10 @@
 import { prisma } from "../../prisma.js";
 import { mockProvider } from "./providers/mock.provider.js";
 import { realtymoleProvider } from "./providers/realtymole.provider.js";
+import { attomProvider } from "./providers/attom.provider.js";
+import { estatedProvider } from "./providers/estated.provider.js";
+import { rentcastProvider } from "./providers/rentcast.provider.js";
+import { decryptToken } from "../../lib/tokenCrypto.js";
 
 // Fields that can be enriched from property APIs
 const ENRICHABLE_FIELDS = [
@@ -26,12 +30,18 @@ const SOURCE_TIERS = {
   csv: 2,
   listing_feed: 2,
   realtymole: 3,
+  attom: 3,
+  estated: 3,
+  rentcast: 3,
   mock: 3,
 };
 
 // ── Provider Registry ────────────────────────────────────────────────────
 
-const providers = [realtymoleProvider, mockProvider];
+const providers = [realtymoleProvider, attomProvider, estatedProvider, rentcastProvider, mockProvider];
+
+/** Providers that accept per-workspace API keys (not env-var based) */
+const WORKSPACE_PROVIDERS = { attom: attomProvider, estated: estatedProvider, rentcast: rentcastProvider };
 
 function getActiveProvider() {
   const configured = process.env.PROPERTY_API_PROVIDER || "mock";
@@ -51,6 +61,40 @@ function getActiveProvider() {
  */
 export function getActiveProviderName() {
   return getActiveProvider().name;
+}
+
+/**
+ * Resolve the workspace-specific property API provider and decrypted API key.
+ * Reads from workspace_tech_stack_connections where providerKey = "property_api".
+ *
+ * @param {string} clientId
+ * @returns {Promise<{ provider: object, apiKey: string } | null>}
+ */
+async function getWorkspacePropertyProvider(clientId) {
+  if (!clientId) return null;
+
+  const conn = await prisma.workspaceTechStackConnection.findUnique({
+    where: { workspaceId_providerKey: { workspaceId: clientId, providerKey: "property_api" } },
+  });
+
+  if (!conn || conn.connectionStatus !== "connected" || !conn.metadataJson) return null;
+
+  const meta = conn.metadataJson;
+  const providerName = (meta.provider || "").trim().toLowerCase();
+  const encryptedKey = meta.apiKey;
+
+  if (!providerName || !encryptedKey) return null;
+
+  const wsProvider = WORKSPACE_PROVIDERS[providerName];
+  if (!wsProvider) return null;
+
+  try {
+    const apiKey = decryptToken(encryptedKey);
+    if (!apiKey) return null;
+    return { provider: wsProvider, apiKey };
+  } catch {
+    return null;
+  }
 }
 
 // ── Merge Logic ──────────────────────────────────────────────────────────
@@ -117,7 +161,7 @@ export function mergeListing(existingDataJson, enrichmentResult) {
  */
 export async function enrichListing(dataItem) {
   const dj = dataItem.dataJson || {};
-  const provider = getActiveProvider();
+  const clientId = dataItem.clientId;
 
   // Build address from dataJson fields
   const address = {
@@ -129,19 +173,37 @@ export async function enrichListing(dataItem) {
 
   // Need at least a street to look up
   if (!address.street) {
-    return { enriched: false, fieldsAdded: [], provider: provider.name };
+    return { enriched: false, fieldsAdded: [], provider: "none" };
   }
 
-  let result;
-  try {
-    result = await provider.lookupByAddress(address);
-  } catch (err) {
-    console.error(`[PropertyEnrichment] Provider ${provider.name} error:`, err.message);
-    return { enriched: false, fieldsAdded: [], provider: provider.name };
+  // Try workspace-specific provider first (user's own API key), then fall back to global
+  let result = null;
+  let providerName = "none";
+
+  const wsProvider = await getWorkspacePropertyProvider(clientId);
+  if (wsProvider) {
+    providerName = wsProvider.provider.name;
+    try {
+      result = await wsProvider.provider.lookupByAddress(address, wsProvider.apiKey);
+    } catch (err) {
+      console.error(`[PropertyEnrichment] Workspace provider ${providerName} error:`, err.message);
+    }
+  }
+
+  // Fall back to global env-var provider if workspace provider didn't return data
+  if (!result) {
+    const globalProvider = getActiveProvider();
+    providerName = globalProvider.name;
+    try {
+      result = await globalProvider.lookupByAddress(address);
+    } catch (err) {
+      console.error(`[PropertyEnrichment] Provider ${providerName} error:`, err.message);
+      return { enriched: false, fieldsAdded: [], provider: providerName };
+    }
   }
 
   if (!result) {
-    return { enriched: false, fieldsAdded: [], provider: provider.name };
+    return { enriched: false, fieldsAdded: [], provider: providerName };
   }
 
   const { mergedDataJson, fieldsAdded } = mergeListing(dj, result);
@@ -153,7 +215,7 @@ export async function enrichListing(dataItem) {
     });
   }
 
-  return { enriched: fieldsAdded.length > 0, fieldsAdded, provider: provider.name };
+  return { enriched: fieldsAdded.length > 0, fieldsAdded, provider: providerName };
 }
 
 /**

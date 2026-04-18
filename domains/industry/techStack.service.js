@@ -103,6 +103,14 @@ function buildRealEstateStatusSummary(providerKey, connectionStatus, metadata, c
       }
       return "Connect to use reviews for content";
 
+    case "property_api": {
+      if (!connected) return "Connect a property data API to auto-enrich listings";
+      const prov = metadata?.provider;
+      return prov
+        ? `${prov.charAt(0).toUpperCase() + prov.slice(1)} API connected — enriching listings`
+        : "API connected — enriching listings";
+    }
+
     case "real_estate_crm": {
       if (!connected) return "Connect your CRM to import deals and testimonials";
       const deals = metadata?.dealCount;

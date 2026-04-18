@@ -24,9 +24,10 @@
  * @typedef {Object} ManualSetupField
  * @property {string} key - Field key stored in metadataJson
  * @property {string} label - Display label
- * @property {"url" | "text"} type - Input type
+ * @property {"url" | "text" | "password" | "select"} type - Input type
  * @property {boolean} required - Whether the field is required
  * @property {string} [placeholder] - Input placeholder text
+ * @property {{ value: string, label: string }[]} [options] - Options for select fields
  */
 
 /**

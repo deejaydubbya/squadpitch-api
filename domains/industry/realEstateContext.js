@@ -90,6 +90,16 @@ export const RE_CAPABILITY_MAP = {
     },
     usedFor: "Strengthen local search presence, manage reviews, and publish Google posts",
   },
+  property_api: {
+    type: "manual",
+    ownedBy: "tech_stack",
+    capabilities: ["property_enrichment", "data_enrichment", "listing_details"],
+    contributes: {
+      data: ["property_details", "valuations", "tax_data"],
+      ux: "Auto-enriches listings with bedrooms, bathrooms, sqft, valuations, and more",
+    },
+    usedFor: "Automatically enrich property listings with details, valuations, and tax data from ATTOM, Estated, or RentCast",
+  },
   real_estate_crm: {
     type: "manual",
     ownedBy: "tech_stack",

@@ -140,6 +140,39 @@ export default {
       },
     },
     {
+      providerKey: "property_api",
+      label: "Property Data API",
+      category: "data_source",
+      priority: "recommended",
+      status: "live",
+      connectionMode: "manual",
+      description: "Pull property details, valuations, and tax data from third-party APIs like ATTOM, Estated, or RentCast.",
+      capabilities: ["data_enrichment", "content_source"],
+      manualSetup: {
+        fields: [
+          {
+            key: "provider",
+            label: "API Provider",
+            type: "select",
+            required: true,
+            placeholder: "Select a provider",
+            options: [
+              { value: "attom", label: "ATTOM Data" },
+              { value: "estated", label: "Estated" },
+              { value: "rentcast", label: "RentCast" },
+            ],
+          },
+          {
+            key: "apiKey",
+            label: "API Key",
+            type: "password",
+            required: true,
+            placeholder: "Your property data API key",
+          },
+        ],
+      },
+    },
+    {
       providerKey: "google_business_profile",
       label: "Google Business Profile",
       category: "data_enrichment",
