@@ -26,6 +26,7 @@ const SURFACE_TYPES = {
   dashboard: [
     "listing_post", "listing_campaign", "milestone_post", "milestone_campaign",
     "open_house_campaign", "price_drop_campaign",
+    "price_drop_alert", "stale_listing_refresh", "unpromoted_listing",
     "testimonial_post", "engagement_post", "growth_post", "scheduling_action",
     "autopilot_action", "integration_action", "campaign_hint",
   ],
@@ -35,6 +36,7 @@ const SURFACE_TYPES = {
   ],
   listing_campaign: [
     "listing_campaign", "milestone_campaign", "open_house_campaign", "price_drop_campaign",
+    "price_drop_alert",
   ],
   planner: [
     "listing_campaign", "milestone_campaign", "open_house_campaign", "price_drop_campaign",
@@ -47,13 +49,16 @@ const SURFACE_TYPES = {
 const BASE_SCORES = {
   milestone_campaign: 95,
   listing_campaign: 92,
+  price_drop_alert: 91,
   price_drop_campaign: 90,
   open_house_campaign: 88,
   milestone_post: 85,
   listing_post: 82,
   testimonial_post: 78,
   growth_post: 76,
+  stale_listing_refresh: 72,
   scheduling_action: 70,
+  unpromoted_listing: 68,
   autopilot_action: 65,
   campaign_hint: 60,
   engagement_post: 55,
@@ -245,6 +250,7 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
   const candidates = [];
 
   candidates.push(...buildListingCandidates(ctx));
+  candidates.push(...buildEventDrivenCandidates(ctx));
   candidates.push(...buildMilestoneCandidates(ctx));
   candidates.push(...buildTestimonialCandidates(ctx));
   candidates.push(...buildGrowthCandidates(ctx));
@@ -610,29 +616,50 @@ function buildListingCandidates(ctx) {
   // ── Price Drop Campaigns ──
   for (const item of ctx.topUnusedItems) {
     if (item.type !== "CUSTOM") continue;
+
+    // Check for price_drop via _events first, then fall back to tag check
+    const events = item.dataJson?._events || [];
+    const priceDrop = events.find((e) => e.type === "price_drop");
     const tags = item.dataJson?.tags ?? [];
-    const isPriceDrop = Array.isArray(tags) && tags.some((t) =>
+    const isPriceDropTag = Array.isArray(tags) && tags.some((t) =>
       typeof t === "string" && (t.includes("price_drop") || t.includes("price_reduced"))
     );
-    if (!isPriceDrop) continue;
+    if (!priceDrop && !isPriceDropTag) continue;
 
     const campUsage = campaignUsageBySource.get(item.id);
     if (campUsage?.campaignTypes?.has("price_drop")) continue; // Already has price drop campaign
 
-    const label = item.dataJson?.address || item.title;
+    const label = item.dataJson?.street || item.dataJson?.address || item.title;
     let score = BASE_SCORES.price_drop_campaign;
     if (campUsage?.hasCampaign) score -= 15; // Has another type of campaign
+
+    // Build richer description if event data is available
+    const dropInfo = priceDrop?.data;
+    const description = dropInfo
+      ? `Price dropped $${Number(dropInfo.dropAmount).toLocaleString()} (${dropInfo.dropPercent}%) — create urgency with a price reduction campaign.`
+      : "Create urgency with a price reduction campaign across multiple posts.";
+    const title = dropInfo
+      ? `Price dropped $${Number(dropInfo.dropAmount).toLocaleString()} on ${label}`
+      : `Launch a Price Drop campaign for ${label}`;
+
+    const reasons = [];
+    if (dropInfo) {
+      reasons.push(`Price reduced from $${Number(dropInfo.oldPrice).toLocaleString()} to $${Number(dropInfo.newPrice).toLocaleString()}`);
+    } else {
+      reasons.push("Recent price update detected");
+    }
+    reasons.push("Price drops generate urgency and engagement");
 
     candidates.push({
       id: `price_drop_campaign:${item.id}`,
       type: "price_drop_campaign",
-      title: `Launch a Price Drop campaign for ${label}`,
-      description: "Create urgency with a price reduction campaign across multiple posts.",
+      title,
+      description,
       sourceType: "listing",
       sourceId: item.id,
       sourceLabel: label,
       priorityScore: Math.max(score, 10),
-      confidence: "medium",
+      confidence: dropInfo ? "high" : "medium",
       freshness: "fresh",
       surfaces: ["dashboard", "listing_campaign"],
       suggestedContentType: "listing",
@@ -646,7 +673,7 @@ function buildListingCandidates(ctx) {
         campaignType: "price_drop",
         listingDataItemId: item.id,
       },
-      reasons: ["Recent price update detected", "Price drops generate urgency and engagement"],
+      reasons,
       hasCampaign: campUsage?.hasCampaign ?? false,
       campaignCount: campUsage?.campaignCount ?? 0,
       lastCampaignAt: campUsage?.lastCampaignAt?.toISOString() ?? null,
@@ -701,6 +728,121 @@ function buildListingCandidates(ctx) {
       lastCampaignAt: campUsage?.lastCampaignAt?.toISOString() ?? null,
       evaluatedAt: ctx.now.toISOString(),
     });
+  }
+
+  return candidates;
+}
+
+/**
+ * Build event-driven recommendation candidates from listing _events.
+ * Scans topUnusedItems for recent events and produces actionable recommendations.
+ */
+function buildEventDrivenCandidates(ctx) {
+  const candidates = [];
+  const { topUnusedItems, campaignUsageBySource, now } = ctx;
+  const SEVEN_DAYS = 7 * DAY_MS;
+  const FOURTEEN_DAYS = 14 * DAY_MS;
+
+  for (const item of topUnusedItems) {
+    if (item.type !== "CUSTOM") continue;
+    const events = item.dataJson?._events || [];
+    if (events.length === 0) continue;
+
+    const label = item.dataJson?.street || item.dataJson?.address || item.title;
+    const campUsage = campaignUsageBySource.get(item.id);
+
+    // Price drop alert — recent price_drop events (last 7 days)
+    const recentPriceDrop = events.find(
+      (e) => e.type === "price_drop" && (now - new Date(e.detectedAt)) < SEVEN_DAYS
+    );
+    if (recentPriceDrop && !campUsage?.campaignTypes?.has("price_drop")) {
+      const { dropAmount, dropPercent, oldPrice, newPrice } = recentPriceDrop.data || {};
+      candidates.push({
+        id: `price_drop_alert:${item.id}`,
+        type: "price_drop_alert",
+        title: dropAmount
+          ? `Price dropped $${Number(dropAmount).toLocaleString()} on ${label}`
+          : `Price drop detected on ${label}`,
+        description: dropAmount
+          ? `Reduced ${dropPercent}% from $${Number(oldPrice).toLocaleString()} to $${Number(newPrice).toLocaleString()} — launch a campaign to generate urgency.`
+          : "A price reduction was detected — create a targeted campaign.",
+        sourceType: "listing",
+        sourceId: item.id,
+        sourceLabel: label,
+        priorityScore: Math.max(BASE_SCORES.price_drop_alert - (campUsage?.hasCampaign ? 15 : 0), 10),
+        confidence: "high",
+        freshness: "fresh",
+        surfaces: ["dashboard", "listing_campaign"],
+        suggestedCampaignType: "price_drop",
+        actionLabel: "Launch Price Drop Campaign",
+        actionPayload: {
+          action: "openListingCampaign",
+          campaignType: "price_drop",
+          listingDataItemId: item.id,
+        },
+        reasons: [
+          dropAmount ? `Price reduced $${Number(dropAmount).toLocaleString()} (${dropPercent}%)` : "Price drop detected",
+          "Price drop campaigns generate urgency and engagement",
+        ],
+        evaluatedAt: now.toISOString(),
+      });
+    }
+
+    // Not promoted — listing active but never used for content
+    const notPromoted = events.find((e) => e.type === "not_promoted");
+    if (notPromoted) {
+      const daysActive = notPromoted.data?.daysActive || 0;
+      candidates.push({
+        id: `unpromoted_listing:${item.id}`,
+        type: "unpromoted_listing",
+        title: `${label} has no content yet`,
+        description: `This listing has been active for ${daysActive} days without any posts or campaigns. Create content to boost visibility.`,
+        sourceType: "listing",
+        sourceId: item.id,
+        sourceLabel: label,
+        priorityScore: BASE_SCORES.unpromoted_listing,
+        confidence: "medium",
+        freshness: "evergreen",
+        surfaces: ["dashboard"],
+        actionLabel: "Create Content",
+        actionPayload: {
+          action: "openListingCampaign",
+          campaignType: "just_listed",
+          listingDataItemId: item.id,
+        },
+        reasons: [`Active for ${daysActive} days with no content`, "Every listing should have at least one campaign"],
+        evaluatedAt: now.toISOString(),
+      });
+    }
+
+    // Stale listing — active too long, needs fresh content
+    const recentStale = events.find(
+      (e) => e.type === "stale_listing" && (now - new Date(e.detectedAt)) < FOURTEEN_DAYS
+    );
+    if (recentStale) {
+      const daysActive = recentStale.data?.daysActive || 0;
+      candidates.push({
+        id: `stale_listing_refresh:${item.id}`,
+        type: "stale_listing_refresh",
+        title: `${label} has been active for ${daysActive} days`,
+        description: `This listing has been active for ${daysActive} days — create a fresh post to reignite interest.`,
+        sourceType: "listing",
+        sourceId: item.id,
+        sourceLabel: label,
+        priorityScore: BASE_SCORES.stale_listing_refresh,
+        confidence: "medium",
+        freshness: "fresh",
+        surfaces: ["dashboard"],
+        actionLabel: "Create Fresh Post",
+        actionPayload: {
+          action: "openListingCampaign",
+          campaignType: "listing_spotlight",
+          listingDataItemId: item.id,
+        },
+        reasons: [`Active for ${daysActive} days`, "Fresh content can reignite buyer interest"],
+        evaluatedAt: now.toISOString(),
+      });
+    }
   }
 
   return candidates;

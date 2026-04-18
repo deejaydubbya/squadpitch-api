@@ -82,11 +82,16 @@ function transformRealEstate(item) {
     highlights.push(...extractHighlights(d.description, 3));
   }
 
+  // Compute days on market from enrichment metadata
+  const daysOnMarket = d.daysOnMarket ?? d._daysOnMarket ?? null;
+
   // Trust signals from listing data
   const trustSignals = [];
-  if (d.daysOnMarket != null) trustSignals.push(`${d.daysOnMarket} days on market`);
+  if (daysOnMarket != null) trustSignals.push(`${daysOnMarket} days on market`);
   if (d.agent || d.listedBy) trustSignals.push(`Listed by ${d.agent || d.listedBy}`);
   if (d.broker || d.brokerage) trustSignals.push(d.broker || d.brokerage);
+  if (d.estimatedValue) trustSignals.push(`Estimated value: $${Number(d.estimatedValue).toLocaleString()}`);
+  if (d.lastSalePrice && d.lastSaleDate) trustSignals.push(`Last sold for $${Number(d.lastSalePrice).toLocaleString()} (${d.lastSaleDate})`);
 
   return {
     headline,

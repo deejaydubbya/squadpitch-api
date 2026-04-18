@@ -9,6 +9,13 @@ import { parse as csvParse } from "csv-parse/sync";
 import { prisma } from "../../prisma.js";
 import { scrapeUrl } from "./scrapeUrl.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
+import {
+  detectIngestionEvents,
+  recordPriceChange,
+  recordStatusChange,
+  appendEvents,
+} from "./listingEvents.service.js";
+import { enrichListing } from "../industry/propertyEnrichment.service.js";
 
 // ── Canonical Listing Fields ────────────────────────────────────────────────
 
@@ -304,6 +311,32 @@ function listingToDataItem(listing) {
     }
   }
 
+  // Initialize listing intelligence metadata
+  const now = new Date().toISOString();
+
+  // Track field sources based on source type
+  const fieldSourceTag = sourceType || "manual";
+  const _fieldSources = {};
+  for (const key of Object.keys(dataJson)) {
+    if (dataJson[key] != null) {
+      _fieldSources[key] = fieldSourceTag;
+    }
+  }
+  dataJson._fieldSources = _fieldSources;
+
+  // Timestamp when listing first appeared
+  dataJson._listedAt = now;
+
+  // Initialize price history
+  if (rest.price) {
+    dataJson._priceHistory = [{ price: rest.price, recordedAt: now, source: fieldSourceTag }];
+  }
+
+  // Initialize status history
+  if (rest.status) {
+    dataJson._statusHistory = [{ status: rest.status, recordedAt: now }];
+  }
+
   // Stamp source attribution — all listing pipeline imports use LISTING_FEED
   // except manual entry. URL imports are listings extracted from pages, not
   // general website content, so they belong in the listing feed pipeline.
@@ -366,14 +399,51 @@ export async function ingestManualListing(clientId, input) {
   // Check for duplicates
   const dupe = await checkDuplicate(clientId, normalized);
   if (dupe.duplicate) {
+    // Load existing for event comparison
+    const existing = await prisma.workspaceDataItem.findUnique({
+      where: { id: dupe.existingId },
+      select: { dataJson: true },
+    });
+    const oldDataJson = existing?.dataJson || {};
+
     // Update existing listing
     const dataItem = listingToDataItem(normalized);
+    let updatedDataJson = dataItem.dataJson;
+
+    // Record price/status changes if they differ
+    if (normalized.price && oldDataJson.price && normalized.price !== oldDataJson.price) {
+      updatedDataJson = recordPriceChange(updatedDataJson, normalized.price, normalized.sourceType);
+    }
+    if (normalized.status && oldDataJson.status && normalized.status !== oldDataJson.status) {
+      updatedDataJson = recordStatusChange(updatedDataJson, normalized.status);
+    }
+
+    // Preserve existing metadata from the old listing
+    if (oldDataJson._listedAt) updatedDataJson._listedAt = oldDataJson._listedAt;
+    if (oldDataJson._priceHistory && !updatedDataJson._priceHistory?.length) {
+      updatedDataJson._priceHistory = oldDataJson._priceHistory;
+    }
+    if (oldDataJson._statusHistory && !updatedDataJson._statusHistory?.length) {
+      updatedDataJson._statusHistory = oldDataJson._statusHistory;
+    }
+    if (oldDataJson._events) updatedDataJson._events = oldDataJson._events;
+    if (oldDataJson._enrichedAt) {
+      updatedDataJson._enrichedAt = oldDataJson._enrichedAt;
+      updatedDataJson._enrichmentProvider = oldDataJson._enrichmentProvider;
+    }
+
+    // Detect events from the update
+    const newEvents = detectIngestionEvents(updatedDataJson, oldDataJson);
+    if (newEvents.length > 0) {
+      updatedDataJson._events = appendEvents(updatedDataJson._events || [], newEvents);
+    }
+
     const updated = await prisma.workspaceDataItem.update({
       where: { id: dupe.existingId },
       data: {
         title: dataItem.title,
         summary: dataItem.summary,
-        dataJson: dataItem.dataJson,
+        dataJson: updatedDataJson,
         tags: dataItem.tags,
         priority: dataItem.priority,
       },
@@ -383,6 +453,13 @@ export async function ingestManualListing(clientId, input) {
 
   // Create new
   const dataItem = listingToDataItem(normalized);
+
+  // Detect new_listing event
+  const newEvents = detectIngestionEvents(dataItem.dataJson, null);
+  if (newEvents.length > 0) {
+    dataItem.dataJson = { ...dataItem.dataJson, _events: newEvents };
+  }
+
   const dataSource = await getOrCreateManualSource(clientId);
 
   const created = await prisma.workspaceDataItem.create({
@@ -392,6 +469,11 @@ export async function ingestManualListing(clientId, input) {
       ...dataItem,
     },
   });
+
+  // Fire-and-forget auto-enrichment
+  enrichListing(created).catch((err) =>
+    console.warn("[listingIngestion] Auto-enrich failed:", err.message)
+  );
 
   return { listing: created, created: true };
 }
@@ -453,12 +535,42 @@ export async function ingestCsvListings(clientId, csvContent, { columnMapping })
     const dataItem = listingToDataItem(normalized);
 
     if (dupe.duplicate) {
+      // Load existing for event comparison
+      const existing = await prisma.workspaceDataItem.findUnique({
+        where: { id: dupe.existingId },
+        select: { dataJson: true },
+      });
+      const oldDataJson = existing?.dataJson || {};
+      let updatedDataJson = dataItem.dataJson;
+
+      // Record price/status changes
+      if (normalized.price && oldDataJson.price && normalized.price !== oldDataJson.price) {
+        updatedDataJson = recordPriceChange(updatedDataJson, normalized.price, normalized.sourceType);
+      }
+      if (normalized.status && oldDataJson.status && normalized.status !== oldDataJson.status) {
+        updatedDataJson = recordStatusChange(updatedDataJson, normalized.status);
+      }
+
+      // Preserve existing metadata
+      if (oldDataJson._listedAt) updatedDataJson._listedAt = oldDataJson._listedAt;
+      if (oldDataJson._events) updatedDataJson._events = oldDataJson._events;
+      if (oldDataJson._enrichedAt) {
+        updatedDataJson._enrichedAt = oldDataJson._enrichedAt;
+        updatedDataJson._enrichmentProvider = oldDataJson._enrichmentProvider;
+      }
+
+      // Detect events
+      const newEvents = detectIngestionEvents(updatedDataJson, oldDataJson);
+      if (newEvents.length > 0) {
+        updatedDataJson._events = appendEvents(updatedDataJson._events || [], newEvents);
+      }
+
       const updated = await prisma.workspaceDataItem.update({
         where: { id: dupe.existingId },
         data: {
           title: dataItem.title,
           summary: dataItem.summary,
-          dataJson: dataItem.dataJson,
+          dataJson: updatedDataJson,
           tags: dataItem.tags,
           priority: dataItem.priority,
         },
@@ -466,6 +578,12 @@ export async function ingestCsvListings(clientId, csvContent, { columnMapping })
       results.updated++;
       results.listings.push(updated);
     } else {
+      // Detect new_listing event
+      const newEvents = detectIngestionEvents(dataItem.dataJson, null);
+      if (newEvents.length > 0) {
+        dataItem.dataJson = { ...dataItem.dataJson, _events: newEvents };
+      }
+
       const created = await prisma.workspaceDataItem.create({
         data: {
           clientId,
@@ -473,6 +591,12 @@ export async function ingestCsvListings(clientId, csvContent, { columnMapping })
           ...dataItem,
         },
       });
+
+      // Fire-and-forget auto-enrichment
+      enrichListing(created).catch((err) =>
+        console.warn("[listingIngestion] CSV auto-enrich failed:", err.message)
+      );
+
       results.imported++;
       results.listings.push(created);
     }
@@ -517,17 +641,53 @@ export async function confirmUrlListing(clientId, listing) {
   const dataItem = listingToDataItem(normalized);
 
   if (dupe.duplicate) {
+    // Load existing for event comparison
+    const existing = await prisma.workspaceDataItem.findUnique({
+      where: { id: dupe.existingId },
+      select: { dataJson: true },
+    });
+    const oldDataJson = existing?.dataJson || {};
+    let updatedDataJson = dataItem.dataJson;
+
+    // Record price/status changes
+    if (normalized.price && oldDataJson.price && normalized.price !== oldDataJson.price) {
+      updatedDataJson = recordPriceChange(updatedDataJson, normalized.price, normalized.sourceType);
+    }
+    if (normalized.status && oldDataJson.status && normalized.status !== oldDataJson.status) {
+      updatedDataJson = recordStatusChange(updatedDataJson, normalized.status);
+    }
+
+    // Preserve existing metadata
+    if (oldDataJson._listedAt) updatedDataJson._listedAt = oldDataJson._listedAt;
+    if (oldDataJson._events) updatedDataJson._events = oldDataJson._events;
+    if (oldDataJson._enrichedAt) {
+      updatedDataJson._enrichedAt = oldDataJson._enrichedAt;
+      updatedDataJson._enrichmentProvider = oldDataJson._enrichmentProvider;
+    }
+
+    // Detect events
+    const newEvents = detectIngestionEvents(updatedDataJson, oldDataJson);
+    if (newEvents.length > 0) {
+      updatedDataJson._events = appendEvents(updatedDataJson._events || [], newEvents);
+    }
+
     const updated = await prisma.workspaceDataItem.update({
       where: { id: dupe.existingId },
       data: {
         title: dataItem.title,
         summary: dataItem.summary,
-        dataJson: dataItem.dataJson,
+        dataJson: updatedDataJson,
         tags: dataItem.tags,
         priority: dataItem.priority,
       },
     });
     return { listing: updated, created: false };
+  }
+
+  // Detect new_listing event
+  const newEvents = detectIngestionEvents(dataItem.dataJson, null);
+  if (newEvents.length > 0) {
+    dataItem.dataJson = { ...dataItem.dataJson, _events: newEvents };
   }
 
   const dataSource = await getOrCreateUrlSource(clientId);
@@ -538,6 +698,11 @@ export async function confirmUrlListing(clientId, listing) {
       ...dataItem,
     },
   });
+
+  // Fire-and-forget auto-enrichment
+  enrichListing(created).catch((err) =>
+    console.warn("[listingIngestion] URL auto-enrich failed:", err.message)
+  );
 
   return { listing: created, created: true };
 }

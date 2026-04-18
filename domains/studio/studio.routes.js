@@ -109,6 +109,9 @@ import * as fubProvider from "../integrations/providers/fubProvider.js";
 import { syncCRM } from "./crmSync.service.js";
 import * as listingFeedService from "./listingFeed.service.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
+import { enrichListingById, enrichAllListings } from "../industry/propertyEnrichment.service.js";
+import { evaluateStaleListings, getEvents } from "./listingEvents.service.js";
+import { generateSampleListings, simulateListingEvent } from "./listingSimulator.service.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
 
@@ -4075,6 +4078,110 @@ studioRouter.delete(
   async (req, res, next) => {
     try {
       const result = await listingFeedService.removeListingSource(req.params.id, req.params.sourceId);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Listing Enrichment ───────────────────────────────────────────────────
+
+/** POST /api/v1/workspaces/:id/listings/:listingId/enrich — enrich a single listing */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listings/:listingId/enrich`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await enrichListingById(req.params.id, req.params.listingId);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** POST /api/v1/workspaces/:id/listings/enrich-all — bulk enrich (up to 20, fire-and-forget) */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listings/enrich-all`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await enrichAllListings(req.params.id, 20);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Listing Events ───────────────────────────────────────────────────────
+
+/** GET /api/v1/workspaces/:id/listings/:listingId/events — get listing events */
+studioRouter.get(
+  `${BASE}/workspaces/:id/listings/:listingId/events`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const item = await prisma.workspaceDataItem.findFirst({
+        where: { id: req.params.listingId, clientId: req.params.id, status: "ACTIVE" },
+        select: { dataJson: true },
+      });
+      if (!item) return res.status(404).json({ error: "Listing not found" });
+      const events = getEvents(item.dataJson, req.query.type || null);
+      res.json({ events });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** POST /api/v1/workspaces/:id/listings/evaluate-events — run stale/unpromoted scan */
+studioRouter.post(
+  `${BASE}/workspaces/:id/listings/evaluate-events`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await evaluateStaleListings(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Listing Simulator (dev only) ─────────────────────────────────────────
+
+/** POST /api/v1/workspaces/:id/dev/listings/simulate — create N sample listings */
+studioRouter.post(
+  `${BASE}/workspaces/:id/dev/listings/simulate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ error: "Simulator disabled in production" });
+    }
+    try {
+      const { count = 5, options = {} } = req.body || {};
+      const result = await generateSampleListings(req.params.id, count, options);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/** POST /api/v1/workspaces/:id/dev/listings/:listingId/simulate-event — simulate lifecycle event */
+studioRouter.post(
+  `${BASE}/workspaces/:id/dev/listings/:listingId/simulate-event`,
+  requireClientOwner,
+  async (req, res, next) => {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ error: "Simulator disabled in production" });
+    }
+    try {
+      const { event, data = {} } = req.body || {};
+      if (!event) return res.status(400).json({ error: "Missing 'event' field" });
+      const result = await simulateListingEvent(req.params.id, req.params.listingId, event, data);
       res.json(result);
     } catch (err) {
       next(err);

@@ -876,6 +876,10 @@ export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageCon
   if (listingData.cta) lines.push(`Preferred CTA: ${listingData.cta}`);
   if (listingData.agentName) lines.push(`Agent: ${listingData.agentName}`);
   if (listingData.brokerage) lines.push(`Brokerage: ${listingData.brokerage}`);
+  if (listingData.yearBuilt) lines.push(`Year built: ${listingData.yearBuilt}`);
+  if (listingData.lotSize) lines.push(`Lot size: ${listingData.lotSize}`);
+  if (listingData.estimatedValue) lines.push(`Estimated value: $${Number(listingData.estimatedValue).toLocaleString()}`);
+  if (listingData.daysOnMarket) lines.push(`Days on market: ${listingData.daysOnMarket}`);
   if (listingData.campaignNotes) lines.push(`Special instructions: ${listingData.campaignNotes}`);
   lines.push(`--- END PROPERTY DETAILS ---`);
 
@@ -1095,6 +1099,10 @@ export function buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, s
   if (propertyData.cta) lines.push(`Preferred CTA: ${propertyData.cta}`);
   if (propertyData.agentName) lines.push(`Agent: ${propertyData.agentName}`);
   if (propertyData.brokerage) lines.push(`Brokerage: ${propertyData.brokerage}`);
+  if (propertyData.yearBuilt) lines.push(`Year built: ${propertyData.yearBuilt}`);
+  if (propertyData.lotSize) lines.push(`Lot size: ${propertyData.lotSize}`);
+  if (propertyData.estimatedValue) lines.push(`Estimated value: $${Number(propertyData.estimatedValue).toLocaleString()}`);
+  if (propertyData.daysOnMarket) lines.push(`Days on market: ${propertyData.daysOnMarket}`);
   if (propertyData.campaignNotes) lines.push(`Special instructions: ${propertyData.campaignNotes}`);
   lines.push(`--- END PROPERTY DETAILS ---`);
 
