@@ -616,6 +616,7 @@ export async function ingestUrlListing(clientId, url) {
   const raw = await adaptUrlListing(url);
   const normalized = normalizeListing(raw);
   const validation = validateListing(normalized);
+  const quality = assessExtractionQuality(normalized);
 
   // Return preview data even if incomplete — user can fill gaps
   const preview = {
@@ -623,7 +624,7 @@ export async function ingestUrlListing(clientId, url) {
     validation,
   };
 
-  return { preview, normalized };
+  return { preview, normalized, quality };
 }
 
 /**
@@ -705,6 +706,63 @@ export async function confirmUrlListing(clientId, listing) {
   );
 
   return { listing: created, created: true };
+}
+
+// ── Extraction Quality Assessment ────────────────────────────────────────────
+
+/**
+ * Assess how much useful listing data was extracted from a URL scrape.
+ * Returns a quality grade, score, extracted/missing field breakdown, and user guidance.
+ *
+ * @param {object} normalized — normalized listing from URL extraction
+ * @returns {{ grade: string, score: number, extracted: string[], missing: string[], message: string }}
+ */
+function assessExtractionQuality(normalized) {
+  // Weighted fields — more important fields score higher
+  const fields = [
+    { key: "price", weight: 3, label: "Price", check: () => normalized.price != null && normalized.price > 0 },
+    { key: "address", weight: 3, label: "Address", check: () => Boolean(normalized.address?.street) },
+    { key: "images", weight: 2, label: "Images", check: () => normalized.images?.length > 0 },
+    { key: "beds", weight: 2, label: "Bedrooms", check: () => normalized.beds != null },
+    { key: "baths", weight: 2, label: "Bathrooms", check: () => normalized.baths != null },
+    { key: "sqft", weight: 1, label: "Square footage", check: () => normalized.sqft != null },
+    { key: "description", weight: 1, label: "Description", check: () => Boolean(normalized.description) },
+    { key: "title", weight: 1, label: "Title", check: () => Boolean(normalized.title) },
+    { key: "propertyType", weight: 1, label: "Property type", check: () => Boolean(normalized.propertyType) },
+    { key: "yearBuilt", weight: 1, label: "Year built", check: () => normalized.yearBuilt != null },
+  ];
+
+  const extracted = [];
+  const missing = [];
+  let earned = 0;
+  let total = 0;
+
+  for (const f of fields) {
+    total += f.weight;
+    if (f.check()) {
+      earned += f.weight;
+      extracted.push(f.label);
+    } else {
+      missing.push(f.label);
+    }
+  }
+
+  const score = Math.round((earned / total) * 100);
+
+  // Grade and message based on score
+  let grade, message;
+  if (score >= 70) {
+    grade = "good";
+    message = "We extracted most of the listing details. Review and edit anything that looks off.";
+  } else if (score >= 40) {
+    grade = "partial";
+    message = "We could only extract some details from this page. You'll need to fill in the missing fields, or try adding this listing manually instead.";
+  } else {
+    grade = "poor";
+    message = "This page didn't return much listing data. The site may block automated access or use a format we can't read. We recommend adding this listing manually or importing via CSV.";
+  }
+
+  return { grade, score, extracted, missing, message };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
