@@ -73,8 +73,11 @@ import {
   LicenseLookupSchema,
   CrmAnalyzeSchema,
   UploadFromUrlSchema,
+  CreateTrackableLinkSchema,
+  LogConversionEventSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
+import { getPostMetricHistory, getPostMetricGrowth } from "./postMetricHistory.service.js";
 import * as dataService from "./data.service.js";
 import * as blueprintService from "./blueprint.service.js";
 import * as opportunityService from "./contentOpportunity.service.js";
@@ -116,6 +119,8 @@ import { reanalyzeAllReviews } from "./gbpReviewAnalysis.service.js";
 import * as fubProvider from "../integrations/providers/fubProvider.js";
 import { syncCRM } from "./crmSync.service.js";
 import * as listingFeedService from "./listingFeed.service.js";
+import * as trackableLinkService from "./trackableLink.service.js";
+import { logConversionEvent } from "./conversionEvent.service.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
 import { enrichListingById, enrichAllListings } from "../industry/propertyEnrichment.service.js";
 import { evaluateStaleListings, getEvents } from "./listingEvents.service.js";
@@ -1264,6 +1269,18 @@ studioRouter.get(`${BASE}/workspaces/:id/analytics/posts/:postId`, requireClient
   }
 });
 
+studioRouter.get(`${BASE}/workspaces/:id/analytics/posts/:postId/history`, requireClientOwner, async (req, res, next) => {
+  try {
+    const [history, growth] = await Promise.all([
+      getPostMetricHistory(req.params.postId),
+      getPostMetricGrowth(req.params.postId),
+    ]);
+    res.json({ history, growth });
+  } catch (err) {
+    next(err);
+  }
+});
+
 studioRouter.get(`${BASE}/workspaces/:id/analytics/insights`, requireClientOwner, async (req, res, next) => {
   try {
     const range = req.query.range || '30d';
@@ -1272,6 +1289,72 @@ studioRouter.get(`${BASE}/workspaces/:id/analytics/insights`, requireClientOwner
       generateRecommendations({ clientId: req.params.id, range }),
     ]);
     res.json({ insights, recommendations: recResult.recommendations, meta: recResult.meta ?? null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Trackable Links & Conversions ────────────────────────────────────
+
+studioRouter.post(`${BASE}/workspaces/:id/links`, requireClientOwner, async (req, res, next) => {
+  try {
+    const parsed = CreateTrackableLinkSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const link = await trackableLinkService.createTrackableLink({
+      ...parsed.data,
+      clientId: req.params.id,
+      createdBy: getAuth0Sub(req),
+    });
+    res.status(201).json(link);
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.get(`${BASE}/workspaces/:id/links`, requireClientOwner, async (req, res, next) => {
+  try {
+    const links = await trackableLinkService.listTrackableLinks(req.params.id, {
+      draftId: req.query.draftId || undefined,
+    });
+    res.json({ links });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.delete(`${BASE}/workspaces/:id/links/:linkId`, requireClientOwner, async (req, res, next) => {
+  try {
+    await trackableLinkService.deleteLink(req.params.linkId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.post(`${BASE}/workspaces/:id/conversions`, requireClientOwner, async (req, res, next) => {
+  try {
+    const parsed = LogConversionEventSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const event = await logConversionEvent({
+      ...parsed.data,
+      clientId: req.params.id,
+    });
+    res.status(201).json(event);
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.get(`${BASE}/workspaces/:id/conversions`, requireClientOwner, async (req, res, next) => {
+  try {
+    const where = { clientId: req.params.id };
+    if (req.query.since) where.createdAt = { gte: new Date(req.query.since) };
+    const events = await prisma.conversionEvent.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+    res.json({ events });
   } catch (err) {
     next(err);
   }

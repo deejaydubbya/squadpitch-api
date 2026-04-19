@@ -117,6 +117,16 @@ enum BlueprintCategory {
   SEASONAL
 }
 
+enum ConversionEventType {
+  LINK_CLICK
+  FORM_SUBMISSION
+  CALL_BOOKED
+  CONTACT_CLICK
+  LISTING_INQUIRY
+  CRM_LEAD
+  CUSTOM
+}
+
 // ── User ───────────────────────────────────────────────────────────────
 
 model User {
@@ -141,6 +151,7 @@ model Client {
   status      ClientStatus @default(ACTIVE)
   logoUrl     String?
   industryKey String?
+  timezone    String       @default("UTC")
   createdBy   String
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
@@ -154,7 +165,8 @@ model Client {
   connections       ChannelConnection[]
   mediaAssets       MediaAsset[]
   assetFolders      AssetFolder[]
-  postMetrics       PostMetrics[]
+  postMetrics           PostMetrics[]
+  postMetricSnapshots   PostMetricSnapshot[]
   rawMetrics        RawMetric[]
   normalizedMetrics NormalizedMetric[]
   postInsights      PostInsight[]
@@ -163,6 +175,8 @@ model Client {
   dataSources        WorkspaceDataSource[]
   dataItems          WorkspaceDataItem[]
   techStackConnections WorkspaceTechStackConnection[]
+  trackableLinks       TrackableLink[]
+  conversionEvents     ConversionEvent[]
 
   @@index([status])
   @@map("clients")
@@ -303,10 +317,13 @@ model Draft {
   mediaAssets          MediaAsset[]
   draftAssets          DraftAsset[]
   metrics              PostMetrics?
+  metricSnapshots      PostMetricSnapshot[]
   rawMetric            RawMetric[]
   normalizedMetric     NormalizedMetric?
   postInsight          PostInsight?
   contentSources       GeneratedContentSource[]
+  trackableLinks       TrackableLink[]
+  conversionEvents     ConversionEvent[]
 
   @@index([clientId, status])
   @@index([clientId, channel])
@@ -559,6 +576,34 @@ model PostMetrics {
   @@map("post_metrics")
 }
 
+model PostMetricSnapshot {
+  id             String   @id @default(cuid())
+  draftId        String
+  clientId       String
+  channel        Channel
+  snapshotAt     DateTime
+
+  impressions    Int      @default(0)
+  reach          Int      @default(0)
+  engagements    Int      @default(0)
+  clicks         Int      @default(0)
+  saves          Int      @default(0)
+  shares         Int      @default(0)
+  comments       Int      @default(0)
+  likes          Int      @default(0)
+  engagementRate Float?
+
+  createdAt      DateTime @default(now())
+
+  draft          Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, snapshotAt])
+  @@index([draftId, snapshotAt])
+  @@index([clientId])
+  @@map("post_metric_snapshots")
+}
+
 // ── Notifications ────────────────────────────────────────────────────
 
 model NotificationPreference {
@@ -740,7 +785,7 @@ model RawMetric {
   draftId        String
   channel        Channel
   externalPostId String?
-  dataJson       Json
+  rawDataJson    Json
   fetchedAt      DateTime @default(now())
   createdAt      DateTime @default(now())
 
@@ -777,7 +822,9 @@ model PostInsight {
   id                 String   @id @default(cuid())
   clientId           String
   draftId            String   @unique
-  performanceScore   Float?
+  qualityScore       Float?
+  observedScore      Float?
+  compositeScore     Float?
   contentType        String?
   hookType           String?
   sentiment          String?
@@ -801,7 +848,9 @@ model WorkspaceAnalytics {
   id                  String   @id @default(cuid())
   clientId            String   @unique
   avgEngagementRate   Float?
-  avgPerformanceScore Float?
+  avgQualityScore     Float?
+  avgObservedScore    Float?
+  avgCompositeScore   Float?
   totalPosts          Int      @default(0)
   totalPublishedPosts Int      @default(0)
   totalReach          Int      @default(0)
@@ -821,7 +870,9 @@ model AnalyticsSnapshot {
   id                  String   @id @default(cuid())
   clientId            String
   snapshotDate        DateTime @db.Date
-  avgPerformanceScore Float?
+  avgQualityScore     Float?
+  avgObservedScore    Float?
+  avgCompositeScore   Float?
   avgEngagementRate   Float?
   totalPosts          Int      @default(0)
   totalReach          Int      @default(0)
@@ -922,7 +973,9 @@ model DataItemPerformance {
   totalDrafts    Int      @default(0)
   totalPublished Int      @default(0)
   avgEngagement        Float?
-  avgPerformanceScore  Float?
+  avgQualityScore      Float?
+  avgObservedScore     Float?
+  avgCompositeScore    Float?
   lastCalculated DateTime @default(now())
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -938,7 +991,9 @@ model BlueprintPerformance {
   totalDrafts    Int      @default(0)
   totalPublished Int      @default(0)
   avgEngagement        Float?
-  avgPerformanceScore  Float?
+  avgQualityScore      Float?
+  avgObservedScore     Float?
+  avgCompositeScore    Float?
   lastCalculated DateTime @default(now())
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -966,4 +1021,59 @@ model WorkspaceTechStackConnection {
   @@unique([workspaceId, providerKey])
   @@index([workspaceId])
   @@map("workspace_tech_stack_connections")
+}
+
+// ── Conversion Analytics ────────────────────────────────────────────
+
+model TrackableLink {
+  id             String    @id @default(cuid())
+  clientId       String
+  draftId        String?
+  shortCode      String    @unique
+  destinationUrl String    @db.Text
+  label          String?
+  channel        Channel?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+  isActive       Boolean   @default(true)
+  clickCount     Int       @default(0)
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft          Draft?    @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  events         ConversionEvent[]
+
+  @@index([clientId])
+  @@index([draftId])
+  @@map("trackable_links")
+}
+
+model ConversionEvent {
+  id              String              @id @default(cuid())
+  clientId        String
+  draftId         String?
+  trackableLinkId String?
+  type            ConversionEventType
+  label           String?
+  referrerUrl     String?   @db.Text
+  userAgentHash   String?
+  ipHash          String?
+  country         String?
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+
+  client          Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft           Draft?          @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  trackableLink   TrackableLink?  @relation(fields: [trackableLinkId], references: [id], onDelete: SetNull)
+
+  @@index([clientId, type])
+  @@index([clientId, createdAt])
+  @@index([draftId])
+  @@index([trackableLinkId])
+  @@map("conversion_events")
 }

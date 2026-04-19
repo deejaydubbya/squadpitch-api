@@ -731,3 +731,35 @@ export const UpdateListingSourceSchema = z.object({
   sourceUrl: z.string().url().max(2000).optional(),
   isEnabled: z.boolean().optional(),
 });
+
+// ── Conversion Analytics ─────────────────────────────────────────────
+
+export const ConversionEventTypeEnum = z.enum([
+  "LINK_CLICK",
+  "FORM_SUBMISSION",
+  "CALL_BOOKED",
+  "CONTACT_CLICK",
+  "LISTING_INQUIRY",
+  "CRM_LEAD",
+  "CUSTOM",
+]);
+
+export const CreateTrackableLinkSchema = z.object({
+  draftId: z.string().optional(),
+  destinationUrl: z.string().url().max(2000),
+  label: z.string().max(200).optional(),
+  channel: ChannelEnum.optional(),
+  utmSource: z.string().max(200).optional(),
+  utmMedium: z.string().max(200).optional(),
+  utmCampaign: z.string().max(200).optional(),
+  utmTerm: z.string().max(200).optional(),
+  utmContent: z.string().max(200).optional(),
+});
+
+export const LogConversionEventSchema = z.object({
+  draftId: z.string().optional(),
+  trackableLinkId: z.string().optional(),
+  type: ConversionEventTypeEnum,
+  label: z.string().max(500).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});

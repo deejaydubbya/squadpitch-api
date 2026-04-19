@@ -619,11 +619,17 @@ async function seedAnalytics() {
     const negCount = negativeWords.filter((w) => bodyLower.includes(w)).length;
     const sentiment = posCount > negCount ? "positive" : negCount > posCount ? "negative" : "neutral";
 
+    // Derive quality score from body heuristics, observed from engagement if available
+    const seedQualityScore = adjustedScore != null ? Math.min(100, adjustedScore + randomBetween(-10, 10)) : null;
+    const seedObservedScore = hasMetrics && adjustedScore != null ? Math.min(100, adjustedScore + randomBetween(-15, 15)) : null;
+
     await prisma.postInsight.create({
       data: {
         clientId,
         draftId: draft.id,
-        performanceScore: adjustedScore,
+        qualityScore: seedQualityScore,
+        observedScore: seedObservedScore,
+        compositeScore: adjustedScore,
         contentType,
         hookType,
         sentiment,
@@ -695,7 +701,7 @@ async function seedAnalytics() {
 
   const allMetrics = await prisma.postMetrics.findMany({ where: { clientId } });
   const allInsights = await prisma.postInsight.findMany({
-    where: { clientId, performanceScore: { not: null } },
+    where: { clientId, compositeScore: { not: null } },
   });
 
   const totalReach = allMetrics.reduce((sum, m) => sum + m.reach, 0);
@@ -704,40 +710,42 @@ async function seedAnalytics() {
     allMetrics.length > 0
       ? allMetrics.reduce((sum, m) => sum + (m.engagementRate || 0), 0) / allMetrics.length
       : 0;
-  const avgPerformanceScore =
-    allInsights.length > 0
-      ? allInsights.reduce((sum, i) => sum + i.performanceScore, 0) / allInsights.length
-      : 0;
 
-  // Determine top platform by avg score
+  const safeAvg = (arr) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const avgQualityScore = safeAvg(allInsights.map((i) => i.qualityScore).filter(Boolean));
+  const observedValues = allInsights.map((i) => i.observedScore).filter((s) => s != null);
+  const avgObservedScore = observedValues.length > 0 ? safeAvg(observedValues) : null;
+  const avgCompositeScore = safeAvg(allInsights.map((i) => i.compositeScore).filter(Boolean));
+
+  // Determine top platform by avg compositeScore
   const platformScores = {};
   for (const insight of allInsights) {
     const draft = createdDrafts.find((d) => d.draft.id === insight.draftId);
     if (!draft) continue;
     if (!platformScores[draft.channel]) platformScores[draft.channel] = [];
-    platformScores[draft.channel].push(insight.performanceScore);
+    platformScores[draft.channel].push(insight.compositeScore);
   }
   const topPlatform = Object.entries(platformScores)
     .map(([ch, scores]) => ({ ch, avg: scores.reduce((a, b) => a + b, 0) / scores.length }))
     .sort((a, b) => b.avg - a.avg)[0]?.ch || null;
 
-  // Determine best content type by avg score
+  // Determine best content type by avg compositeScore
   const contentTypeScores = {};
   for (const insight of allInsights) {
     if (!insight.contentType) continue;
     if (!contentTypeScores[insight.contentType]) contentTypeScores[insight.contentType] = [];
-    contentTypeScores[insight.contentType].push(insight.performanceScore);
+    contentTypeScores[insight.contentType].push(insight.compositeScore);
   }
   const bestContentType = Object.entries(contentTypeScores)
     .map(([ct, scores]) => ({ ct, avg: scores.reduce((a, b) => a + b, 0) / scores.length }))
     .sort((a, b) => b.avg - a.avg)[0]?.ct || null;
 
-  // Determine best media type by avg score
+  // Determine best media type by avg compositeScore
   const mediaTypeScores = {};
   for (const insight of allInsights) {
     if (!insight.mediaType) continue;
     if (!mediaTypeScores[insight.mediaType]) mediaTypeScores[insight.mediaType] = [];
-    mediaTypeScores[insight.mediaType].push(insight.performanceScore);
+    mediaTypeScores[insight.mediaType].push(insight.compositeScore);
   }
   const bestMediaType = Object.entries(mediaTypeScores)
     .map(([mt, scores]) => ({ mt, avg: scores.reduce((a, b) => a + b, 0) / scores.length }))
@@ -748,7 +756,9 @@ async function seedAnalytics() {
     create: {
       clientId,
       avgEngagementRate: Math.round(avgEngagementRate * 1000) / 1000,
-      avgPerformanceScore: Math.round(avgPerformanceScore * 10) / 10,
+      avgQualityScore: Math.round(avgQualityScore * 10) / 10,
+      avgObservedScore: avgObservedScore != null ? Math.round(avgObservedScore * 10) / 10 : null,
+      avgCompositeScore: Math.round(avgCompositeScore * 10) / 10,
       totalPosts: TOTAL_DRAFTS,
       totalPublishedPosts: TOTAL_DRAFTS,
       totalReach,
@@ -760,7 +770,9 @@ async function seedAnalytics() {
     },
     update: {
       avgEngagementRate: Math.round(avgEngagementRate * 1000) / 1000,
-      avgPerformanceScore: Math.round(avgPerformanceScore * 10) / 10,
+      avgQualityScore: Math.round(avgQualityScore * 10) / 10,
+      avgObservedScore: avgObservedScore != null ? Math.round(avgObservedScore * 10) / 10 : null,
+      avgCompositeScore: Math.round(avgCompositeScore * 10) / 10,
       totalPosts: TOTAL_DRAFTS,
       totalPublishedPosts: TOTAL_DRAFTS,
       totalReach,
@@ -774,7 +786,7 @@ async function seedAnalytics() {
 
   console.log(`   WorkspaceAnalytics created`);
   console.log(`     Avg engagement rate: ${(avgEngagementRate).toFixed(3)}%`);
-  console.log(`     Avg performance score: ${avgPerformanceScore.toFixed(1)}`);
+  console.log(`     Avg composite score: ${avgCompositeScore.toFixed(1)}`);
   console.log(`     Total reach: ${totalReach.toLocaleString()}`);
   console.log(`     Top platform: ${topPlatform}`);
   console.log(`     Best content type: ${bestContentType}`);
@@ -803,10 +815,12 @@ async function seedAnalytics() {
       postsUpToDate.some((p) => p.draft.id === m.draftId)
     );
 
-    const snapAvgScore =
-      snapshotInsights.length > 0
-        ? snapshotInsights.reduce((s, i) => s + i.performanceScore, 0) / snapshotInsights.length
-        : 0;
+    const snapQuality = snapshotInsights.map((i) => i.qualityScore).filter(Boolean);
+    const snapObserved = snapshotInsights.map((i) => i.observedScore).filter((s) => s != null);
+    const snapComposite = snapshotInsights.map((i) => i.compositeScore).filter(Boolean);
+    const snapAvgQuality = snapQuality.length > 0 ? snapQuality.reduce((a, b) => a + b, 0) / snapQuality.length : 0;
+    const snapAvgObserved = snapObserved.length > 0 ? snapObserved.reduce((a, b) => a + b, 0) / snapObserved.length : null;
+    const snapAvgComposite = snapComposite.length > 0 ? snapComposite.reduce((a, b) => a + b, 0) / snapComposite.length : 0;
     const snapAvgER =
       snapshotMetrics.length > 0
         ? snapshotMetrics.reduce((s, m) => s + (m.engagementRate || 0), 0) / snapshotMetrics.length
@@ -821,14 +835,18 @@ async function seedAnalytics() {
       create: {
         clientId,
         snapshotDate,
-        avgPerformanceScore: Math.round(snapAvgScore * 10) / 10,
+        avgQualityScore: Math.round(snapAvgQuality * 10) / 10,
+        avgObservedScore: snapAvgObserved != null ? Math.round(snapAvgObserved * 10) / 10 : null,
+        avgCompositeScore: Math.round(snapAvgComposite * 10) / 10,
         avgEngagementRate: Math.round(snapAvgER * 1000) / 1000,
         totalPosts: postsUpToDate.length,
         totalReach: snapReach,
         totalEngagements: snapEngagements,
       },
       update: {
-        avgPerformanceScore: Math.round(snapAvgScore * 10) / 10,
+        avgQualityScore: Math.round(snapAvgQuality * 10) / 10,
+        avgObservedScore: snapAvgObserved != null ? Math.round(snapAvgObserved * 10) / 10 : null,
+        avgCompositeScore: Math.round(snapAvgComposite * 10) / 10,
         avgEngagementRate: Math.round(snapAvgER * 1000) / 1000,
         totalPosts: postsUpToDate.length,
         totalReach: snapReach,

@@ -4,6 +4,7 @@
 // for time-series charts.
 
 import { prisma } from '../../prisma.js';
+import { getClientTimezone, getLocalMidnight } from '../../lib/timezone.js';
 
 // ── Recalculate Workspace Analytics ─────────────────────────────────
 
@@ -17,7 +18,7 @@ export async function recalculateWorkspaceAnalytics(clientId) {
         select: { engagementRate: true, reach: true, engagements: true },
       },
       postInsight: {
-        select: { performanceScore: true, contentType: true, mediaType: true },
+        select: { qualityScore: true, observedScore: true, compositeScore: true, contentType: true, mediaType: true },
       },
     },
   });
@@ -25,17 +26,19 @@ export async function recalculateWorkspaceAnalytics(clientId) {
   const totalPosts = await prisma.draft.count({ where: { clientId } });
   const totalPublishedPosts = drafts.length;
 
-  const scores = drafts.map((d) => d.postInsight?.performanceScore).filter((s) => s != null);
+  const qualityScores = drafts.map((d) => d.postInsight?.qualityScore).filter((s) => s != null);
+  const observedScores = drafts.map((d) => d.postInsight?.observedScore).filter((s) => s != null);
+  const compositeScores = drafts.map((d) => d.postInsight?.compositeScore).filter((s) => s != null);
   const rates = drafts.map((d) => d.normalizedMetric?.engagementRate).filter((r) => r != null);
-  const reaches = drafts.map((d) => d.normalizedMetric?.reach ?? 0);
-  const engagements = drafts.map((d) => d.normalizedMetric?.engagements ?? 0);
+  const reaches = drafts.map((d) => d.normalizedMetric?.reach).filter((r) => r != null);
+  const engagements = drafts.map((d) => d.normalizedMetric?.engagements).filter((r) => r != null);
 
   const avg = (arr) => (arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
 
-  // Best platform by avg score
+  // Best platform by avg compositeScore
   const byChannel = {};
   for (const d of drafts) {
-    const score = d.postInsight?.performanceScore;
+    const score = d.postInsight?.compositeScore;
     if (score == null) continue;
     if (!byChannel[d.channel]) byChannel[d.channel] = [];
     byChannel[d.channel].push(score);
@@ -50,25 +53,39 @@ export async function recalculateWorkspaceAnalytics(clientId) {
     }
   }
 
-  // Best content type by count
-  const contentCounts = {};
+  // Best content type by avg compositeScore
+  const contentScores = {};
   for (const d of drafts) {
     const ct = d.postInsight?.contentType;
-    if (ct) contentCounts[ct] = (contentCounts[ct] || 0) + 1;
+    const score = d.postInsight?.compositeScore;
+    if (ct && score != null) {
+      if (!contentScores[ct]) contentScores[ct] = [];
+      contentScores[ct].push(score);
+    }
   }
-  const bestContentType = Object.entries(contentCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const bestContentType = Object.entries(contentScores)
+    .map(([k, scores]) => [k, scores.reduce((a, b) => a + b, 0) / scores.length])
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
-  // Best media type by count
-  const mediaCounts = {};
+  // Best media type by avg compositeScore
+  const mediaScores = {};
   for (const d of drafts) {
     const mt = d.postInsight?.mediaType;
-    if (mt) mediaCounts[mt] = (mediaCounts[mt] || 0) + 1;
+    const score = d.postInsight?.compositeScore;
+    if (mt && score != null) {
+      if (!mediaScores[mt]) mediaScores[mt] = [];
+      mediaScores[mt].push(score);
+    }
   }
-  const bestMediaType = Object.entries(mediaCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const bestMediaType = Object.entries(mediaScores)
+    .map(([k, scores]) => [k, scores.reduce((a, b) => a + b, 0) / scores.length])
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 
   const data = {
     avgEngagementRate: avg(rates),
-    avgPerformanceScore: avg(scores),
+    avgQualityScore: avg(qualityScores),
+    avgObservedScore: avg(observedScores),
+    avgCompositeScore: avg(compositeScores),
     totalPosts,
     totalPublishedPosts,
     totalReach: reaches.reduce((a, b) => a + b, 0),
@@ -89,8 +106,8 @@ export async function recalculateWorkspaceAnalytics(clientId) {
 // ── Daily Snapshot ──────────────────────────────────────────────────
 
 export async function createDailySnapshot(clientId) {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  const timezone = await getClientTimezone(clientId);
+  const today = getLocalMidnight(timezone);
 
   const drafts = await prisma.draft.findMany({
     where: { clientId, status: 'PUBLISHED' },
@@ -99,20 +116,24 @@ export async function createDailySnapshot(clientId) {
         select: { engagementRate: true, reach: true, engagements: true },
       },
       postInsight: {
-        select: { performanceScore: true },
+        select: { qualityScore: true, observedScore: true, compositeScore: true },
       },
     },
   });
 
-  const scores = drafts.map((d) => d.postInsight?.performanceScore).filter((s) => s != null);
+  const qualityScores = drafts.map((d) => d.postInsight?.qualityScore).filter((s) => s != null);
+  const observedScores = drafts.map((d) => d.postInsight?.observedScore).filter((s) => s != null);
+  const compositeScores = drafts.map((d) => d.postInsight?.compositeScore).filter((s) => s != null);
   const rates = drafts.map((d) => d.normalizedMetric?.engagementRate).filter((r) => r != null);
-  const reaches = drafts.map((d) => d.normalizedMetric?.reach ?? 0);
-  const engagements = drafts.map((d) => d.normalizedMetric?.engagements ?? 0);
+  const reaches = drafts.map((d) => d.normalizedMetric?.reach).filter((r) => r != null);
+  const engagements = drafts.map((d) => d.normalizedMetric?.engagements).filter((r) => r != null);
 
   const avg = (arr) => (arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
 
   const data = {
-    avgPerformanceScore: avg(scores),
+    avgQualityScore: avg(qualityScores),
+    avgObservedScore: avg(observedScores),
+    avgCompositeScore: avg(compositeScores),
     avgEngagementRate: avg(rates),
     totalPosts: drafts.length,
     totalReach: reaches.reduce((a, b) => a + b, 0),

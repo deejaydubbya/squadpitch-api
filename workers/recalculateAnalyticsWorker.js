@@ -8,6 +8,7 @@ import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
 import {
   recalculateWorkspaceAnalytics,
+  createDailySnapshot,
   getClientsNeedingRecalculation,
 } from "../domains/studio/workspaceAnalytics.service.js";
 
@@ -26,6 +27,9 @@ async function processPollRecalc() {
   for (const clientId of clientIds) {
     try {
       await recalculateWorkspaceAnalytics(clientId);
+      await createDailySnapshot(clientId).catch((err) =>
+        console.error(`[ANALYTICS_RECALC] Snapshot error for ${clientId}: ${err.message}`)
+      );
       success++;
     } catch (err) {
       console.error(`[ANALYTICS_RECALC] Error for client ${clientId}: ${err.message}`);
@@ -43,6 +47,9 @@ async function processPollRecalc() {
 async function processRecalcClient(clientId) {
   try {
     await recalculateWorkspaceAnalytics(clientId);
+    await createDailySnapshot(clientId).catch((err) =>
+      console.error(`[ANALYTICS_RECALC] Snapshot error for ${clientId}: ${err.message}`)
+    );
     console.log(`[ANALYTICS_RECALC] Recalculated for client ${clientId}`);
   } catch (err) {
     console.error(`[ANALYTICS_RECALC] Error for client ${clientId}: ${err.message}`);

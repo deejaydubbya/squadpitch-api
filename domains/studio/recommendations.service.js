@@ -1,4 +1,5 @@
 import { prisma } from '../../prisma.js';
+import { getLocalWeekKey } from '../../lib/timezone.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ function contentRecommendation(rows) {
 
   const scored = entries.map(([type, r]) => ({
     type,
-    avgScore: avg(r.map((x) => x.performanceScore).filter(Boolean)),
+    avgScore: avg(r.map((x) => x.compositeScore).filter(Boolean)),
     count: r.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -57,7 +58,7 @@ function platformRecommendation(rows) {
 
   const scored = entries.map(([channel, r]) => ({
     channel,
-    avgScore: avg(r.map((x) => x.performanceScore).filter(Boolean)),
+    avgScore: avg(r.map((x) => x.compositeScore).filter(Boolean)),
     count: r.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -81,7 +82,7 @@ function mediaRecommendation(rows) {
 
   const scored = entries.map(([mediaType, r]) => ({
     mediaType,
-    avgScore: avg(r.map((x) => x.performanceScore).filter(Boolean)),
+    avgScore: avg(r.map((x) => x.compositeScore).filter(Boolean)),
     count: r.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -106,7 +107,7 @@ function timingRecommendation(rows) {
 
   const scored = entries.map(([bucket, r]) => ({
     bucket,
-    avgScore: avg(r.map((x) => x.performanceScore).filter(Boolean)),
+    avgScore: avg(r.map((x) => x.compositeScore).filter(Boolean)),
     count: r.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -124,18 +125,15 @@ function timingRecommendation(rows) {
   };
 }
 
-function cadenceRecommendation(rows) {
-  // Group by ISO week
+function cadenceRecommendation(rows, timezone = 'UTC') {
+  // Group by local-timezone week
   const weekMap = {};
   for (const row of rows) {
     if (!row.publishedAt) continue;
-    const d = new Date(row.publishedAt);
-    const weekStart = new Date(d);
-    weekStart.setDate(d.getDate() - d.getDay());
-    const key = weekStart.toISOString().slice(0, 10);
+    const key = getLocalWeekKey(new Date(row.publishedAt), timezone);
     if (!weekMap[key]) weekMap[key] = { count: 0, scores: [] };
     weekMap[key].count++;
-    if (row.performanceScore != null) weekMap[key].scores.push(row.performanceScore);
+    if (row.compositeScore != null) weekMap[key].scores.push(row.compositeScore);
   }
 
   const weeks = Object.values(weekMap);
@@ -160,7 +158,7 @@ function hooksRecommendation(rows) {
 
   const scored = entries.map(([hookType, r]) => ({
     hookType,
-    avgScore: avg(r.map((x) => x.performanceScore).filter(Boolean)),
+    avgScore: avg(r.map((x) => x.compositeScore).filter(Boolean)),
     count: r.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -225,14 +223,14 @@ async function dataFreshnessRecommendation(clientId) {
 
 // ── Main ─────────────────────────────────────────────────────────────
 
-export async function generateRecommendations({ clientId, range = '30d' }) {
+export async function generateRecommendations({ clientId, range = '30d', timezone = 'UTC' }) {
   const since = getRangeDate(range);
   const dateFilter = since ? { publishedAt: { gte: since } } : {};
 
   const insights = await prisma.postInsight.findMany({
     where: { clientId, draft: { status: 'PUBLISHED', ...dateFilter } },
     select: {
-      performanceScore: true,
+      compositeScore: true,
       contentType: true,
       hookType: true,
       mediaType: true,
@@ -262,7 +260,7 @@ export async function generateRecommendations({ clientId, range = '30d' }) {
     hooksRecommendation,
   ];
 
-  const results = generators.map((gen) => gen(rows)).filter(Boolean);
+  const results = generators.map((gen) => gen(rows, timezone)).filter(Boolean);
 
   // Async data-aware recommendations
   const [autopilotRec, freshnessRec] = await Promise.all([

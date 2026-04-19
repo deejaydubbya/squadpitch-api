@@ -11,6 +11,7 @@ import { getRedis } from "./redis.js";
 
 // Domain routers
 import { studioRouter } from "./domains/studio/studio.routes.js";
+import { conversionPublicRouter } from "./domains/studio/conversion.routes.js";
 import { billingRouter } from "./domains/billing/billing.routes.js";
 import { notificationRouter, notificationPublicRouter } from "./domains/notifications/notification.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
@@ -124,6 +125,7 @@ app.get("/health", async (_req, res) => {
 
 // Public notification routes (no auth) — VAPID key
 app.use(notificationPublicRouter);
+app.use(conversionPublicRouter);
 
 // Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
 app.use("/api", (req, res, next) => {

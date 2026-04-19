@@ -1,4 +1,5 @@
 import { prisma } from '../../prisma.js';
+import { getLocalHour, getClientTimezone } from '../../lib/timezone.js';
 
 // ── Sentiment ────────────────────────────────────────────────────────
 
@@ -66,9 +67,9 @@ function getLengthBucket(body) {
 
 // ── Posting Time Bucket ──────────────────────────────────────────────
 
-function getPostingTimeBucket(publishedAt) {
+function getPostingTimeBucket(publishedAt, timezone = 'UTC') {
   if (!publishedAt) return null;
-  const hour = new Date(publishedAt).getUTCHours();
+  const hour = getLocalHour(new Date(publishedAt), timezone);
   if (hour >= 5 && hour < 9) return 'morning';
   if (hour >= 9 && hour < 12) return 'midday';
   if (hour >= 12 && hour < 17) return 'afternoon';
@@ -110,7 +111,7 @@ function inferRecommendationTags(draft) {
 
 // ── Main Classification ──────────────────────────────────────────────
 
-export function classifyContent(draft) {
+export function classifyContent(draft, { timezone = 'UTC' } = {}) {
   const body = draft.body || '';
   return {
     contentType: inferContentType(body),
@@ -118,7 +119,7 @@ export function classifyContent(draft) {
     sentiment: inferSentiment(body),
     lengthBucket: getLengthBucket(body),
     mediaType: draft.mediaType || 'text',
-    postingTimeBucket: getPostingTimeBucket(draft.publishedAt),
+    postingTimeBucket: getPostingTimeBucket(draft.publishedAt, timezone),
     recommendationTags: inferRecommendationTags(draft),
   };
 }
@@ -133,6 +134,8 @@ export async function reclassifyClientInsights(clientId) {
 
   if (insights.length === 0) return 0;
 
+  const timezone = await getClientTimezone(clientId);
+
   let updated = 0;
   for (const insight of insights) {
     const draft = await prisma.draft.findUnique({
@@ -141,7 +144,7 @@ export async function reclassifyClientInsights(clientId) {
     });
     if (!draft) continue;
 
-    const { sentiment, recommendationTags } = classifyContent(draft);
+    const { sentiment, recommendationTags } = classifyContent(draft, { timezone });
     await prisma.postInsight.update({
       where: { id: insight.id },
       data: { sentiment, recommendationTags },

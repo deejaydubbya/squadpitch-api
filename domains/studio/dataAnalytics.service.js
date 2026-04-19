@@ -15,7 +15,7 @@ export async function updateDataItemPerformance(dataItemId) {
         select: {
           id: true,
           status: true,
-          postInsight: { select: { performanceScore: true } },
+          postInsight: { select: { qualityScore: true, observedScore: true, compositeScore: true } },
           normalizedMetric: { select: { engagementRate: true } },
         },
       },
@@ -26,22 +26,14 @@ export async function updateDataItemPerformance(dataItemId) {
   const published = sources.filter((s) => s.draft.status === "PUBLISHED");
   const totalPublished = published.length;
 
-  const scores = published
-    .map((s) => s.draft.postInsight?.performanceScore)
-    .filter((s) => s != null);
+  const qScores = published.map((s) => s.draft.postInsight?.qualityScore).filter((s) => s != null);
+  const oScores = published.map((s) => s.draft.postInsight?.observedScore).filter((s) => s != null);
+  const cScores = published.map((s) => s.draft.postInsight?.compositeScore).filter((s) => s != null);
   const engagements = published
     .map((s) => s.draft.normalizedMetric?.engagementRate)
     .filter((e) => e != null);
 
-  const avgEngagement =
-    engagements.length > 0
-      ? engagements.reduce((a, b) => a + b, 0) / engagements.length
-      : null;
-
-  const avgPerformanceScore =
-    scores.length > 0
-      ? scores.reduce((a, b) => a + b, 0) / scores.length
-      : null;
+  const avg = (arr) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
 
   await prisma.dataItemPerformance.upsert({
     where: { dataItemId },
@@ -49,15 +41,19 @@ export async function updateDataItemPerformance(dataItemId) {
       dataItemId,
       totalDrafts,
       totalPublished,
-      avgEngagement,
-      avgPerformanceScore,
+      avgEngagement: avg(engagements),
+      avgQualityScore: avg(qScores),
+      avgObservedScore: avg(oScores),
+      avgCompositeScore: avg(cScores),
       lastCalculated: new Date(),
     },
     update: {
       totalDrafts,
       totalPublished,
-      avgEngagement,
-      avgPerformanceScore,
+      avgEngagement: avg(engagements),
+      avgQualityScore: avg(qScores),
+      avgObservedScore: avg(oScores),
+      avgCompositeScore: avg(cScores),
       lastCalculated: new Date(),
     },
   });
@@ -73,7 +69,7 @@ export async function updateBlueprintPerformance(blueprintId) {
         select: {
           id: true,
           status: true,
-          postInsight: { select: { performanceScore: true } },
+          postInsight: { select: { qualityScore: true, observedScore: true, compositeScore: true } },
           normalizedMetric: { select: { engagementRate: true } },
         },
       },
@@ -84,22 +80,14 @@ export async function updateBlueprintPerformance(blueprintId) {
   const published = sources.filter((s) => s.draft.status === "PUBLISHED");
   const totalPublished = published.length;
 
-  const scores = published
-    .map((s) => s.draft.postInsight?.performanceScore)
-    .filter((s) => s != null);
+  const qScores = published.map((s) => s.draft.postInsight?.qualityScore).filter((s) => s != null);
+  const oScores = published.map((s) => s.draft.postInsight?.observedScore).filter((s) => s != null);
+  const cScores = published.map((s) => s.draft.postInsight?.compositeScore).filter((s) => s != null);
   const engagements = published
     .map((s) => s.draft.normalizedMetric?.engagementRate)
     .filter((e) => e != null);
 
-  const avgEngagement =
-    engagements.length > 0
-      ? engagements.reduce((a, b) => a + b, 0) / engagements.length
-      : null;
-
-  const avgPerformanceScore =
-    scores.length > 0
-      ? scores.reduce((a, b) => a + b, 0) / scores.length
-      : null;
+  const avg = (arr) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
 
   await prisma.blueprintPerformance.upsert({
     where: { blueprintId },
@@ -107,15 +95,19 @@ export async function updateBlueprintPerformance(blueprintId) {
       blueprintId,
       totalDrafts,
       totalPublished,
-      avgEngagement,
-      avgPerformanceScore,
+      avgEngagement: avg(engagements),
+      avgQualityScore: avg(qScores),
+      avgObservedScore: avg(oScores),
+      avgCompositeScore: avg(cScores),
       lastCalculated: new Date(),
     },
     update: {
       totalDrafts,
       totalPublished,
-      avgEngagement,
-      avgPerformanceScore,
+      avgEngagement: avg(engagements),
+      avgQualityScore: avg(qScores),
+      avgObservedScore: avg(oScores),
+      avgCompositeScore: avg(cScores),
       lastCalculated: new Date(),
     },
   });
@@ -161,7 +153,9 @@ export async function getTopPerformingDataItems(clientId, { limit = 20 } = {}) {
           totalDrafts: item.performance.totalDrafts,
           totalPublished: item.performance.totalPublished,
           avgEngagement: item.performance.avgEngagement,
-          avgPerformanceScore: item.performance.avgPerformanceScore,
+          avgQualityScore: item.performance.avgQualityScore,
+          avgObservedScore: item.performance.avgObservedScore,
+          avgCompositeScore: item.performance.avgCompositeScore,
           lastCalculated: item.performance.lastCalculated,
         }
       : null,
@@ -197,7 +191,9 @@ export async function getBestBlueprints(clientId, { limit = 10 } = {}) {
           totalDrafts: bp.performance.totalDrafts,
           totalPublished: bp.performance.totalPublished,
           avgEngagement: bp.performance.avgEngagement,
-          avgPerformanceScore: bp.performance.avgPerformanceScore,
+          avgQualityScore: bp.performance.avgQualityScore,
+          avgObservedScore: bp.performance.avgObservedScore,
+          avgCompositeScore: bp.performance.avgCompositeScore,
           lastCalculated: bp.performance.lastCalculated,
         }
       : null,
@@ -251,7 +247,9 @@ export async function getDataItemPerformanceSummary(dataItemId) {
     totalDrafts: perf.totalDrafts,
     totalPublished: perf.totalPublished,
     avgEngagement: perf.avgEngagement,
-    avgPerformanceScore: perf.avgPerformanceScore,
+    avgQualityScore: perf.avgQualityScore,
+    avgObservedScore: perf.avgObservedScore,
+    avgCompositeScore: perf.avgCompositeScore,
     lastCalculated: perf.lastCalculated,
   };
 }

@@ -1,5 +1,6 @@
 import { prisma } from '../../prisma.js';
 import { classifyContent } from './classification.service.js';
+import { getClientTimezone } from '../../lib/timezone.js';
 
 // ── Platform-Specific Normalization ───────────────────────────────────
 
@@ -155,64 +156,32 @@ export function extractInternalSignals(draft) {
 
 // ── Classify & Save Insight ───────────────────────────────────────────
 
-const CONTENT_KEYWORDS = {
-  educational: ['learn', 'tip', 'guide', 'how to', 'tutorial', 'step', 'lesson', 'explain', 'understand'],
-  promotional: ['sale', 'offer', 'discount', 'buy', 'shop', 'deal', 'promo', 'launch', 'available now'],
-  story: ['story', 'journey', 'experience', 'behind the scenes', 'day in', 'transformation'],
-  engagement: ['comment', 'share', 'tag', 'poll', 'question', 'vote', 'thoughts', 'agree?', 'opinion'],
-  announcement: ['announce', 'introducing', 'new', 'excited', 'reveal', 'coming soon', 'update'],
-};
-
-function inferContentType(body) {
-  const lower = body.toLowerCase();
-  let best = null;
-  let bestCount = 0;
-  for (const [type, keywords] of Object.entries(CONTENT_KEYWORDS)) {
-    const count = keywords.filter((kw) => lower.includes(kw)).length;
-    if (count > bestCount) { best = type; bestCount = count; }
-  }
-  return best || 'general';
-}
-
-function inferHookType(body) {
-  const firstLine = (body || '').split('\n')[0] || '';
-  if (/\?/.test(firstLine)) return 'question';
-  if (/^how[\s-]/i.test(firstLine)) return 'how-to';
-  if (/^\d+\s/.test(firstLine)) return 'list';
-  return 'statement';
-}
-
-function getLengthBucket(body) {
-  const len = (body || '').length;
-  if (len < 100) return 'short';
-  if (len <= 500) return 'medium';
-  return 'long';
-}
-
-function getPostingTimeBucket(publishedAt) {
-  if (!publishedAt) return null;
-  const hour = new Date(publishedAt).getUTCHours();
-  if (hour >= 5 && hour < 9) return 'morning';
-  if (hour >= 9 && hour < 12) return 'midday';
-  if (hour >= 12 && hour < 17) return 'afternoon';
-  if (hour >= 17 && hour < 21) return 'evening';
-  return 'night';
-}
-
-export async function computeAndSaveInsight(draft, normalizedMetric) {
+export async function computeAndSaveInsight(draft, normalizedMetric, { timezone = 'UTC' } = {}) {
   const { completenessScore } = extractInternalSignals(draft);
 
-  let performanceScore = completenessScore;
+  const qualityScore = completenessScore;
+
+  // observedScore: only available when we have relative engagement data
+  let observedScore = null;
   if (normalizedMetric?.relativeEngagementRate != null) {
-    // Scale: relative rate * 50 (1.0 avg = 50, 2.0 = 100)
-    performanceScore = Math.min(100, Math.round(normalizedMetric.relativeEngagementRate * 50));
+    observedScore = Math.min(100, Math.round(normalizedMetric.relativeEngagementRate * 50));
   }
 
-  const classification = classifyContent(draft);
+  // compositeScore: blend based on data availability
+  let compositeScore;
+  if (observedScore != null) {
+    compositeScore = Math.min(100, Math.round(observedScore * 0.5 + qualityScore * 0.3 + 50 * 0.2));
+  } else {
+    compositeScore = Math.min(100, Math.round(qualityScore * 0.8 + 50 * 0.2));
+  }
+
+  const classification = classifyContent(draft, { timezone });
 
   const data = {
     clientId: draft.clientId,
-    performanceScore,
+    qualityScore,
+    observedScore,
+    compositeScore,
     contentType: classification.contentType,
     hookType: classification.hookType,
     lengthBucket: classification.lengthBucket,
@@ -254,9 +223,11 @@ export async function backfillClientInsights(clientId) {
 
   if (drafts.length === 0) return 0;
 
+  const timezone = await getClientTimezone(clientId);
+
   let created = 0;
   for (const draft of drafts) {
-    await computeAndSaveInsight(draft, null);
+    await computeAndSaveInsight(draft, null, { timezone });
     created++;
   }
   return created;

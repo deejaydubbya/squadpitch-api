@@ -1,11 +1,12 @@
 // Squadpitch per-client analytics.
 //
-// Aggregates counts / rates / breakdowns directly from the
-// Draft table. Lightweight — no worker, no cache. Fine for
-// the admin dev portal; can be moved to a materialized view if volumes
-// grow.
+// Aggregates counts / rates / breakdowns directly from the Draft table.
+// Used for the admin dev portal. Workspace-level pre-computed analytics
+// live in workspaceAnalytics.service.js; the main analytics page uses
+// analyticsOverview.service.js.
 
 import { prisma } from "../../prisma.js";
+import { getClientTimezone, getLocalDateString } from "../../lib/timezone.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -79,16 +80,17 @@ export async function getClientAnalytics(clientId) {
   const rejectionRate = nonFailed > 0 ? rejected / nonFailed : 0;
 
   // Build a 14-day daily series, filled with zeros for empty days.
+  const timezone = await getClientTimezone(clientId);
   const series = [];
   const now = new Date();
   for (let i = 13; i >= 0; i--) {
     const d = new Date(now.getTime() - i * DAY_MS);
-    const key = d.toISOString().slice(0, 10);
+    const key = getLocalDateString(d, timezone);
     series.push({ date: key, count: 0 });
   }
   const dayIndex = new Map(series.map((pt, i) => [pt.date, i]));
   for (const row of recent) {
-    const key = row.createdAt.toISOString().slice(0, 10);
+    const key = getLocalDateString(row.createdAt, timezone);
     const idx = dayIndex.get(key);
     if (idx !== undefined) series[idx].count += 1;
   }

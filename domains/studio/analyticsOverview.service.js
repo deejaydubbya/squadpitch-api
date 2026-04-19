@@ -8,6 +8,14 @@ import {
   getPostingConsistencyScore,
   explainPerformanceScoreBreakdown,
 } from './performanceScoring.service.js';
+import { getPostMetricGrowth } from './postMetricHistory.service.js';
+import { getClientTimezone, getLocalDateString } from '../../lib/timezone.js';
+import { getConversionsSection } from './conversionAnalytics.service.js';
+import { getCampaignsSection } from './campaignAnalytics.service.js';
+import { getAutopilotSection } from './autopilotAnalytics.service.js';
+import { getBusinessDataSection } from './businessDataAnalytics.service.js';
+import { getWorkspaceBenchmarks, compareToBenchmark } from './benchmark.service.js';
+import { getAnalyticsDiagnostics } from './analyticsDiagnostics.service.js';
 
 // ── Range Helpers ─────────────────────────────────────────────────────
 
@@ -28,6 +36,7 @@ function getDateFilter(range) {
 
 export async function getAnalyticsOverview({ clientId, range = '30d' }) {
   const dateFilter = getDateFilter(range);
+  const timezone = await getClientTimezone(clientId);
 
   // Lazy backfill: create insights if none exist
   const insightCount = await prisma.postInsight.count({ where: { clientId } });
@@ -48,7 +57,7 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
         select: { impressions: true, reach: true, engagements: true, engagementRate: true },
       },
       postInsight: {
-        select: { performanceScore: true, contentType: true, mediaType: true, hookType: true, sentiment: true, recommendationTags: true, lengthBucket: true, postingTimeBucket: true },
+        select: { qualityScore: true, observedScore: true, compositeScore: true, contentType: true, mediaType: true, hookType: true, sentiment: true, recommendationTags: true, lengthBucket: true, postingTimeBucket: true },
       },
     },
     orderBy: { publishedAt: 'desc' },
@@ -66,14 +75,22 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
   else if (withEngagement > 0) dataCoverageLabel = 'partial';
 
   // Summary
-  const scores = drafts.map((d) => d.postInsight?.performanceScore).filter((s) => s != null);
+  const qScores = drafts.map((d) => d.postInsight?.qualityScore).filter((s) => s != null);
+  const oScores = drafts.map((d) => d.postInsight?.observedScore).filter((s) => s != null);
+  const cScores = drafts.map((d) => d.postInsight?.compositeScore).filter((s) => s != null);
   const engRates = drafts.map((d) => d.normalizedMetric?.engagementRate).filter((r) => r != null);
   const reachValues = drafts.map((d) => d.normalizedMetric?.reach).filter((r) => r != null);
+  const impressionValues = drafts.map((d) => d.normalizedMetric?.impressions).filter((r) => r != null);
+
+  const avgRound = (arr) => arr.length > 0 ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null;
 
   const summary = {
-    performanceScore: scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : null,
+    qualityScore: avgRound(qScores),
+    observedScore: avgRound(oScores),
+    compositeScore: avgRound(cScores),
     engagementRate: engRates.length > 0 ? engRates.reduce((a, b) => a + b, 0) / engRates.length : null,
     totalReach: reachValues.length > 0 ? reachValues.reduce((a, b) => a + b, 0) : null,
+    totalImpressions: impressionValues.length > 0 ? impressionValues.reduce((a, b) => a + b, 0) : null,
     postsPublished,
     dataCoverage: dataCoverageLabel,
   };
@@ -92,14 +109,16 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
 
   // Top & worst posts
   const scoredDrafts = drafts
-    .filter((d) => d.postInsight?.performanceScore != null)
+    .filter((d) => d.postInsight?.compositeScore != null)
     .map((d) => ({
       id: d.id,
       body: d.body?.slice(0, 200) || '',
       channel: d.channel,
       publishedAt: d.publishedAt?.toISOString() || null,
       mediaType: d.mediaType,
-      performanceScore: d.postInsight.performanceScore,
+      qualityScore: d.postInsight.qualityScore ?? null,
+      observedScore: d.postInsight.observedScore ?? null,
+      compositeScore: d.postInsight.compositeScore,
       engagementRate: d.normalizedMetric?.engagementRate ?? null,
       impressions: d.normalizedMetric?.impressions ?? null,
       contentType: d.postInsight.contentType ?? null,
@@ -107,22 +126,50 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
       sentiment: d.postInsight.sentiment ?? null,
     }));
 
-  const topPosts = [...scoredDrafts].sort((a, b) => b.performanceScore - a.performanceScore).slice(0, 5);
-  const worstPosts = [...scoredDrafts].sort((a, b) => a.performanceScore - b.performanceScore).slice(0, 5);
+  const sortScore = (d) => d.observedScore ?? d.compositeScore;
+  const topPosts = [...scoredDrafts].sort((a, b) => sortScore(b) - sortScore(a)).slice(0, 5);
+  const worstPosts = [...scoredDrafts].sort((a, b) => sortScore(a) - sortScore(b)).slice(0, 5);
 
   // Publishing trend
-  const publishingTrend = buildPublishingTrend(drafts, range);
+  const publishingTrend = buildPublishingTrend(drafts, range, timezone);
 
-  // Sync status + insights + recommendations in parallel
-  const [syncStatus, insights, recResult] = await Promise.all([
+  // Sync status + insights + recommendations + conversions in parallel
+  const [syncStatus, insights, recResult, conversionsSection, campaignsSection, autopilotSection, businessDataSection, benchmarks, diagnostics] = await Promise.all([
     getMetricsSyncStatus(clientId),
-    generateInsights({ clientId, range }).catch(() => []),
-    generateRecommendations({ clientId, range }).catch(() => ({ recommendations: [] })),
+    generateInsights({ clientId, range, timezone }).catch(() => []),
+    generateRecommendations({ clientId, range, timezone }).catch(() => ({ recommendations: [] })),
+    getConversionsSection({ clientId, since: getRangeDate(range) }).catch(() => ({
+      totalConversions: 0, conversionRate: null, totalPublishedPosts: 0,
+      activeLinks: 0, byType: [], byChannel: [], topDrafts: [], hasData: false,
+    })),
+    getCampaignsSection({ clientId, since: getRangeDate(range) }).catch(() => ({
+      totalCampaigns: 0, completedCampaigns: 0, avgCompletionRate: null,
+      totalCampaignReach: null, totalCampaignImpressions: null, avgCampaignScore: null,
+      byType: [], byDay: [], topCampaigns: [], worstCampaigns: [], hasData: false,
+    })),
+    getAutopilotSection({ clientId, since: getRangeDate(range) }).catch(() => ({
+      totalGenerated: 0, totalPublished: 0, totalApproved: 0, totalRejected: 0, totalPending: 0,
+      approvalRate: null, publishRate: null, avgAutopilotScore: null, avgManualScore: null,
+      scoreDelta: null, avgAutopilotEngagement: null, avgManualEngagement: null,
+      engagementDelta: null, byChannel: [], byTrigger: [], recentActivity: [], hasData: false,
+    })),
+    getBusinessDataSection({ clientId }).catch(() => ({
+      totalDataItems: 0, totalUsed: 0, totalUnused: 0, totalStale: 0,
+      totalDraftsFromData: 0, totalPublishedFromData: 0,
+      byType: [], byBlueprint: [], byFreshness: [], topItems: [], underusedItems: [], hasData: false,
+    })),
+    getWorkspaceBenchmarks(clientId, { since: getRangeDate(range) }).catch(() => ({
+      workspace: { avgScore: null, avgEngagementRate: null, avgReach: null, sampleSize: 0, scoreSampleSize: 0, engagementSampleSize: 0, confidence: 'insufficient' },
+      byChannel: {}, byContentType: {}, byMediaType: {}, hasData: false,
+    })),
+    getAnalyticsDiagnostics(clientId).catch(() => ({
+      channelCoverage: [], connectionHealth: [], freshnessWarnings: [], overallHealth: 'healthy',
+    })),
   ]);
 
   // Content type breakdown
   const contentTypeBreakdown = Object.entries(contentTypes).map(([contentType, items]) => {
-    const scores = items.map((d) => d.postInsight?.performanceScore).filter((s) => s != null);
+    const scores = items.map((d) => d.postInsight?.compositeScore).filter((s) => s != null);
     return {
       contentType,
       postCount: items.length,
@@ -130,7 +177,14 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
     };
   });
 
+  const formattedSyncStatus = {
+    lastSyncedAt: syncStatus.lastSyncedAt?.toISOString() ?? null,
+    syncedPostCount: syncStatus.syncedPostCount,
+    pendingSyncCount: syncStatus.pendingSyncCount,
+  };
+
   return {
+    timezone,
     summary,
     kpis,
     topPosts,
@@ -143,14 +197,54 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
       withInternalOnly,
       coveragePercent,
     },
-    syncStatus: {
-      lastSyncedAt: syncStatus.lastSyncedAt?.toISOString() ?? null,
-      syncedPostCount: syncStatus.syncedPostCount,
-      pendingSyncCount: syncStatus.pendingSyncCount,
-    },
+    syncStatus: formattedSyncStatus,
     insights,
     recommendations: recResult.recommendations,
     contentTypeBreakdown,
+    sections: {
+      distribution: {
+        totalImpressions: summary.totalImpressions,
+        totalReach: summary.totalReach,
+        postsPublished,
+        publishingTrend,
+        platformReach: channelStats,
+        hasReachData: summary.totalReach != null,
+      },
+      engagement: {
+        engagementRate: summary.engagementRate,
+        observedScore: summary.observedScore,
+        topPosts,
+        worstPosts,
+        hasEngagementData: withEngagement > 0,
+      },
+      contentIntelligence: {
+        qualityScore: summary.qualityScore,
+        compositeScore: summary.compositeScore,
+        insights,
+        recommendations: recResult.recommendations,
+        contentTypeBreakdown,
+        topPlatform: kpis.topPlatform,
+        bestContentType: kpis.bestContentType,
+        bestMediaType: kpis.bestMediaType,
+      },
+      coverage: {
+        totalPublished: postsPublished,
+        withEngagementData: withEngagement,
+        withInternalOnly,
+        coveragePercent,
+        coverageLabel: dataCoverageLabel,
+        syncStatus: formattedSyncStatus,
+        channelCoverage: diagnostics.channelCoverage,
+        connectionHealth: diagnostics.connectionHealth,
+        freshnessWarnings: diagnostics.freshnessWarnings,
+        overallHealth: diagnostics.overallHealth,
+      },
+      conversions: conversionsSection,
+      campaigns: campaignsSection,
+      autopilot: autopilotSection,
+      businessData: businessDataSection,
+      benchmarks,
+    },
   };
 }
 
@@ -162,7 +256,7 @@ function buildPlatformBreakdown(drafts) {
     if (!byChannel[d.channel]) byChannel[d.channel] = { posts: [], rates: [], scores: [], reaches: [] };
     byChannel[d.channel].posts.push(d);
     if (d.normalizedMetric?.engagementRate != null) byChannel[d.channel].rates.push(d.normalizedMetric.engagementRate);
-    if (d.postInsight?.performanceScore != null) byChannel[d.channel].scores.push(d.postInsight.performanceScore);
+    if (d.postInsight?.compositeScore != null) byChannel[d.channel].scores.push(d.postInsight.compositeScore);
     if (d.normalizedMetric?.reach != null) byChannel[d.channel].reaches.push(d.normalizedMetric.reach);
   }
 
@@ -175,14 +269,14 @@ function buildPlatformBreakdown(drafts) {
   }));
 }
 
-function buildPublishingTrend(drafts, range) {
+function buildPublishingTrend(drafts, range, timezone = 'UTC') {
   const bucketByDay = {};
   for (const d of drafts) {
     if (!d.publishedAt) continue;
-    const day = d.publishedAt.toISOString().slice(0, 10);
+    const day = getLocalDateString(d.publishedAt, timezone);
     if (!bucketByDay[day]) bucketByDay[day] = { count: 0, scores: [] };
     bucketByDay[day].count++;
-    if (d.postInsight?.performanceScore != null) bucketByDay[day].scores.push(d.postInsight.performanceScore);
+    if (d.postInsight?.compositeScore != null) bucketByDay[day].scores.push(d.postInsight.compositeScore);
   }
 
   return Object.entries(bucketByDay)
@@ -207,9 +301,12 @@ function groupBy(items, keyFn) {
 
 function getBestGroup(groups) {
   let best = null;
-  let bestCount = 0;
+  let bestAvg = -1;
   for (const [key, items] of Object.entries(groups)) {
-    if (items.length > bestCount) { best = key; bestCount = items.length; }
+    const scores = items.map((d) => d.postInsight?.compositeScore).filter((s) => s != null);
+    if (scores.length === 0) continue;
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    if (avg > bestAvg) { best = key; bestAvg = avg; }
   }
   return best;
 }
@@ -237,7 +334,8 @@ export async function getPostDetail(clientId, postId) {
       },
       postInsight: {
         select: {
-          performanceScore: true, contentType: true, hookType: true, sentiment: true,
+          qualityScore: true, observedScore: true, compositeScore: true,
+          contentType: true, hookType: true, sentiment: true,
           lengthBucket: true, mediaType: true, postingTimeBucket: true, recommendationTags: true,
         },
       },
@@ -254,15 +352,42 @@ export async function getPostDetail(clientId, postId) {
   if (draft.clientId !== clientId) return null;
   if (draft.status !== 'PUBLISHED') return null;
 
-  // Get benchmarks + consistency for score breakdown
-  const [benchmarks, consistencyScore] = await Promise.all([
+  // Get benchmarks, consistency, growth, and workspace benchmarks in parallel
+  const [channelBenchmarks, consistencyScore, growth, wsBenchmarks] = await Promise.all([
     getClientChannelBenchmarks(clientId, draft.channel),
     getPostingConsistencyScore(clientId),
+    getPostMetricGrowth(postId),
+    getWorkspaceBenchmarks(clientId).catch(() => null),
   ]);
 
   const scoreBreakdown = explainPerformanceScoreBreakdown(
-    draft, draft.normalizedMetric, benchmarks, consistencyScore
+    draft, draft.normalizedMetric, channelBenchmarks, consistencyScore
   );
+
+  // Build benchmark comparisons for this post
+  let benchmarkComparison = null;
+  if (wsBenchmarks?.hasData) {
+    const postScore = draft.postInsight?.compositeScore;
+    const postEngRate = draft.normalizedMetric?.engagementRate;
+    const contentType = draft.postInsight?.contentType;
+
+    benchmarkComparison = {
+      vsWorkspace: {
+        score: compareToBenchmark(postScore, wsBenchmarks.workspace, 'avgScore'),
+        engagement: compareToBenchmark(postEngRate, wsBenchmarks.workspace, 'avgEngagementRate'),
+      },
+      vsChannel: {
+        score: compareToBenchmark(postScore, wsBenchmarks.byChannel[draft.channel], 'avgScore'),
+        engagement: compareToBenchmark(postEngRate, wsBenchmarks.byChannel[draft.channel], 'avgEngagementRate'),
+      },
+      vsContentType: contentType && wsBenchmarks.byContentType[contentType]
+        ? {
+            score: compareToBenchmark(postScore, wsBenchmarks.byContentType[contentType], 'avgScore'),
+            engagement: compareToBenchmark(postEngRate, wsBenchmarks.byContentType[contentType], 'avgEngagementRate'),
+          }
+        : null,
+    };
+  }
 
   return {
     id: draft.id,
@@ -287,7 +412,9 @@ export async function getPostDetail(clientId, postId) {
       : null,
     insight: draft.postInsight
       ? {
-          performanceScore: draft.postInsight.performanceScore,
+          qualityScore: draft.postInsight.qualityScore,
+          observedScore: draft.postInsight.observedScore,
+          compositeScore: draft.postInsight.compositeScore,
           contentType: draft.postInsight.contentType,
           hookType: draft.postInsight.hookType,
           sentiment: draft.postInsight.sentiment,
@@ -298,5 +425,7 @@ export async function getPostDetail(clientId, postId) {
         }
       : null,
     scoreBreakdown,
+    benchmarkComparison,
+    growth,
   };
 }

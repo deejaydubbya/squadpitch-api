@@ -6,6 +6,7 @@
 
 import { prisma } from '../../prisma.js';
 import { extractInternalSignals } from './normalization.service.js';
+import { getClientTimezone, getLocalDateString } from '../../lib/timezone.js';
 
 // ── Score Classification ─────────────────────────────────────────────
 
@@ -70,23 +71,26 @@ export async function getPostingConsistencyScore(clientId, windowDays = 14) {
   const since = new Date();
   since.setDate(since.getDate() - windowDays);
 
-  const drafts = await prisma.draft.findMany({
-    where: {
-      clientId,
-      status: "PUBLISHED",
-      publishedAt: { gte: since },
-    },
-    select: { publishedAt: true },
-    orderBy: { publishedAt: "asc" },
-  });
+  const [drafts, timezone] = await Promise.all([
+    prisma.draft.findMany({
+      where: {
+        clientId,
+        status: "PUBLISHED",
+        publishedAt: { gte: since },
+      },
+      select: { publishedAt: true },
+      orderBy: { publishedAt: "asc" },
+    }),
+    getClientTimezone(clientId),
+  ]);
 
   if (drafts.length === 0) return 0;
 
-  // Group by date
+  // Group by local date
   const countsByDay = {};
   for (const d of drafts) {
     if (!d.publishedAt) continue;
-    const day = d.publishedAt.toISOString().slice(0, 10);
+    const day = getLocalDateString(d.publishedAt, timezone);
     countsByDay[day] = (countsByDay[day] || 0) + 1;
   }
 
@@ -94,7 +98,7 @@ export async function getPostingConsistencyScore(clientId, windowDays = 14) {
   const counts = [];
   const cursor = new Date(since);
   for (let i = 0; i < windowDays; i++) {
-    const day = cursor.toISOString().slice(0, 10);
+    const day = getLocalDateString(cursor, timezone);
     counts.push(countsByDay[day] || 0);
     cursor.setDate(cursor.getDate() + 1);
   }
@@ -142,9 +146,8 @@ export function computePerformanceScore(draft, normalizedMetric, benchmarks, con
 
   if (!hasEngagement) {
     // Quality + consistency fallback
-    const score = Math.round(qualityScore * 0.8 + consistencyScore * 0.2);
-    const clamped = clamp(score, 0, 100);
-    return { score: clamped, tier: classifyScore(clamped), mode: "internal_only" };
+    const compositeScore = clamp(Math.round(qualityScore * 0.8 + consistencyScore * 0.2), 0, 100);
+    return { qualityScore, observedScore: null, compositeScore, tier: classifyScore(compositeScore), mode: "internal_only" };
   }
 
   // Engagement component: relative engagement rate scaled to 0-100
@@ -152,13 +155,12 @@ export function computePerformanceScore(draft, normalizedMetric, benchmarks, con
     benchmarks.avgEngagementRate > 0
       ? normalizedMetric.engagementRate / benchmarks.avgEngagementRate
       : 1.0;
-  const engagementScore = clamp(Math.round(relativeEngagement * 50), 0, 100);
+  const observedScore = clamp(Math.round(relativeEngagement * 50), 0, 100);
 
   // Weighted composite
-  const score = Math.round(engagementScore * 0.5 + qualityScore * 0.3 + consistencyScore * 0.2);
-  const clamped = clamp(score, 0, 100);
+  const compositeScore = clamp(Math.round(observedScore * 0.5 + qualityScore * 0.3 + consistencyScore * 0.2), 0, 100);
 
-  return { score: clamped, tier: classifyScore(clamped), mode: "weighted" };
+  return { qualityScore, observedScore, compositeScore, tier: classifyScore(compositeScore), mode: "weighted" };
 }
 
 // ── Score Breakdown ─────────────────────────────────────────────────
@@ -176,18 +178,20 @@ export function explainPerformanceScoreBreakdown(draft, normalizedMetric, benchm
   if (!hasEngagement) {
     const qualityWeighted = Math.round(qualityScore * 0.8);
     const consistencyWeighted = Math.round(consistencyScore * 0.2);
-    const score = clamp(qualityWeighted + consistencyWeighted, 0, 100);
+    const compositeScore = clamp(qualityWeighted + consistencyWeighted, 0, 100);
 
     return {
-      score,
-      tier: classifyScore(score),
+      qualityScore,
+      observedScore: null,
+      compositeScore,
+      tier: classifyScore(compositeScore),
       mode: "internal_only",
       components: {
         engagement: null,
         quality: { raw: qualityScore, weight: 0.8, weighted: qualityWeighted },
         consistency: { raw: consistencyScore, weight: 0.2, weighted: consistencyWeighted },
       },
-      explanation: `Quality (${qualityWeighted}/80) + Consistency (${consistencyWeighted}/20) = ${score}`,
+      explanation: `Quality (${qualityWeighted}/80) + Consistency (${consistencyWeighted}/20) = ${compositeScore}`,
     };
   }
 
@@ -195,22 +199,24 @@ export function explainPerformanceScoreBreakdown(draft, normalizedMetric, benchm
     benchmarks.avgEngagementRate > 0
       ? normalizedMetric.engagementRate / benchmarks.avgEngagementRate
       : 1.0;
-  const engagementRaw = clamp(Math.round(relativeEngagement * 50), 0, 100);
-  const engagementWeighted = Math.round(engagementRaw * 0.5);
+  const observedScore = clamp(Math.round(relativeEngagement * 50), 0, 100);
+  const engagementWeighted = Math.round(observedScore * 0.5);
   const qualityWeighted = Math.round(qualityScore * 0.3);
   const consistencyWeighted = Math.round(consistencyScore * 0.2);
 
-  const score = clamp(engagementWeighted + qualityWeighted + consistencyWeighted, 0, 100);
+  const compositeScore = clamp(engagementWeighted + qualityWeighted + consistencyWeighted, 0, 100);
 
   return {
-    score,
-    tier: classifyScore(score),
+    qualityScore,
+    observedScore,
+    compositeScore,
+    tier: classifyScore(compositeScore),
     mode: "weighted",
     components: {
-      engagement: { raw: engagementRaw, weight: 0.5, weighted: engagementWeighted },
+      engagement: { raw: observedScore, weight: 0.5, weighted: engagementWeighted },
       quality: { raw: qualityScore, weight: 0.3, weighted: qualityWeighted },
       consistency: { raw: consistencyScore, weight: 0.2, weighted: consistencyWeighted },
     },
-    explanation: `Engagement (${engagementWeighted}/50) + Quality (${qualityWeighted}/30) + Consistency (${consistencyWeighted}/20) = ${score}`,
+    explanation: `Engagement (${engagementWeighted}/50) + Quality (${qualityWeighted}/30) + Consistency (${consistencyWeighted}/20) = ${compositeScore}`,
   };
 }

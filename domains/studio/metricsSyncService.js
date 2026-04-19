@@ -2,7 +2,8 @@
 //
 // Pipeline: load draft → check cooldown → get connection → refresh token →
 // fetch raw → store RawMetric → normalize → store NormalizedMetric →
-// compute score → update PostInsight → update PostMetrics.
+// compute score → update PostInsight → upsert PostMetrics →
+// append PostMetricSnapshot → fire-and-forget performance updates.
 
 import { prisma } from "../../prisma.js";
 import { getConnectionForAdapter } from "./connection.service.js";
@@ -15,6 +16,7 @@ import {
   getPostingConsistencyScore,
 } from "./performanceScoring.service.js";
 import { getMetricsSyncQueue } from "../../lib/queues.js";
+import { getClientTimezone } from "../../lib/timezone.js";
 
 const MIN_SYNC_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -81,21 +83,29 @@ export async function syncMetricsForDraft(draftId) {
 
   const { raw, fetchedAt } = result;
 
-  // Store RawMetric
-  await prisma.rawMetric.upsert({
+  // Store RawMetric (draftId is not @unique, so use findFirst + update/create)
+  const existingRaw = await prisma.rawMetric.findFirst({
     where: { draftId },
-    create: {
-      draftId,
-      clientId: draft.clientId,
-      channel: draft.channel,
-      rawDataJson: raw,
-      fetchedAt,
-    },
-    update: {
-      rawDataJson: raw,
-      fetchedAt,
-    },
+    orderBy: { fetchedAt: "desc" },
+    select: { id: true },
   });
+
+  if (existingRaw) {
+    await prisma.rawMetric.update({
+      where: { id: existingRaw.id },
+      data: { rawDataJson: raw, fetchedAt },
+    });
+  } else {
+    await prisma.rawMetric.create({
+      data: {
+        draftId,
+        clientId: draft.clientId,
+        channel: draft.channel,
+        rawDataJson: raw,
+        fetchedAt,
+      },
+    });
+  }
 
   // Normalize
   const normalized = normalizeRawMetrics(draft.channel, raw);
@@ -115,15 +125,16 @@ export async function syncMetricsForDraft(draftId) {
   // Compute performance score
   const benchmarks = await getClientChannelBenchmarks(draft.clientId, draft.channel);
   const consistencyScore = await getPostingConsistencyScore(draft.clientId);
-  const { score } = computePerformanceScore(draft, normalizedRow, benchmarks, consistencyScore);
+  const { qualityScore, observedScore, compositeScore } = computePerformanceScore(draft, normalizedRow, benchmarks, consistencyScore);
 
-  // Update PostInsight with new score
-  await computeAndSaveInsight(draft, { ...normalizedRow, relativeEngagementRate: null });
-  // Override with weighted score if engagement data available
+  // Update PostInsight with new scores
+  const timezone = await getClientTimezone(draft.clientId);
+  await computeAndSaveInsight(draft, { ...normalizedRow, relativeEngagementRate: null }, { timezone });
+  // Override with weighted scores if engagement data available
   if (normalized.engagementRate != null) {
     await prisma.postInsight.update({
       where: { draftId },
-      data: { performanceScore: score },
+      data: { qualityScore, observedScore, compositeScore },
     });
   }
 
@@ -149,6 +160,24 @@ export async function syncMetricsForDraft(draftId) {
     update: metricsData,
   });
 
+  // Append time-series snapshot (deduped by draftId + snapshotAt)
+  const snapshotFields = {
+    impressions: metricsData.impressions,
+    reach: metricsData.reach,
+    engagements: metricsData.engagement,
+    clicks: metricsData.clicks,
+    saves: metricsData.saves,
+    shares: metricsData.shares,
+    comments: metricsData.comments,
+    likes: metricsData.likes,
+    engagementRate: metricsData.engagementRate,
+  };
+  await prisma.postMetricSnapshot.upsert({
+    where: { draftId_snapshotAt: { draftId, snapshotAt: fetchedAt } },
+    create: { draftId, clientId: draft.clientId, channel: draft.channel, snapshotAt: fetchedAt, ...snapshotFields },
+    update: snapshotFields,
+  });
+
   // Recalculate data item + blueprint performance with fresh metrics
   import("./dataAnalytics.service.js")
     .then(({ updatePerformanceForDraft }) =>
@@ -160,7 +189,9 @@ export async function syncMetricsForDraft(draftId) {
     synced: true,
     metrics: {
       ...metricsData,
-      performanceScore: score,
+      qualityScore,
+      observedScore,
+      compositeScore,
     },
   };
 }
@@ -189,7 +220,7 @@ export async function getEligibleDraftsForSync({ batchSize = 20 } = {}) {
     select: { id: true, channel: true, clientId: true },
     orderBy: [
       // Never-synced first, then oldest lastSyncedAt
-      { postMetrics: { lastSyncedAt: "asc" } },
+      { metrics: { lastSyncedAt: "asc" } },
     ],
     take: batchSize,
   });

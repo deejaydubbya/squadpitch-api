@@ -1,4 +1,5 @@
 import { prisma } from '../../prisma.js';
+import { getLocalWeekKey } from '../../lib/timezone.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ function bestPlatformInsight(insights) {
 
   const scored = entries.map(([channel, rows]) => ({
     channel,
-    avgScore: avg(rows.map((r) => r.performanceScore).filter((s) => s != null)),
+    avgScore: avg(rows.map((r) => r.compositeScore).filter((s) => s != null)),
     count: rows.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -56,7 +57,7 @@ function bestMediaTypeInsight(insights) {
 
   const scored = entries.map(([mediaType, rows]) => ({
     mediaType,
-    avgScore: avg(rows.map((r) => r.performanceScore).filter((s) => s != null)),
+    avgScore: avg(rows.map((r) => r.compositeScore).filter((s) => s != null)),
     count: rows.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -81,7 +82,7 @@ function bestContentTypeInsight(insights) {
 
   const scored = entries.map(([contentType, rows]) => ({
     contentType,
-    avgScore: avg(rows.map((r) => r.performanceScore).filter((s) => s != null)),
+    avgScore: avg(rows.map((r) => r.compositeScore).filter((s) => s != null)),
     count: rows.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -106,7 +107,7 @@ function bestPostingTimeInsight(insights) {
 
   const scored = entries.map(([bucket, rows]) => ({
     bucket,
-    avgScore: avg(rows.map((r) => r.performanceScore).filter((s) => s != null)),
+    avgScore: avg(rows.map((r) => r.compositeScore).filter((s) => s != null)),
     count: rows.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -131,7 +132,7 @@ function lengthInsight(insights) {
 
   const scored = entries.map(([bucket, rows]) => ({
     bucket,
-    avgScore: avg(rows.map((r) => r.performanceScore).filter((s) => s != null)),
+    avgScore: avg(rows.map((r) => r.compositeScore).filter((s) => s != null)),
     count: rows.length,
   }));
   scored.sort((a, b) => b.avgScore - a.avgScore);
@@ -149,18 +150,15 @@ function lengthInsight(insights) {
   };
 }
 
-function consistencyInsight(insights) {
-  // Group by ISO week
+function consistencyInsight(insights, timezone = 'UTC') {
+  // Group by local-timezone week
   const weekMap = {};
   for (const row of insights) {
     if (!row.publishedAt) continue;
-    const d = new Date(row.publishedAt);
-    const weekStart = new Date(d);
-    weekStart.setDate(d.getDate() - d.getDay());
-    const key = weekStart.toISOString().slice(0, 10);
+    const key = getLocalWeekKey(new Date(row.publishedAt), timezone);
     if (!weekMap[key]) weekMap[key] = { count: 0, scores: [] };
     weekMap[key].count++;
-    if (row.performanceScore != null) weekMap[key].scores.push(row.performanceScore);
+    if (row.compositeScore != null) weekMap[key].scores.push(row.compositeScore);
   }
 
   const weeks = Object.values(weekMap);
@@ -201,7 +199,7 @@ async function bestDataTypeInsight(clientId) {
       dataItem: { select: { type: true } },
       draft: {
         select: {
-          postInsight: { select: { performanceScore: true } },
+          postInsight: { select: { compositeScore: true } },
         },
       },
     },
@@ -210,7 +208,7 @@ async function bestDataTypeInsight(clientId) {
   const groups = {};
   for (const s of sources) {
     const type = s.dataItem.type;
-    const score = s.draft.postInsight?.performanceScore;
+    const score = s.draft.postInsight?.compositeScore;
     if (score == null) continue;
     if (!groups[type]) groups[type] = [];
     groups[type].push(score);
@@ -248,7 +246,7 @@ async function bestBlueprintInsight(clientId) {
       blueprint: { select: { name: true, slug: true } },
       draft: {
         select: {
-          postInsight: { select: { performanceScore: true } },
+          postInsight: { select: { compositeScore: true } },
         },
       },
     },
@@ -257,7 +255,7 @@ async function bestBlueprintInsight(clientId) {
   const groups = {};
   for (const s of sources) {
     const key = s.blueprint.slug;
-    const score = s.draft.postInsight?.performanceScore;
+    const score = s.draft.postInsight?.compositeScore;
     if (score == null) continue;
     if (!groups[key]) groups[key] = { name: s.blueprint.name, scores: [] };
     groups[key].scores.push(score);
@@ -424,14 +422,14 @@ async function underutilizedDataInsight(clientId) {
 
 // ── Main ─────────────────────────────────────────────────────────────
 
-export async function generateInsights({ clientId, range = '30d' }) {
+export async function generateInsights({ clientId, range = '30d', timezone = 'UTC' }) {
   const since = getRangeDate(range);
   const dateFilter = since ? { publishedAt: { gte: since } } : {};
 
   const insights = await prisma.postInsight.findMany({
     where: { clientId, draft: { status: 'PUBLISHED', ...dateFilter } },
     select: {
-      performanceScore: true,
+      compositeScore: true,
       contentType: true,
       hookType: true,
       mediaType: true,
@@ -457,7 +455,7 @@ export async function generateInsights({ clientId, range = '30d' }) {
     consistencyInsight,
   ];
 
-  const results = generators.map((gen) => gen(rows)).filter(Boolean);
+  const results = generators.map((gen) => gen(rows, timezone)).filter(Boolean);
 
   // Data-aware insights (async — require DB queries)
   const [dataTypeInsight, blueprintInsight, staleInsight, channelDataInsight, underutilizedInsight] = await Promise.all([
