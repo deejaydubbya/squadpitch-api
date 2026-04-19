@@ -74,6 +74,7 @@ export async function uploadAsset({
   folderId,
   tags,
   createdBy,
+  source,
 }) {
   const storage = getImageStorageService();
   const uploaded = await storage.upload(buffer, {
@@ -83,7 +84,7 @@ export async function uploadAsset({
   const asset = await prisma.mediaAsset.create({
     data: {
       clientId,
-      source: "UPLOAD",
+      source: source ?? "UPLOAD",
       status: "READY",
       url: uploaded.url,
       publicId: uploaded.publicId,

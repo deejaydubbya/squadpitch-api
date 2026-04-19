@@ -72,6 +72,7 @@ import {
   ZillowExtractSchema,
   LicenseLookupSchema,
   CrmAnalyzeSchema,
+  UploadFromUrlSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import * as dataService from "./data.service.js";
@@ -1919,6 +1920,63 @@ studioRouter.post(
       }
       res.status(201).json(service.formatAsset(asset));
     } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// Upload asset from external URL — fetches the image and rehosts on Cloudinary.
+studioRouter.post(
+  `${BASE}/workspaces/:id/assets/upload-from-url`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UploadFromUrlSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const { url, folderId, filename } = parsed.data;
+      const clientId = req.params.id;
+      const actorSub = getAuth0Sub(req);
+
+      // Fetch the image with timeout and size limits
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000);
+      let resp;
+      try {
+        resp = await fetch(url, { signal: controller.signal });
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (!resp.ok) {
+        return sendError(res, 400, "FETCH_FAILED", `Failed to fetch image (${resp.status})`);
+      }
+
+      const contentType = resp.headers.get("content-type") || "";
+      if (!contentType.startsWith("image/")) {
+        return sendError(res, 400, "NOT_IMAGE", "URL does not point to an image");
+      }
+
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      if (buffer.length > 10 * 1024 * 1024) {
+        return sendError(res, 400, "TOO_LARGE", "Image exceeds 10 MB limit");
+      }
+
+      const asset = await service.uploadAsset({
+        clientId,
+        buffer,
+        filename: filename || null,
+        altText: null,
+        caption: null,
+        draftId: null,
+        folderId: folderId || null,
+        createdBy: actorSub,
+        source: "IMPORTED",
+      });
+      res.status(201).json(service.formatAsset(asset));
+    } catch (err) {
+      if (err.name === "AbortError") {
+        return sendError(res, 400, "TIMEOUT", "Image fetch timed out");
+      }
       next(err);
     }
   }

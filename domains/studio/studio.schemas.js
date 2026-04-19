@@ -514,6 +514,12 @@ export const CrmAnalyzeSchema = z.object({
   csvText: z.string().max(2_000_000),
 });
 
+export const UploadFromUrlSchema = z.object({
+  url: z.string().url().max(2048),
+  folderId: z.string().optional(),
+  filename: z.string().max(255).optional(),
+});
+
 export const OnboardingAnalyzeSchema = z
   .object({
     input: z.string().max(5000).optional().default(""),
