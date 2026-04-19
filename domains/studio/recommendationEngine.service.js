@@ -526,7 +526,7 @@ function buildListingCandidates(ctx) {
 
     // ── Just Listed Campaign ──
     // Suppress if already has a just_listed campaign, sharp drop if any campaign exists
-    if (!hasJustListedCampaign) {
+    if (!hasCampaign) {
       let score = BASE_SCORES.listing_campaign + (isNew ? 5 : 0) + (isUnused ? 3 : 0) + (hasStrongMedia ? 3 : 0);
       if (hasCampaign && !hasJustListedCampaign) score -= 25; // Different type exists, lower priority
       if (hasActiveCampaign) score -= 15; // Active campaign running
@@ -564,7 +564,7 @@ function buildListingCandidates(ctx) {
     }
 
     // ── Listing Spotlight Campaign (media-rich listings) ──
-    if (hasStrongMedia && !campUsage?.campaignTypes?.has("listing_spotlight")) {
+    if (hasStrongMedia && !hasCampaign) {
       let score = BASE_SCORES.listing_campaign - 5 + (hasStrongMedia ? 8 : 0);
       if (hasCampaign) score -= 20;
 
