@@ -180,6 +180,11 @@ model BrandProfile {
   offers       String?  @db.Text
   competitors  String?  @db.Text
   examplePosts Json?
+  city         String?
+  state        String?
+  marketArea   String?
+  primaryZip   String?
+  serviceAreas Json?
   updatedBy    String?
   updatedAt    DateTime @updatedAt
   client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)

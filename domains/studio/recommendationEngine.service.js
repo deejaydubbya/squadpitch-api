@@ -106,6 +106,7 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
     techStack,
     topUnusedItems,
     unusedDataCount,
+    nearbyListings,
     campaignDrafts,
   ] = await Promise.all([
     prisma.workspaceDataItem.groupBy({
@@ -161,6 +162,11 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
     prisma.workspaceDataItem.count({
       where: { clientId, status: "ACTIVE", usageCount: 0 },
     }),
+    // Nearby listings from RentCast cache (written by listings search endpoint)
+    redisGet(`sp:nearby:${clientId}`).then((raw) => {
+      if (!raw) return [];
+      try { return JSON.parse(raw); } catch { return []; }
+    }).catch(() => []),
     // Campaign usage — which sources already have launched campaigns
     prisma.draft.findMany({
       where: { clientId, campaignId: { not: null } },
@@ -253,12 +259,14 @@ export async function getRecommendations(clientId, { surface, limit = 6 } = {}) 
     gbpSignals,
     campaignUsageBySource,
     activeCampaignIds,
+    nearbyListings,
   };
 
   const candidates = [];
 
   candidates.push(...buildListingCandidates(ctx));
   candidates.push(...buildPropertyLibraryCandidates(ctx));
+  candidates.push(...buildNearbyListingCandidates(ctx));
   candidates.push(...buildEventDrivenCandidates(ctx));
   candidates.push(...buildMilestoneCandidates(ctx));
   candidates.push(...buildTestimonialCandidates(ctx));
@@ -930,6 +938,75 @@ function buildPropertyLibraryCandidates(ctx) {
         templateType: "market_update",
       },
       reasons,
+      evaluatedAt: now.toISOString(),
+    });
+  }
+
+  return candidates;
+}
+
+/**
+ * Build recommendation candidates from cached nearby RentCast listings.
+ * Reads sp:nearby:{clientId} written by the listings search endpoint.
+ * Only surfaces listings that haven't been saved yet.
+ */
+function buildNearbyListingCandidates(ctx) {
+  const candidates = [];
+  const { nearbyListings, topUnusedItems, now } = ctx;
+
+  if (!nearbyListings || !Array.isArray(nearbyListings) || nearbyListings.length === 0) return candidates;
+
+  // Build set of saved provider IDs to exclude already-saved listings
+  const savedProviderIds = new Set();
+  for (const item of topUnusedItems) {
+    const d = item.dataJson ?? {};
+    if (d.providerId) savedProviderIds.add(String(d.providerId));
+  }
+
+  const unsaved = nearbyListings.filter(
+    (l) => l.providerId && !savedProviderIds.has(String(l.providerId))
+  );
+
+  // Top 3 by price (highest value = most marketing-worthy)
+  const sorted = [...unsaved].sort((a, b) => (b.price ?? 0) - (a.price ?? 0)).slice(0, 3);
+
+  for (const listing of sorted) {
+    const addr = listing.formattedAddress || listing.street || "Nearby property";
+    const specs = [
+      listing.bedrooms != null ? `${listing.bedrooms} bd` : null,
+      listing.bathrooms != null ? `${listing.bathrooms} ba` : null,
+      listing.sqft != null ? `${Number(listing.sqft).toLocaleString()} sqft` : null,
+    ].filter(Boolean).join(" / ");
+    const priceStr = listing.price ? "$" + listing.price.toLocaleString() : "";
+    const descParts = [priceStr, specs].filter(Boolean).join(" — ");
+
+    candidates.push({
+      id: `nearby_listing:${listing.providerId}`,
+      type: "listing_campaign",
+      title: `New listing near you: ${addr}`,
+      description: descParts
+        ? `${descParts}. Create a campaign to market this property.`
+        : "Create a campaign to market this property.",
+      sourceType: "nearby_listing",
+      sourceId: null,
+      sourceLabel: addr,
+      priorityScore: BASE_SCORES.listing_campaign - 10,
+      confidence: "medium",
+      freshness: "fresh",
+      surfaces: ["dashboard", "listing_campaign"],
+      suggestedContentType: "listing",
+      suggestedCampaignType: "just_listed",
+      suggestedChannel: null,
+      actionLabel: "Launch Campaign",
+      actionPayload: {
+        action: "openListingCampaign",
+        nearbyListing: listing,
+      },
+      reasons: [
+        "Active listing found in your market area",
+        ...(listing.daysOnMarket != null && listing.daysOnMarket <= 3 ? ["Just hit the market"] : []),
+        ...(listing.price >= 500000 ? ["High-value property"] : []),
+      ],
       evaluatedAt: now.toISOString(),
     });
   }

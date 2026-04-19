@@ -86,6 +86,11 @@ export const UpsertBrandProfileSchema = z.object({
     )
     .nullable()
     .optional(),
+  city: z.string().max(200).nullable().optional(),
+  state: z.string().max(100).nullable().optional(),
+  marketArea: z.string().max(500).nullable().optional(),
+  primaryZip: z.string().max(10).nullable().optional(),
+  serviceAreas: z.array(z.string().max(200)).nullable().optional(),
 });
 
 // ── Voice profile ───────────────────────────────────────────────────────

@@ -32,8 +32,34 @@ export async function syncGBP(clientId) {
   }
 
   const config = connection.metadataJson || {};
-  if (!config.accessToken || !config.accountId || !config.locationId) {
+  if (!config.accessToken) {
     throw Object.assign(new Error("GBP connection incomplete — reconnect required"), { status: 400 });
+  }
+
+  // Auto-discover account + location if missing (happens when listing API
+  // failed silently during the OAuth callback).
+  if (!config.accountId || !config.locationId) {
+    try {
+      const accounts = await gbpProvider.listAccounts(config);
+      if (accounts.length === 0) {
+        throw Object.assign(new Error("No Google Business Profile accounts found for this Google account"), { status: 400 });
+      }
+      config.accountId = accounts[0].name;
+      const locations = await gbpProvider.listLocations(config, config.accountId);
+      if (locations.length === 0) {
+        throw Object.assign(new Error("No locations found in your Google Business Profile — add a location in Google first"), { status: 400 });
+      }
+      config.locationId = locations[0].name;
+      config.locationName = locations[0].title;
+      // Persist discovered values so future syncs don't need to re-discover
+      await prisma.workspaceTechStackConnection.update({
+        where: { id: connection.id },
+        data: { metadataJson: { ...config } },
+      });
+    } catch (err) {
+      if (err.status) throw err;
+      throw Object.assign(new Error("GBP connection incomplete — reconnect required"), { status: 400 });
+    }
   }
 
   let businessInfo = null;

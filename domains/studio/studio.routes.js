@@ -3810,18 +3810,26 @@ studioRouter.post(
         // OAuth succeeded but listing failed — still save tokens
       }
 
-      // Save connection with tokens (pending location selection if multiple)
-      const autoLocation = locations.length === 1;
+      // Save connection with tokens.
+      // Need at least one account+location to be fully connected.
+      // 0 accounts or 0 locations → connected but incomplete (sync will auto-discover)
+      // 1 location → auto-connect
+      // 2+ locations → pending (user must pick)
+      const hasAccount = accounts.length > 0;
+      const autoConnect = hasAccount && locations.length <= 1;
+      const needsPick = hasAccount && locations.length > 1;
+      const status = needsPick ? "pending" : autoConnect ? "connected" : "connected";
+
       await upsertWorkspaceTechStackConnection(req.params.id, "google_business_profile",
-        autoLocation ? "connected" : "pending",
+        status,
         {
           metadataJson: {
             accessToken: tokens.accessToken,
             refreshToken: tokens.refreshToken,
             email: tokens.email,
             accountId: accounts[0]?.name || null,
-            locationId: autoLocation ? locations[0]?.name : null,
-            locationName: autoLocation ? locations[0]?.title : null,
+            locationId: autoConnect && locations[0] ? locations[0].name : null,
+            locationName: autoConnect && locations[0] ? locations[0].title : null,
           },
         }
       );
@@ -3833,7 +3841,7 @@ studioRouter.post(
         email: tokens.email,
         accounts,
         locations,
-        needsLocationSelection: !autoLocation && locations.length > 1,
+        needsLocationSelection: needsPick,
       });
     } catch (err) {
       next(err);
@@ -4466,6 +4474,11 @@ studioRouter.get(
         limit: limit ? Number(limit) : undefined,
         offset: offset ? Number(offset) : undefined,
       });
+      // Cache ZIP-only queries for the recommendation engine (nearby listings)
+      if (zipCode && !address && !city && req.params.id) {
+        const cacheKey = `sp:nearby:${req.params.id}`;
+        redisSet(cacheKey, JSON.stringify(result), 86400).catch(() => {});
+      }
       res.json({ data: result });
     } catch (err) {
       next(err);
