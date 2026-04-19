@@ -128,7 +128,10 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
 
   const sortScore = (d) => d.observedScore ?? d.compositeScore;
   const topPosts = [...scoredDrafts].sort((a, b) => sortScore(b) - sortScore(a)).slice(0, 5);
-  const worstPosts = [...scoredDrafts].sort((a, b) => sortScore(a) - sortScore(b)).slice(0, 5);
+  const worstPosts = [...scoredDrafts].sort((a, b) => sortScore(a) - sortScore(b)).slice(0, 5).map((post) => ({
+    ...post,
+    worstReason: computeWorstReason(post, summary),
+  }));
 
   // Publishing trend
   const publishingTrend = buildPublishingTrend(drafts, range, timezone);
@@ -297,6 +300,22 @@ function groupBy(items, keyFn) {
     groups[key].push(item);
   }
   return groups;
+}
+
+function computeWorstReason(post, summary) {
+  if (post.observedScore != null && post.observedScore < 30) {
+    return 'Low engagement from platform metrics';
+  }
+  if (summary.compositeScore != null && post.compositeScore < summary.compositeScore * 0.6) {
+    return 'Score well below your average';
+  }
+  if (summary.engagementRate != null && post.engagementRate != null && post.engagementRate < summary.engagementRate * 0.3) {
+    return 'Engagement rate far below average';
+  }
+  if (post.impressions != null && post.impressions < 10) {
+    return 'Very low distribution';
+  }
+  return 'Underperforming vs your average';
 }
 
 function getBestGroup(groups) {
