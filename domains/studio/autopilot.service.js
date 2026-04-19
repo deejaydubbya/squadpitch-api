@@ -42,11 +42,16 @@ const AUTOPILOT_PROVIDER_KEY = "_autopilot_settings";
 
 const DEFAULT_SETTINGS = {
   enabled: false,
-  mode: "off",                  // "off" | "draft_assist"
+  mode: "off",                  // "off" | "draft_only" | "schedule_approved" | "auto_publish"
   preferredChannels: [],        // e.g. ["FACEBOOK", "INSTAGRAM"]
   maxDraftsPerWeek: 3,
+  maxDraftsPerDay: 2,
   maxDraftsPerScheduledRun: 2,
   minimumHoursBetweenDrafts: 24,
+  requireApprovalBeforePublish: true,
+  quietHoursStart: null,
+  quietHoursEnd: null,
+  skipChannelsWithoutMedia: true,
   allowListingPosts: true,
   allowTestimonialPosts: true,
   allowMilestonePosts: true,
@@ -60,7 +65,10 @@ export async function getAutopilotSettings(workspaceId) {
   const row = await prisma.workspaceTechStackConnection.findUnique({
     where: { workspaceId_providerKey: { workspaceId, providerKey: AUTOPILOT_PROVIDER_KEY } },
   });
-  return { ...DEFAULT_SETTINGS, ...(row?.metadataJson ?? {}) };
+  const merged = { ...DEFAULT_SETTINGS, ...(row?.metadataJson ?? {}) };
+  // Backward compat: map old "draft_assist" → "draft_only"
+  if (merged.mode === "draft_assist") merged.mode = "draft_only";
+  return merged;
 }
 
 /** @param {string} workspaceId @param {object} patch */
@@ -842,4 +850,120 @@ export async function getAutopilotStatus(workspaceId) {
     lastRunMode,
     coverageGaps,
   };
+}
+
+// ── Readiness check ──────────────────────────────────────────────────────
+
+/** @param {string} workspaceId */
+export async function getAutopilotReadiness(workspaceId) {
+  const [channels, dataCount, client] = await Promise.all([
+    prisma.channelSettings.findMany({
+      where: { clientId: workspaceId, isEnabled: true },
+      select: { channel: true, isConnected: true },
+    }),
+    prisma.dataItem.count({
+      where: { clientId: workspaceId, status: { not: "ARCHIVED" } },
+    }),
+    prisma.client.findUnique({
+      where: { id: workspaceId },
+      select: { brandProfile: true, voiceProfile: true },
+    }),
+  ]);
+
+  const connectedChannels = channels.filter((c) => c.isConnected !== false);
+
+  const checks = [
+    {
+      id: "channels",
+      label: "At least 1 connected channel",
+      met: connectedChannels.length > 0,
+      fix: "Connect a publishing channel in Settings → Channels",
+    },
+    {
+      id: "data",
+      label: "Business data available",
+      met: dataCount > 0,
+      fix: "Add data sources in Sources",
+    },
+    {
+      id: "brand",
+      label: "Brand profile configured",
+      met: !!client?.brandProfile,
+      fix: "Set up your brand in Settings → Brand",
+    },
+  ];
+
+  const ready = checks.every((c) => c.met);
+  const availableModes = ["off", "draft_only"];
+  if (ready && connectedChannels.length > 0) {
+    availableModes.push("schedule_approved");
+    // auto_publish gated for now
+  }
+
+  return {
+    ready,
+    checks,
+    availableModes,
+    connectedChannels: connectedChannels.map((c) => c.channel),
+    totalDataItems: dataCount,
+  };
+}
+
+// ── Activity feed ────────────────────────────────────────────────────────
+
+/** Parse autopilot metadata from warnings array. */
+function parseWarningsMeta(warnings) {
+  const meta = { trigger: null, reason: null, angle: null };
+  if (!warnings) return meta;
+  for (const w of warnings) {
+    if (w.startsWith("autopilot_trigger:")) meta.trigger = w.split(":")[1]?.trim() ?? null;
+    if (w.startsWith("autopilot_reason:")) meta.reason = w.split(":")[1]?.trim() ?? null;
+    if (w.startsWith("autopilot_angle_label:")) meta.angle = w.split(":")[1]?.trim() ?? null;
+  }
+  return meta;
+}
+
+/** @param {string} workspaceId @param {number} [limit=20] */
+export async function getAutopilotActivity(workspaceId, limit = 20) {
+  const drafts = await prisma.draft.findMany({
+    where: {
+      clientId: workspaceId,
+      OR: [
+        { createdBy: "system:autopilot" },
+        { createdBy: "system:auto_generate" },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      channel: true,
+      status: true,
+      body: true,
+      createdAt: true,
+      publishedAt: true,
+      warnings: true,
+    },
+  });
+
+  return drafts.map((d) => {
+    const meta = parseWarningsMeta(d.warnings);
+    return {
+      id: d.id,
+      eventType:
+        d.status === "PUBLISHED" ? "published"
+          : d.status === "REJECTED" ? "skipped"
+          : d.status === "FAILED" ? "failed"
+          : d.status === "SCHEDULED" ? "scheduled"
+          : "generated",
+      channel: d.channel,
+      status: d.status,
+      body: d.body?.substring(0, 120) ?? null,
+      trigger: meta.trigger,
+      reason: meta.reason,
+      angle: meta.angle,
+      createdAt: d.createdAt?.toISOString(),
+      publishedAt: d.publishedAt?.toISOString() ?? null,
+    };
+  });
 }

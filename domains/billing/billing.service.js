@@ -103,13 +103,46 @@ export async function getUsage(userId) {
   const tier = sub?.tier ?? "FREE";
   const limits = getLimitsForTier(tier);
 
+  // Compute storage across all user's workspaces
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { auth0Sub: true },
+  });
+  let totalBytes = 0;
+  let videoBytes = 0;
+  if (user) {
+    const [totalAgg, videoAgg] = await Promise.all([
+      prisma.mediaAsset.aggregate({
+        where: {
+          client: { createdBy: user.auth0Sub },
+          status: { not: "FAILED" },
+        },
+        _sum: { bytes: true },
+      }),
+      prisma.mediaAsset.aggregate({
+        where: {
+          client: { createdBy: user.auth0Sub },
+          status: { not: "FAILED" },
+          assetType: "video",
+        },
+        _sum: { bytes: true },
+      }),
+    ]);
+    totalBytes = totalAgg._sum.bytes ?? 0;
+    videoBytes = videoAgg._sum.bytes ?? 0;
+  }
+
   return {
     period: { start: periodStart, end: periodEnd },
     usage: {
       posts: record?.posts ?? 0,
       images: record?.images ?? 0,
       videos: record?.videos ?? 0,
+      imageGenerations: record?.imageGenerations ?? 0,
+      videoGenerations: record?.videoGenerations ?? 0,
+      enhancementRuns: record?.enhancementRuns ?? 0,
     },
+    storage: { totalBytes, videoBytes },
     limits,
     tier,
   };
@@ -128,8 +161,9 @@ export async function incrementUsage(userId, field) {
 }
 
 /**
- * Check if usage just crossed the 80% threshold for a field.
- * Returns { nearing: true, metric, used, limit, tier } or null.
+ * Check usage threshold for a field.
+ * Returns { nearing: true, status, metric, used, limit, tier } or null.
+ * status: "warning" (70%), "urgent" (90%), "exceeded" (100%)
  */
 export async function checkUsageNearing(userId, field) {
   const { usage, limits, tier } = await getUsage(userId);
@@ -137,9 +171,14 @@ export async function checkUsageNearing(userId, field) {
   const limit = limits[field] ?? Infinity;
   if (limit === Infinity) return null;
   const pct = current / limit;
-  // Fire at exactly 80% or 90% thresholds
-  if (pct >= 0.8) {
-    return { nearing: true, metric: field, used: current, limit, tier };
+  if (pct >= 1) {
+    return { nearing: true, status: "exceeded", metric: field, used: current, limit, tier };
+  }
+  if (pct >= 0.9) {
+    return { nearing: true, status: "urgent", metric: field, used: current, limit, tier };
+  }
+  if (pct >= 0.7) {
+    return { nearing: true, status: "warning", metric: field, used: current, limit, tier };
   }
   return null;
 }
@@ -151,7 +190,7 @@ export async function checkUsageNearing(userId, field) {
 export async function checkClientLimit(userId) {
   const sub = await prisma.subscription.findUnique({ where: { userId } });
   const tier = sub?.tier ?? "FREE";
-  const limit = getLimitsForTier(tier).clients;
+  const limit = getLimitsForTier(tier).workspaces;
   if (limit === Infinity) return true;
   // Client.createdBy stores auth0Sub, so look up the user's sub
   const user = await prisma.user.findUnique({
@@ -174,19 +213,87 @@ export async function checkUsageLimit(userId, field) {
 }
 
 /**
+ * Like checkUsageLimit but returns quota error details on failure.
+ * Returns null if allowed, or a quota error object if limit exceeded.
+ */
+export async function enforceUsageLimit(userId, field) {
+  const { usage, limits, tier } = await getUsage(userId);
+  const current = usage[field] ?? 0;
+  const limit = limits[field] ?? Infinity;
+  if (limit === Infinity) return null;
+  if (current < limit) return null;
+  return buildQuotaError(field, current, limit, tier);
+}
+
+/**
+ * Check if adding `additionalBytes` would exceed storage limits.
+ * Returns { allowed, reason?, current?, limit? }
+ */
+export async function checkStorageLimit(userId, additionalBytes, isVideo = false) {
+  const { storage, limits } = await getUsage(userId);
+  const newTotal = storage.totalBytes + additionalBytes;
+  if (newTotal > limits.totalStorageBytes && limits.totalStorageBytes !== Infinity) {
+    return {
+      allowed: false,
+      reason: "Total storage limit reached. Delete unused assets or upgrade your plan.",
+      current: storage.totalBytes,
+      limit: limits.totalStorageBytes,
+    };
+  }
+  if (isVideo) {
+    const newVideoTotal = storage.videoBytes + additionalBytes;
+    if (newVideoTotal > limits.videoStorageBytes && limits.videoStorageBytes !== Infinity) {
+      return {
+        allowed: false,
+        reason: "Video storage limit reached. Delete unused videos or upgrade your plan.",
+        current: storage.videoBytes,
+        limit: limits.videoStorageBytes,
+      };
+    }
+  }
+  return { allowed: true };
+}
+
+/**
+ * Build a structured quota error object for route responses.
+ */
+export function buildQuotaError(limitType, current, allowed, tier) {
+  const NEXT_TIER = { FREE: "STARTER", STARTER: "PRO", PRO: "GROWTH", GROWTH: "AGENCY" };
+  const nextTier = NEXT_TIER[tier];
+  const nextLimits = nextTier ? getLimitsForTier(nextTier) : null;
+  const nextValue = nextLimits?.[limitType];
+  const upgradeMessage = nextTier
+    ? `Upgrade to ${nextTier} for ${nextValue === Infinity ? "unlimited" : nextValue} ${limitType}/mo`
+    : null;
+  return {
+    code: limitType.includes("Storage") ? "STORAGE_LIMIT" : "USAGE_LIMIT",
+    limitType,
+    current,
+    allowed,
+    tier,
+    upgradeMessage,
+  };
+}
+
+/**
  * Get remaining usage for all fields.
  */
 export async function getRemainingUsage(userId) {
-  const { usage, limits, tier, period } = await getUsage(userId);
+  const { usage, limits, tier, period, storage } = await getUsage(userId);
+  const rem = (field) => Math.max(0, (limits[field] ?? Infinity) - (usage[field] ?? 0));
   return {
     period,
     tier,
     remaining: {
-      posts: Math.max(0, (limits.posts ?? Infinity) - (usage.posts ?? 0)),
-      images: Math.max(0, (limits.images ?? Infinity) - (usage.images ?? 0)),
-      videos: Math.max(0, (limits.videos ?? Infinity) - (usage.videos ?? 0)),
+      posts: rem("posts"),
+      images: rem("images"),
+      videos: rem("videos"),
+      imageGenerations: rem("imageGenerations"),
+      videoGenerations: rem("videoGenerations"),
+      enhancementRuns: rem("enhancementRuns"),
     },
     usage,
+    storage,
     limits,
   };
 }

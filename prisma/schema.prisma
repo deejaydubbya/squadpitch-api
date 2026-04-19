@@ -515,15 +515,18 @@ model Subscription {
 }
 
 model UsageRecord {
-  id          String   @id @default(cuid())
-  userId      String
-  periodStart DateTime
-  periodEnd   DateTime
-  posts       Int      @default(0)
-  images      Int      @default(0)
-  videos      Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String   @id @default(cuid())
+  userId           String
+  periodStart      DateTime
+  periodEnd        DateTime
+  posts            Int      @default(0)
+  images           Int      @default(0)
+  videos           Int      @default(0)
+  imageGenerations Int      @default(0)
+  videoGenerations Int      @default(0)
+  enhancementRuns  Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   @@unique([userId, periodStart])
   @@map("usage_records")

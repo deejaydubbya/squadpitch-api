@@ -573,14 +573,23 @@ export const ManualSetupSchema = z.object({
 
 export const AutopilotSettingsSchema = z.object({
   enabled: z.boolean().optional(),
-  mode: z.enum(["off", "draft_assist"]).optional(),
+  mode: z.enum(["off", "draft_only", "schedule_approved", "auto_publish"]).optional(),
+  // Channel permissions
   preferredChannels: z.array(ChannelEnum).max(6).optional(),
-  maxDraftsPerWeek: z.number().int().min(1).max(20).optional(),
-  maxDraftsPerScheduledRun: z.number().int().min(1).max(5).optional(),
-  minimumHoursBetweenDrafts: z.number().int().min(1).max(168).optional(),
+  // Content source permissions
   allowListingPosts: z.boolean().optional(),
   allowTestimonialPosts: z.boolean().optional(),
+  allowMilestonePosts: z.boolean().optional(),
   allowFallbackPosts: z.boolean().optional(),
+  // Safety rules
+  maxDraftsPerWeek: z.number().int().min(1).max(20).optional(),
+  maxDraftsPerDay: z.number().int().min(1).max(10).optional(),
+  maxDraftsPerScheduledRun: z.number().int().min(1).max(5).optional(),
+  minimumHoursBetweenDrafts: z.number().int().min(1).max(168).optional(),
+  requireApprovalBeforePublish: z.boolean().optional(),
+  quietHoursStart: z.number().int().min(0).max(23).nullable().optional(),
+  quietHoursEnd: z.number().int().min(0).max(23).nullable().optional(),
+  skipChannelsWithoutMedia: z.boolean().optional(),
 });
 
 // ── Planner Suggestions ──────────────────────────────────────────────

@@ -90,7 +90,7 @@ import { getRecommendations } from "./recommendationEngine.service.js";
 import { getUnusedData, getDataSuggestions } from "./dataUsage.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
-import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit, getSubscription } from "../billing/billing.service.js";
+import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit, getSubscription, checkStorageLimit, buildQuotaError, enforceUsageLimit } from "../billing/billing.service.js";
 import { getLimitsForTier } from "../billing/billing.constants.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { isProviderBudgetExceeded, getServiceStatus, getThrottlePolicy } from "../billing/serviceHealth.service.js";
@@ -109,7 +109,7 @@ import {
   upsertWorkspaceTechStackConnection,
 } from "../industry/techStack.service.js";
 import { invalidateClientContext } from "./generation/clientOrchestrator.js";
-import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus } from "./autopilot.service.js";
+import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus, getAutopilotReadiness, getAutopilotActivity } from "./autopilot.service.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
@@ -1977,6 +1977,13 @@ studioRouter.post(
       const contentType = req.headers["content-type"] || "";
       const isVideo = contentType.startsWith("video/") || req.query.assetType === "video";
 
+      // Usage + storage limit checks
+      const usageField = isVideo ? "videos" : "images";
+      const quotaErr = await enforceUsageLimit(req.user.id, usageField);
+      if (quotaErr) return sendError(res, 402, quotaErr.code, `Monthly ${usageField} upload limit reached. Upgrade your plan for more.`, quotaErr);
+      const storageOk = await checkStorageLimit(req.user.id, buffer.length, isVideo);
+      if (!storageOk.allowed) return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, { current: storageOk.current, limit: storageOk.limit });
+
       let asset;
       if (isVideo) {
         asset = await service.uploadVideoAsset({
@@ -2001,6 +2008,7 @@ studioRouter.post(
           createdBy: actorSub,
         });
       }
+      await incrementUsage(req.user.id, usageField);
       res.status(201).json(service.formatAsset(asset));
     } catch (err) {
       next(err);
@@ -2044,6 +2052,12 @@ studioRouter.post(
         return sendError(res, 400, "TOO_LARGE", "Image exceeds 10 MB limit");
       }
 
+      // Usage + storage limit checks
+      const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
+      if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Monthly image upload limit reached. Upgrade your plan for more.", imgQuotaErr);
+      const storageOk = await checkStorageLimit(req.user.id, buffer.length, false);
+      if (!storageOk.allowed) return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, { current: storageOk.current, limit: storageOk.limit });
+
       const asset = await service.uploadAsset({
         clientId,
         buffer,
@@ -2055,6 +2069,7 @@ studioRouter.post(
         createdBy: actorSub,
         source: "IMPORTED",
       });
+      await incrementUsage(req.user.id, "images");
       res.status(201).json(service.formatAsset(asset));
     } catch (err) {
       if (err.name === "AbortError") {
@@ -2290,9 +2305,14 @@ studioRouter.post(
       const dedupKey = await acquireDedup(req.user.id, "image", parsed.data);
       if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "An image generation is already in progress. Please wait.");
 
-      // Usage limit check
-      const allowed = await checkUsageLimit(req.user.id, "images");
-      if (!allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly image generation limit. Upgrade your plan for more."); }
+      // Usage limit check (generation-specific + total image count)
+      const genQuotaErr = await enforceUsageLimit(req.user.id, "imageGenerations");
+      if (genQuotaErr) { await releaseDedup(dedupKey); return sendError(res, 402, genQuotaErr.code, "You have reached your monthly image generation limit. Upgrade your plan for more.", genQuotaErr); }
+      const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
+      if (imgQuotaErr) { await releaseDedup(dedupKey); return sendError(res, 402, imgQuotaErr.code, "You have reached your monthly image limit. Upgrade your plan for more.", imgQuotaErr); }
+      // Storage check (~2 MB estimated per generated image)
+      const storageOk = await checkStorageLimit(req.user.id, 2 * 1024 * 1024, false);
+      if (!storageOk.allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, { current: storageOk.current, limit: storageOk.limit }); }
 
       const actorSub = getAuth0Sub(req);
       const asset = await service.enqueueGeneration({
@@ -2302,7 +2322,10 @@ studioRouter.post(
       });
 
       await releaseDedup(dedupKey);
-      await incrementUsage(req.user.id, "images");
+      await Promise.all([
+        incrementUsage(req.user.id, "imageGenerations"),
+        incrementUsage(req.user.id, "images"),
+      ]);
 
       trackAiUsage({
         userId: req.user.id,
@@ -2313,13 +2336,13 @@ studioRouter.post(
         completionTokens: 0,
       });
 
-      checkUsageNearing(req.user.id, "images").then((info) => {
+      checkUsageNearing(req.user.id, "imageGenerations").then((info) => {
         if (info) enqueueNotification({
           userId: req.user.id,
           eventType: "USAGE_LIMIT_NEARING",
           payload: info,
           resourceType: "usage",
-          resourceId: `${req.user.id}:images`,
+          resourceId: `${req.user.id}:imageGenerations`,
         });
       }).catch(() => {});
 
@@ -2344,11 +2367,11 @@ studioRouter.post(
       const throttle = await getThrottlePolicy();
       if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
 
-      // Explicit tier gate — FREE/STARTER have 0 videos
+      // Explicit tier gate — check if video generation is allowed on this plan
       const sub = await getSubscription(req.user.id);
       const tier = sub?.tier ?? "FREE";
       const tierLimits = getLimitsForTier(tier);
-      if (tierLimits.videos === 0) return sendError(res, 402, "TIER_LIMIT", "Video generation is not available on your plan. Upgrade to Pro or higher.");
+      if (tierLimits.videoGenerations === 0) return sendError(res, 402, "TIER_LIMIT", "Video generation is not available on your plan. Upgrade to a higher tier.");
 
       // Video throttle — disabled when fal budget at warning+
       if (throttle.videoDisabled) return sendError(res, 503, "FEATURE_THROTTLED", "Video generation is temporarily limited to manage costs. Please try again later.");
@@ -2359,9 +2382,14 @@ studioRouter.post(
       const dedupKey = await acquireDedup(req.user.id, "video", parsed.data);
       if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A video generation is already in progress. Please wait.");
 
-      // Usage limit check
-      const allowed = await checkUsageLimit(req.user.id, "videos");
-      if (!allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly video generation limit. Upgrade your plan for more."); }
+      // Usage limit check (generation-specific + total video count)
+      const vidGenQuotaErr = await enforceUsageLimit(req.user.id, "videoGenerations");
+      if (vidGenQuotaErr) { await releaseDedup(dedupKey); return sendError(res, 402, vidGenQuotaErr.code, "You have reached your monthly video generation limit. Upgrade your plan for more.", vidGenQuotaErr); }
+      const vidQuotaErr = await enforceUsageLimit(req.user.id, "videos");
+      if (vidQuotaErr) { await releaseDedup(dedupKey); return sendError(res, 402, vidQuotaErr.code, "You have reached your monthly video limit. Upgrade your plan for more.", vidQuotaErr); }
+      // Storage check (~10 MB estimated per generated video)
+      const vidStorageOk = await checkStorageLimit(req.user.id, 10 * 1024 * 1024, true);
+      if (!vidStorageOk.allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "STORAGE_LIMIT", vidStorageOk.reason, { current: vidStorageOk.current, limit: vidStorageOk.limit }); }
 
       const actorSub = getAuth0Sub(req);
       const asset = await service.enqueueVideoGeneration({
@@ -2371,7 +2399,10 @@ studioRouter.post(
       });
 
       await releaseDedup(dedupKey);
-      await incrementUsage(req.user.id, "videos");
+      await Promise.all([
+        incrementUsage(req.user.id, "videoGenerations"),
+        incrementUsage(req.user.id, "videos"),
+      ]);
 
       trackAiUsage({
         userId: req.user.id,
@@ -2382,13 +2413,13 @@ studioRouter.post(
         completionTokens: 0,
       });
 
-      checkUsageNearing(req.user.id, "videos").then((info) => {
+      checkUsageNearing(req.user.id, "videoGenerations").then((info) => {
         if (info) enqueueNotification({
           userId: req.user.id,
           eventType: "USAGE_LIMIT_NEARING",
           payload: info,
           resourceType: "usage",
-          resourceId: `${req.user.id}:videos`,
+          resourceId: `${req.user.id}:videoGenerations`,
         });
       }).catch(() => {});
 
@@ -3065,6 +3096,41 @@ studioRouter.post(
   }
 );
 
+/**
+ * GET /api/v1/workspaces/:id/autopilot/readiness
+ * Readiness checklist for autopilot activation.
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/autopilot/readiness`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await getAutopilotReadiness(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/workspaces/:id/autopilot/activity
+ * Recent autopilot-generated draft activity.
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/autopilot/activity`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
+      const result = await getAutopilotActivity(req.params.id, limit);
+      res.json({ activity: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── Planner Suggestions ──────────────────────────────────────────────────
 
 studioRouter.post(
@@ -3498,6 +3564,10 @@ studioRouter.post(
         return validationError(res, [{ path: ["image"], message: "Base64 image data URL is required" }]);
       }
 
+      // Enhancement run usage limit check
+      const enhQuotaErr = await enforceUsageLimit(req.user.id, "enhancementRuns");
+      if (enhQuotaErr) return sendError(res, 402, enhQuotaErr.code, "Monthly enhancement limit reached. Upgrade your plan for more.", enhQuotaErr);
+
       const debug = String(req.query.debug ?? "") === "1";
 
       // Budget / health guards. OpenAI is gated for the text extractor; the
@@ -3618,6 +3688,7 @@ If a field is not clearly visible on the page, return null for that field. Never
         };
       }
 
+      await incrementUsage(req.user.id, "enhancementRuns");
       return res.json(responseBody);
     } catch (err) {
       next(err);
