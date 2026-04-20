@@ -292,6 +292,18 @@ export const ScheduleDraftSchema = z.object({
   scheduledFor: z.string().datetime(),
 });
 
+export const InlineActionSchema = z.object({
+  actionType: z.enum([
+    "rewrite_post",
+    "generate_variations",
+    "improve_caption",
+    "adjust_tone",
+    "expand_post",
+    "optimize_schedule",
+  ]),
+  params: z.record(z.string()).optional(),
+});
+
 // ── List / filter ───────────────────────────────────────────────────────
 
 export const ListDraftsQuerySchema = z.object({

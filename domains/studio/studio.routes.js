@@ -19,6 +19,7 @@ import {
   UpdateDraftSchema,
   RejectDraftSchema,
   ScheduleDraftSchema,
+  InlineActionSchema,
   ListDraftsQuerySchema,
   ListAssetsQuerySchema,
   GenerateMediaSchema,
@@ -1925,6 +1926,48 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
   }
 });
 
+// ── Inline AI Actions ───────────────────────────────────────────────────
+
+studioRouter.post(`${BASE}/drafts/:id/inline-action`, async (req, res, next) => {
+  try {
+    const parsed = InlineActionSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    if (await getServiceStatus("openai") === "down") {
+      return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI temporarily unavailable.");
+    }
+    if (await isProviderBudgetExceeded("openai")) {
+      return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limit reached.");
+    }
+
+    const dedupKey = await acquireDedup(req.user.id, "inline_action", { draftId: req.params.id, ...parsed.data });
+    if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "Action already in progress.");
+
+    const allowed = await checkUsageLimit(req.user.id, "posts");
+    if (!allowed) {
+      await releaseDedup(dedupKey);
+      return sendError(res, 402, "USAGE_LIMIT", "Monthly limit reached.");
+    }
+
+    const { executeInlineAction } = await import("./inlineAction.service.js");
+    const result = await executeInlineAction({
+      draftId: req.params.id,
+      actionType: parsed.data.actionType,
+      params: parsed.data.params || {},
+      userId: getAuth0Sub(req),
+    });
+
+    await releaseDedup(dedupKey);
+    if (parsed.data.actionType === "generate_variations") {
+      await incrementUsage(req.user.id, "posts");
+    }
+
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── Media assets ───────────────────────────────────────────────────────
 
 studioRouter.get(
@@ -3385,7 +3428,17 @@ studioRouter.post(
         const actorSub = getAuth0Sub(req);
 
         // Save property as a data item via existing ingestion
+        // Derive a title from available fields so validation passes for any industry
+        const derivedTitle = propertyData.title
+          || propertyData.name
+          || (propertyData.year && propertyData.make && propertyData.model
+              ? `${propertyData.year} ${propertyData.make} ${propertyData.model}`
+              : null)
+          || propertyData.address
+          || "Campaign Item";
+
         const listingResult = await listingIngestion.ingestManualListing(clientId, {
+          title: derivedTitle,
           address: propertyData.address || "",
           price: propertyData.price ? Number(propertyData.price) : undefined,
           beds: propertyData.beds ? Number(propertyData.beds) : undefined,

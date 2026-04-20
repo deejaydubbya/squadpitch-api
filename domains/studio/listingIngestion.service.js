@@ -147,7 +147,7 @@ function normalizeListing(raw) {
 
   const status = normalizeStatus(raw.status);
   const propertyType = normalizePropertyType(raw.propertyType);
-  const images = (raw.images || []).filter(Boolean).slice(0, 20);
+  const images = (raw.images || []).filter(Boolean).slice(0, 100);
   const description = raw.description ? String(raw.description).trim().slice(0, 5000) : null;
   const features = raw.features
     ? (Array.isArray(raw.features) ? raw.features : String(raw.features).split(/[,;|]/).map(s => s.trim())).filter(Boolean)
@@ -897,7 +897,7 @@ function extractListingFromScrapedData(scraped, url) {
   if (scraped.ogImage) listing.images.push(scraped.ogImage);
   if (scraped.images) {
     for (const img of scraped.images) {
-      if (!listing.images.includes(img) && listing.images.length < 20) {
+      if (!listing.images.includes(img) && listing.images.length < 100) {
         listing.images.push(img);
       }
     }

@@ -264,7 +264,7 @@ async function scrapeDirectly(url, { extractLinks = false, origin = null } = {})
     );
   }
 
-  const result = { text, title, metaDescription, ogImage, logoUrl, images: images.slice(0, 20) };
+  const result = { text, title, metaDescription, ogImage, logoUrl, images: images.slice(0, 100) };
   if (extractLinks) {
     result.links = extractLinksFromCheerio($, origin);
   }
