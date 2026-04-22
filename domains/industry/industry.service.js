@@ -351,7 +351,7 @@ export function getAssetTagDefaults(industryKey) {
  * @property {string} description - Short description
  * @property {"high" | "medium" | "low"} priority
  * @property {string} guidance - Prompt guidance passed to content generation
- * @property {{ hasData?: boolean, noPublished?: boolean, hasWebsite?: boolean }} [conditions]
+ * @property {{ hasData?: boolean, noPublished?: boolean, hasWebsite?: boolean, requiredDataType?: string }} [conditions]
  */
 
 /** @type {RecommendationTemplate[]} */
@@ -414,4 +414,54 @@ export function getRecommendationTemplates(industryKey) {
   if (!industryKey) return GENERIC_TEMPLATES;
   const profile = getIndustryProfile(industryKey);
   return profile.recommendationTemplates ?? GENERIC_TEMPLATES;
+}
+
+/** @type {RecommendationTemplate[]} */
+const SAFE_FALLBACK_TEMPLATES = [
+  {
+    type: "educational_tip",
+    tier: "fallback",
+    title: "Share an Industry Tip",
+    description: "Demonstrate expertise with a helpful, actionable tip.",
+    priority: "high",
+    guidance: "Share a useful, actionable tip that your target audience will find valuable. Position yourself as a knowledgeable resource in your field.",
+    conditions: {},
+  },
+  {
+    type: "market_insight",
+    tier: "fallback",
+    title: "Share a Market Insight",
+    description: "Show thought leadership with a relevant market observation.",
+    priority: "high",
+    guidance: "Write a post sharing a market trend, surprising statistic, or industry observation. Make it relevant and specific to your area of expertise.",
+    conditions: {},
+  },
+  {
+    type: "brand_authority",
+    tier: "fallback",
+    title: "Establish Your Expertise",
+    description: "Build authority by sharing your unique perspective.",
+    priority: "medium",
+    guidance: "Create a post that establishes your authority in your field. Share a unique perspective, lesson learned, or professional insight that builds trust.",
+    conditions: {},
+  },
+  {
+    type: "myth_busting",
+    tier: "fallback",
+    title: "Bust a Common Myth",
+    description: "Engage your audience by debunking a misconception.",
+    priority: "medium",
+    guidance: "Debunk a common myth or misconception in your industry. Explain the truth clearly and position yourself as a trusted source of information.",
+    conditions: {},
+  },
+];
+
+/**
+ * Get safe fallback templates that never require specific data items.
+ * Used by the onboarding planner when data-backed templates are exhausted.
+ *
+ * @returns {RecommendationTemplate[]}
+ */
+export function getSafeFallbackTemplates() {
+  return SAFE_FALLBACK_TEMPLATES;
 }

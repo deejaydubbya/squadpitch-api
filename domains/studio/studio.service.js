@@ -87,7 +87,7 @@ export {
   updateAssetTags,
 } from "./mediaGeneration.service.js";
 
-export { enqueueVideoGeneration } from "./videoGeneration.service.js";
+export { enqueueVideoGeneration, VIDEO_PRESETS } from "./videoGeneration.service.js";
 
 export {
   getMetrics,

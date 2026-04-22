@@ -779,7 +779,7 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
         return (aNeeds ? 1 : 0) - (bNeeds ? 1 : 0);
       })
       .slice(0, 3)
-      .map(({ type, title, guidance }) => ({ type, title, guidance }));
+      .map(({ type, title, guidance, conditions }) => ({ type, title, guidance, conditions }));
 
     // Compute real estate capabilities summary for Phase B readiness
     let realEstateCapabilities;
@@ -978,7 +978,7 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
         return (aNeeds ? 1 : 0) - (bNeeds ? 1 : 0);
       })
       .slice(0, 3)
-      .map(({ type, title, guidance }) => ({ type, title, guidance }));
+      .map(({ type, title, guidance, conditions }) => ({ type, title, guidance, conditions }));
 
     // Compute real estate capabilities summary for Phase B readiness
     let realEstateCapabilities;
@@ -1980,8 +1980,12 @@ studioRouter.get(
         clientId: req.params.id,
       });
       if (!parsed.success) return validationError(res, parsed.error.issues);
+      const limit = parsed.data.limit ?? 50;
       const assets = await service.listAssets(parsed.data);
-      res.json({ assets: assets.map(service.formatAsset) });
+      const formatted = assets.map(service.formatAsset);
+      const hasMore = assets.length === limit;
+      const nextCursor = assets.length > 0 ? assets[assets.length - 1].id : null;
+      res.json({ assets: formatted, hasMore, nextCursor });
     } catch (err) {
       next(err);
     }
@@ -2395,6 +2399,19 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
+  }
+);
+
+studioRouter.get(
+  `${BASE}/video-presets`,
+  async (_req, res) => {
+    const presets = Object.entries(service.VIDEO_PRESETS).map(([key, p]) => ({
+      key,
+      label: p.label,
+      suggestedDuration: p.suggestedDuration,
+      defaultAspectRatio: p.defaultAspectRatio,
+    }));
+    res.json({ presets });
   }
 );
 
@@ -3406,7 +3423,7 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { propertyData, campaignType, imageContext, slots } = req.body;
+      const { propertyData, campaignType, imageContext, slots, dataItemId } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
         return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
       }
@@ -3427,27 +3444,40 @@ studioRouter.post(
         const clientId = req.params.id;
         const actorSub = getAuth0Sub(req);
 
-        // Save property as a data item via existing ingestion
-        // Derive a title from available fields so validation passes for any industry
-        const derivedTitle = propertyData.title
-          || propertyData.name
-          || (propertyData.year && propertyData.make && propertyData.model
-              ? `${propertyData.year} ${propertyData.make} ${propertyData.model}`
-              : null)
-          || propertyData.address
-          || "Campaign Item";
+        // Reuse existing data item if one was selected from the property library
+        let resolvedDataItemId = null;
+        if (dataItemId && typeof dataItemId === "string") {
+          // Verify the data item belongs to this workspace
+          const existing = await prisma.workspaceDataItem.findFirst({
+            where: { id: dataItemId, clientId },
+            select: { id: true },
+          });
+          if (existing) resolvedDataItemId = existing.id;
+        }
 
-        const listingResult = await listingIngestion.ingestManualListing(clientId, {
-          title: derivedTitle,
-          address: propertyData.address || "",
-          price: propertyData.price ? Number(propertyData.price) : undefined,
-          beds: propertyData.beds ? Number(propertyData.beds) : undefined,
-          baths: propertyData.baths ? Number(propertyData.baths) : undefined,
-          sqft: propertyData.sqft ? Number(propertyData.sqft) : undefined,
-          description: propertyData.description || "",
-          highlights: propertyData.highlights ? propertyData.highlights.split(",").map((s) => s.trim()).filter(Boolean) : [],
-          propertyType: propertyData.propertyType || undefined,
-        });
+        // Only ingest a new data item if we don't have an existing one
+        if (!resolvedDataItemId) {
+          const derivedTitle = propertyData.title
+            || propertyData.name
+            || (propertyData.year && propertyData.make && propertyData.model
+                ? `${propertyData.year} ${propertyData.make} ${propertyData.model}`
+                : null)
+            || propertyData.address
+            || "Campaign Item";
+
+          const listingResult = await listingIngestion.ingestManualListing(clientId, {
+            title: derivedTitle,
+            address: propertyData.address || "",
+            price: propertyData.price ? Number(propertyData.price) : undefined,
+            beds: propertyData.beds ? Number(propertyData.beds) : undefined,
+            baths: propertyData.baths ? Number(propertyData.baths) : undefined,
+            sqft: propertyData.sqft ? Number(propertyData.sqft) : undefined,
+            description: propertyData.description || "",
+            highlights: propertyData.highlights ? propertyData.highlights.split(",").map((s) => s.trim()).filter(Boolean) : [],
+            propertyType: propertyData.propertyType || undefined,
+          });
+          resolvedDataItemId = listingResult.dataItem?.id ?? null;
+        }
 
         // Load generation context + RE assets
         const { loadClientGenerationContext } = await import("./generation/clientOrchestrator.js");
@@ -3494,7 +3524,7 @@ studioRouter.post(
         await incrementUsage(req.user.id, "posts");
 
         res.json({
-          dataItemId: listingResult.dataItem?.id ?? null,
+          dataItemId: resolvedDataItemId,
           campaign: result.parsed,
         });
       } finally {

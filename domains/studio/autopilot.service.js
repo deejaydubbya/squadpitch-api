@@ -859,9 +859,9 @@ export async function getAutopilotReadiness(workspaceId) {
   const [channels, dataCount, client] = await Promise.all([
     prisma.channelSettings.findMany({
       where: { clientId: workspaceId, isEnabled: true },
-      select: { channel: true, isConnected: true },
+      select: { channel: true },
     }),
-    prisma.dataItem.count({
+    prisma.workspaceDataItem.count({
       where: { clientId: workspaceId, status: { not: "ARCHIVED" } },
     }),
     prisma.client.findUnique({
@@ -870,7 +870,7 @@ export async function getAutopilotReadiness(workspaceId) {
     }),
   ]);
 
-  const connectedChannels = channels.filter((c) => c.isConnected !== false);
+  const connectedChannels = channels;
 
   const checks = [
     {

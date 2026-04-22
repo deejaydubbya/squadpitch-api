@@ -299,6 +299,46 @@ export function buildIntelligentSchedule({ campaignType, channels, propertyData 
   return { preset: presetKey, slots, cadenceReason };
 }
 
+// ── 5. recommendMediaType ─────────────────────────────────────────────
+
+const VIDEO_ALWAYS_CHANNELS = new Set(["YOUTUBE", "TIKTOK"]);
+
+/**
+ * Recommend whether a campaign slot should use image or video.
+ *
+ * @param {{ campaignType: string, channel: string, slotLabel: string, tier: string }} input
+ * @returns {{ recommended: 'image' | 'video', reason: string }}
+ */
+export function recommendMediaType({ campaignType, channel, slotLabel, tier }) {
+  // YouTube and TikTok always prefer video
+  if (VIDEO_ALWAYS_CHANNELS.has(channel)) {
+    return { recommended: "video", reason: `${channel} is a video-first platform` };
+  }
+
+  // PRO+ tiers get video recommendations for launch/showcase content
+  const isPro = tier && !["FREE", "STARTER"].includes(tier.toUpperCase());
+  const isLaunchContext = ["just_listed", "open_house"].includes(campaignType) ||
+    /launch|showcase|walkthrough/i.test(slotLabel || "");
+
+  if (isPro && isLaunchContext) {
+    return { recommended: "video", reason: "Video performs best for launch and showcase content on your plan" };
+  }
+
+  return { recommended: "image", reason: "Image is the standard media type for this slot" };
+}
+
+// ── 6. VIDEO_CAMPAIGN_PRESETS ────────────────────────────────────────
+
+/**
+ * Maps campaign types to suggested video presets.
+ */
+export const VIDEO_CAMPAIGN_PRESETS = {
+  just_listed: "listing_walkthrough",
+  open_house: "listing_walkthrough",
+  price_drop: "brand_awareness",
+  general_promotion: "brand_awareness",
+};
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 function formatPrice(n) {

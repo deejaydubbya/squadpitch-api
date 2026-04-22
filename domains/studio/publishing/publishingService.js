@@ -22,6 +22,40 @@ import { getAdapterForChannel } from "./channelAdapters/index.js";
 import { enqueueNotification } from "../../notifications/notification.service.js";
 import { ensureValidAccessToken } from "../tokenRefreshService.js";
 
+// ── Pre-publish media validation ───────────────────────────────────────
+
+const VIDEO_REQUIRED_CHANNELS = new Set(["YOUTUBE"]);
+const MEDIA_REQUIRED_CHANNELS = new Set(["TIKTOK"]);
+
+/**
+ * Validate draft media against channel requirements before publishing.
+ * Returns { errors: string[], warnings: string[] }.
+ */
+export function validateDraftMedia(draft) {
+  const errors = [];
+  const warnings = [];
+  const channel = draft.channel;
+  const hasMedia = Boolean(draft.mediaUrl);
+  const isVideo = draft.mediaType === "video";
+
+  // Blocking: YouTube requires video
+  if (VIDEO_REQUIRED_CHANNELS.has(channel) && !isVideo) {
+    errors.push(`${channel} requires a video. Please attach a video before publishing.`);
+  }
+
+  // Blocking: TikTok requires media
+  if (MEDIA_REQUIRED_CHANNELS.has(channel) && !hasMedia) {
+    errors.push(`${channel} requires media. Please attach an image or video before publishing.`);
+  }
+
+  // Warning: Instagram without media
+  if (channel === "INSTAGRAM" && !hasMedia) {
+    warnings.push("Instagram posts perform significantly better with media attached.");
+  }
+
+  return { errors, warnings };
+}
+
 // Narrow mediaProfile select: the Instagram adapter only needs
 // assetLibraryJson[0].url as a fallback media source, so avoid pulling the
 // rest of the (potentially large) media profile blob into memory.
@@ -87,6 +121,27 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
       new Error(`Cannot publish draft in status ${draft.status}`),
       { status: 400, code: "INVALID_STATUS" }
     );
+  }
+
+  // Pre-publish media validation
+  const mediaValidation = validateDraftMedia(draft);
+  if (mediaValidation.errors.length > 0) {
+    throw Object.assign(
+      new Error(mediaValidation.errors.join("; ")),
+      { status: 422, code: "MEDIA_VALIDATION_FAILED", errors: mediaValidation.errors, warnings: mediaValidation.warnings }
+    );
+  }
+
+  // Append warnings to draft (non-blocking)
+  if (mediaValidation.warnings.length > 0) {
+    const existingWarnings = Array.isArray(draft.warnings) ? draft.warnings : [];
+    const newWarnings = mediaValidation.warnings.filter((w) => !existingWarnings.includes(w));
+    if (newWarnings.length > 0) {
+      await prisma.draft.update({
+        where: { id: draftId },
+        data: { warnings: [...existingWarnings, ...newWarnings] },
+      }).catch(() => {});
+    }
   }
 
   // Stamp an idempotency key on first attempt. Use a conditional updateMany

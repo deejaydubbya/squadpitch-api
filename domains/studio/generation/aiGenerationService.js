@@ -118,6 +118,10 @@ function normalizeGeneratedContent(parsed) {
       typeof parsed?.imageGuidance === "string" && parsed.imageGuidance.length > 0
         ? parsed.imageGuidance
         : null,
+    videoGuidance:
+      typeof parsed?.videoGuidance === "string" && parsed.videoGuidance.length > 0
+        ? parsed.videoGuidance
+        : null,
   };
 }
 
@@ -257,6 +261,7 @@ export async function generateDraft({
       scoredHooks: content.scoredHooks.length > 0 ? content.scoredHooks : null,
       altText: content.altText,
       imageGuidance: content.imageGuidance,
+      videoGuidance: content.videoGuidance,
       warnings: [
         ...(autoSelectedSlug ? [`auto_blueprint: ${autoSelectedSlug}`] : []),
         ...(autoSelectedListing ? [`re_auto_listing: ${dataItem?.title ?? "unknown"}`] : []),

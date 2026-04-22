@@ -21,7 +21,7 @@ async function setStage(assetId, stage) {
   });
 }
 
-async function processJob(assetId, aspectRatio) {
+async function processJob(assetId, aspectRatio, duration) {
   const asset = await prisma.mediaAsset.findUnique({
     where: { id: assetId },
   });
@@ -44,7 +44,7 @@ async function processJob(assetId, aspectRatio) {
     const input = {
       prompt: asset.renderedPrompt,
       aspect_ratio: aspectRatio ?? "16:9",
-      duration: "5",  // default 5s video
+      duration: duration ?? "5",
     };
 
     // 2. Call Fal.ai via queue mode (video gen takes minutes)
@@ -160,7 +160,7 @@ export function startVideoGenWorker() {
 
   const worker = new Worker(
     "sp-video-gen",
-    async (job) => processJob(job.data.assetId, job.data.aspectRatio),
+    async (job) => processJob(job.data.assetId, job.data.aspectRatio, job.data.duration),
     { connection, concurrency: 1 }
   );
 

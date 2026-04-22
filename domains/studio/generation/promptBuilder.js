@@ -91,8 +91,13 @@ export const CONTENT_OUTPUT_SCHEMA = {
         description:
           "Detailed visual description for AI image generation — describe the ideal composition, lighting, color palette, mood, and style of an image that would accompany this post. Be specific about what the viewer should see. Empty string if not applicable.",
       },
+      videoGuidance: {
+        type: "string",
+        description:
+          "Detailed scene description for AI video generation — describe the ideal video scene, camera movement, pacing, transitions, and visual mood. Include what the viewer should see in motion: subject action, environment, camera angles, and tempo. Empty string if not applicable.",
+      },
     },
-    required: ["body", "hooks", "hashtags", "cta", "variations", "scoredHooks", "altText", "imageGuidance"],
+    required: ["body", "hooks", "hashtags", "cta", "variations", "scoredHooks", "altText", "imageGuidance", "videoGuidance"],
   },
 };
 
@@ -104,7 +109,7 @@ export const KIND_INSTRUCTIONS = {
   POST: "Write a single social post ready to publish. Write like a human posting to their own feed, not a corporate brand account. Include a strong hook in the first line. Vary sentence length. No filler words.",
   CAPTION: "Write a caption to accompany a visual asset. Keep it concise and benefit-led. Sound human, not like a marketing template.",
   VIDEO_SCRIPT:
-    "Write a short-form video script (30–60 seconds). Structure: hook, 2–3 beats, payoff, CTA. Use short sentences and natural spoken language. Write it exactly as someone would say it out loud.",
+    "Write a short-form video script (30–60 seconds). Structure: hook, 2–3 beats, payoff, CTA. Use short sentences and natural spoken language. Write it exactly as someone would say it out loud. For videoGuidance, describe the ideal visual scene for each beat: camera angles, movement, subject action, environment, lighting, and pacing.",
   CAROUSEL:
     "Write a carousel post as numbered slides. Slide 1 is a strong hook, middle slides build the argument, last slide contains the CTA. Separate slides with '---'. Each slide should be 1–3 sentences max.",
   HOOKS:

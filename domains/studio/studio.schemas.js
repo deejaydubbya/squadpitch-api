@@ -358,11 +358,29 @@ export const GenerateMediaSchema = z.object({
     .optional(),
 });
 
+export const VideoPresetEnum = z.enum([
+  "listing_walkthrough",
+  "agent_introduction",
+  "educational_tip",
+  "market_update",
+  "testimonial_highlight",
+  "brand_awareness",
+  "voiceover_broll",
+  "talking_head",
+]);
+
+export const VideoDurationEnum = z.enum(["5", "10"]);
+
+export const VideoAspectRatioEnum = z.enum(["16:9", "9:16"]);
+
 export const GenerateVideoSchema = z.object({
   clientId: z.string().min(1),
   guidance: z.string().min(1).max(2000),
   draftId: z.string().optional(),
   channel: ChannelEnum.optional(),
+  preset: VideoPresetEnum.optional(),
+  duration: VideoDurationEnum.optional(),
+  aspectRatio: VideoAspectRatioEnum.optional(),
 });
 
 export const AttachAssetSchema = z.object({

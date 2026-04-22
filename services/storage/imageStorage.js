@@ -123,24 +123,34 @@ export function validateVideoBuffer(buffer, mimeType) {
     throw {
       status: 400,
       code: "VIDEO_TOO_LARGE",
-      message: `Video exceeds 500 MB limit (${(buffer.length / (1024 * 1024)).toFixed(1)} MB)`,
+      message: `Video file is too large (${(buffer.length / (1024 * 1024)).toFixed(1)} MB). The maximum allowed size is 500 MB.`,
     };
   }
-  const allowedMimes = ["video/mp4"];
+  const allowedMimes = ["video/mp4", "video/quicktime", "video/webm"];
   if (!allowedMimes.includes(mimeType)) {
     throw {
       status: 400,
       code: "VIDEO_INVALID_FORMAT",
-      message: `Only MP4 videos are supported (got ${mimeType})`,
+      message: `Unsupported video format. Please upload an MP4, MOV, or WebM file.`,
     };
   }
+
   if (buffer.length >= 8) {
-    const magic = buffer.toString("ascii", 4, 8);
-    if (magic !== "ftyp") {
+    // MP4 and MOV both use the ISO base media file format with an "ftyp" box at bytes 4-8
+    const isFtyp = buffer.toString("ascii", 4, 8) === "ftyp";
+    // WebM uses the EBML header starting with bytes 1A 45 DF A3
+    const isEbml =
+      buffer[0] === 0x1a &&
+      buffer[1] === 0x45 &&
+      buffer[2] === 0xdf &&
+      buffer[3] === 0xa3;
+
+    if (!isFtyp && !isEbml) {
       throw {
         status: 400,
         code: "VIDEO_INVALID_FORMAT",
-        message: "File does not appear to be a valid MP4 (missing ftyp box)",
+        message:
+          "The file doesn't appear to be a valid video. Please upload an MP4, MOV, or WebM file.",
       };
     }
   }

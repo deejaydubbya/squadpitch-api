@@ -279,6 +279,7 @@ model Draft {
   scoredHooks          Json?
   altText              String?     @db.Text
   imageGuidance        String?     @db.Text
+  videoGuidance        String?     @db.Text
   warnings             String[]
 
   // Campaign fields — nullable for non-campaign drafts
