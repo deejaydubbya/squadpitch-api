@@ -19,6 +19,7 @@ import { webhookRouter } from "./domains/notifications/webhook.routes.js";
 import { integrationRouter } from "./domains/integrations/integration.routes.js";
 import { mediaImportRouter } from "./domains/integrations/mediaImport.routes.js";
 import { industryRouter } from "./domains/industry/industry.routes.js";
+import { internalRouter } from "./domains/internal/internal.routes.js";
 
 import { sendError, validationError } from "./lib/apiErrors.js";
 import { requireAuth } from "./middleware/auth.js";
@@ -151,6 +152,9 @@ app.use(webhookRouter);
 app.use(integrationRouter);
 app.use(mediaImportRouter);
 app.use(industryRouter);
+
+// Internal admin console
+app.use(internalRouter);
 
 // ===== Error handling =====
 app.use((req, res) => {

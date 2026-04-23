@@ -1081,3 +1081,124 @@ model ConversionEvent {
   @@index([trackableLinkId])
   @@map("conversion_events")
 }
+
+// ── External Service Registry ─────────────────────────────────────────
+
+model ExternalService {
+  id              String    @id @default(cuid())
+  key             String    @unique // e.g. "openai", "fal", "auth0", "stripe"
+  name            String // Display name
+  category        String // "ai", "infrastructure", "auth", "billing", "messaging", "data"
+  purpose         String    @db.Text // What this service does for Squadpitch
+  status          String    @default("healthy") // "healthy", "watch", "near_limit", "critical", "down"
+  criticality     String    @default("standard") // "critical", "high", "standard", "low"
+  environment     String    @default("production") // "production", "staging", "development"
+  consoleUrl      String?   @db.Text
+  docsUrl         String?   @db.Text
+  notes           String?   @db.Text
+  usedByFeatures  String?   @db.Text // Comma-separated feature list
+  recoveryNotes   String?   @db.Text
+  fallbackInfo    String?   @db.Text
+
+  // Subscription / billing
+  planName        String? // e.g. "Pro", "Team", "Pay-as-you-go"
+  billingCycle    String? // "monthly", "annual", "usage"
+  renewalDate     DateTime?
+  monthlyCostCents Int?
+
+  // Usage / quota
+  hardLimit       Float? // Absolute max
+  softLimit       Float? // Warning threshold
+  currentUsage    Float?
+  usageUnit       String? // "requests", "tokens", "gb", "emails", "dollars"
+  usageSource     String    @default("manual") // "manual", "api", "derived"
+  percentUsed     Float? // Cached 0-100
+
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  usageSnapshots  ExternalServiceUsageSnapshot[]
+
+  @@index([category])
+  @@index([status])
+  @@map("external_services")
+}
+
+model ExternalServiceUsageSnapshot {
+  id          String   @id @default(cuid())
+  serviceId   String
+  usage       Float
+  limit       Float?
+  percentUsed Float?
+  note        String?
+  source      String   @default("manual") // "manual", "api", "derived"
+  snapshotAt  DateTime @default(now())
+
+  service     ExternalService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId, snapshotAt])
+  @@map("external_service_usage_snapshots")
+}
+
+// ── Beta Operations ───────────────────────────────────────────────────
+
+model BetaTester {
+  id             String    @id @default(cuid())
+  userId         String // auth0Sub or User.id
+  email          String
+  name           String?
+  workspaceId    String? // Primary workspace for testing
+  status         String    @default("active") // "active", "invited", "paused", "churned"
+  cohort         String? // e.g. "alpha", "beta-1", "launch"
+  tags           String[] // e.g. ["high-touch", "paid", "real-estate", "power-user"]
+  priority       String    @default("normal") // "high", "normal", "low"
+  joinedAt       DateTime  @default(now())
+  notes          String?   @db.Text // Internal notes
+  contactNotes   String?   @db.Text // Follow-up / contact info
+  featureFlags   Json? // Snapshot of enabled features/betas
+  lastActiveAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  feedback       BetaFeedback[]
+
+  @@unique([userId])
+  @@index([status])
+  @@index([cohort])
+  @@index([workspaceId])
+  @@map("beta_testers")
+}
+
+model BetaFeedback {
+  id                String    @id @default(cuid())
+  testerId          String?
+  userId            String // Submitter auth0Sub or User.id
+  workspaceId       String?
+  type              String    @default("general") // "bug", "feature_request", "ux_issue", "general", "praise", "question"
+  severity          String    @default("medium") // "critical", "high", "medium", "low"
+  title             String
+  body              String    @db.Text
+  route             String? // Page/route where feedback originated
+  screenshotUrl     String?   @db.Text
+  relatedEntityType String? // "draft", "campaign", "connection", "workspace"
+  relatedEntityId   String?
+  featureFlags      Json? // Snapshot at time of submission
+  metadata          Json? // Browser info, app version, etc.
+  status            String    @default("new") // "new", "triaged", "in_progress", "resolved", "wont_fix", "duplicate"
+  assignee          String? // Admin handling this
+  internalNotes     String?   @db.Text
+  needsFollowUp     Boolean   @default(false)
+  resolvedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tester            BetaTester? @relation(fields: [testerId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([testerId])
+  @@index([userId])
+  @@index([severity])
+  @@index([needsFollowUp])
+  @@map("beta_feedback")
+}
