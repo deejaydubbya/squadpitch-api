@@ -29,7 +29,8 @@ export async function listAssets({
   const where = { clientId };
   if (source) where.source = source;
   if (status) where.status = status;
-  if (draftId) where.draftId = draftId;
+  // Check both old FK and new DraftAsset join table
+  if (draftId) where.OR = [{ draftId }, { draftAssets: { some: { draftId } } }];
   if (assetType) where.assetType = assetType;
   if (folderId === "UNFILED") {
     where.folderId = null;
@@ -47,13 +48,27 @@ export async function listAssets({
     ];
   }
 
-  return prisma.mediaAsset.findMany({
+  const assets = await prisma.mediaAsset.findMany({
     where,
-    include: { _count: { select: { draftAssets: true } } },
+    include: {
+      _count: { select: { draftAssets: true } },
+      ...(draftId && { draftAssets: { where: { draftId }, select: { orderIndex: true, role: true } } }),
+    },
     orderBy: { createdAt: "desc" },
     take: limit,
     ...(cursor && { skip: 1, cursor: { id: cursor } }),
   });
+
+  // When querying by draftId, sort by join table orderIndex (primary first)
+  if (draftId) {
+    assets.sort((a, b) => {
+      const aIdx = a.draftAssets?.[0]?.orderIndex ?? 999;
+      const bIdx = b.draftAssets?.[0]?.orderIndex ?? 999;
+      return aIdx - bIdx;
+    });
+  }
+
+  return assets;
 }
 
 export async function getAsset(assetId) {
