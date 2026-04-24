@@ -932,8 +932,8 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
           event: "error",
           code: isBlocked ? "BLOCKED" : "CRAWL_FAILED",
           message: isBlocked
-            ? "This website blocks automated access. You can try pasting the page content as text instead."
-            : `Could not access this website: ${crawlErr.message || "connection failed"}. You can try again or paste content as text.`,
+            ? "This website has anti-bot protection and can't be scraped. Please try a different method below."
+            : `Could not access this website: ${crawlErr.message || "connection failed"}. Try a different link or another method.`,
         });
         return res.end();
       }
