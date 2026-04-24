@@ -103,6 +103,7 @@ import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
 import * as agentOnboarding from "./agentOnboarding.service.js";
 import { crawlWebsite } from "./crawlWebsite.js";
+import { filterPropertyImages } from "./scrapeUrl.js";
 import { getStarterAngles, getIndustryTechStack, getRecommendationTemplates, getAssetTagDefaults } from "../industry/industry.service.js";
 import { RE_CAPABILITY_MAP } from "../industry/realEstateContext.js";
 import {
@@ -913,15 +914,39 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       // Crawl with live progress
       sendEvent({ event: "crawl:start", url: hasUrl ? input : null });
 
-      const { combinedText, images: crawledImages, logoUrl: crawledLogo } = await onboardingService.crawlAndCombine({
-        url: hasUrl ? input : null,
-        text: hasText ? input : null,
-        documentTexts,
-        onProgress: (p) => sendEvent(p),
-      });
-      images = crawledImages;
+      let combinedText, primaryPageText, crawledImages, crawledLogo;
+      try {
+        const result = await onboardingService.crawlAndCombine({
+          url: hasUrl ? input : null,
+          text: hasText ? input : null,
+          documentTexts,
+          onProgress: (p) => sendEvent(p),
+        });
+        combinedText = result.combinedText;
+        primaryPageText = result.primaryPageText;
+        crawledImages = result.images;
+        crawledLogo = result.logoUrl;
+      } catch (crawlErr) {
+        const isBlocked = crawlErr.status === 422 || /block/i.test(crawlErr.message);
+        sendEvent({
+          event: "error",
+          code: isBlocked ? "BLOCKED" : "CRAWL_FAILED",
+          message: isBlocked
+            ? "This website blocks automated access. You can try pasting the page content as text instead."
+            : `Could not access this website: ${crawlErr.message || "connection failed"}. You can try again or paste content as text.`,
+        });
+        return res.end();
+      }
+      const allImages = crawledImages || [];
       logoUrl = crawledLogo || "";
       sendEvent({ event: "crawl:done" });
+
+      // Filter junk images (logos, icons, tiny thumbnails) for the client,
+      // but keep the full list for AI data extraction below.
+      images = filterPropertyImages([...new Set(allImages)]);
+      if (images.length > 0) {
+        sendEvent({ event: "images:found", count: images.length });
+      }
 
       // Extract sequentially: brand first, then data.
       // Running both in parallel can trigger OpenAI rate limits.
@@ -935,14 +960,20 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       sendEvent({ event: "brand:done", brandData, logoUrl });
 
       try {
-        dataItems = await onboardingService.extractDataItems(combinedText, {
+        // Use primary page text for data extraction — not the full 50-page
+        // combined text which causes timeouts and noisy results.
+        // Brand extraction above uses combinedText (needs full context).
+        const extractionText = primaryPageText || combinedText;
+        console.log("[onboarding-stream] Data extraction input:", extractionText.length, "chars (primary page:", !!primaryPageText, ")");
+        dataItems = await onboardingService.extractDataItems(extractionText, {
           url: hasUrl ? input : undefined,
-          images: crawledImages,
+          images: allImages,
           industryKey,
           onProgress: (items) => {
             sendEvent({ event: "data:progress", items, count: items.length });
           },
         });
+        console.log("[onboarding-stream] Data extraction result:", dataItems.length, "items", dataItems.map(d => `${d.type}:${d.title}`));
         sendEvent({ event: "data:done", items: dataItems, count: dataItems.length });
       } catch (err) {
         console.error("[onboarding-stream] Data extraction failed:", err.message || err);
@@ -2072,7 +2103,7 @@ studioRouter.post(
       const parsed = UploadFromUrlSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
-      const { url, folderId, filename } = parsed.data;
+      const { url, folderId, filename, onboarding } = parsed.data;
       const clientId = req.params.id;
       const actorSub = getAuth0Sub(req);
 
@@ -2081,7 +2112,18 @@ studioRouter.post(
       const timeout = setTimeout(() => controller.abort(), 15_000);
       let resp;
       try {
-        resp = await fetch(url, { signal: controller.signal });
+        // Extract origin for Referer — many CDNs require it
+        let referer = "";
+        try { referer = new URL(url).origin + "/"; } catch {}
+        resp = await fetch(url, {
+          signal: controller.signal,
+          redirect: "follow",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Accept: "image/*,*/*",
+            ...(referer && { Referer: referer }),
+          },
+        });
       } finally {
         clearTimeout(timeout);
       }
@@ -2090,7 +2132,10 @@ studioRouter.post(
       }
 
       const contentType = resp.headers.get("content-type") || "";
-      if (!contentType.startsWith("image/")) {
+      // Accept image/* and also application/octet-stream (some CDNs don't set
+      // proper content-type for images). We verify it's a real image by extension.
+      const isImageCT = contentType.startsWith("image/") || contentType.startsWith("application/octet-stream");
+      if (!isImageCT) {
         return sendError(res, 400, "NOT_IMAGE", "URL does not point to an image");
       }
 
@@ -2099,9 +2144,11 @@ studioRouter.post(
         return sendError(res, 400, "TOO_LARGE", "Image exceeds 10 MB limit");
       }
 
-      // Usage + storage limit checks
-      const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
-      if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Monthly image upload limit reached. Upgrade your plan for more.", imgQuotaErr);
+      // Usage + storage limit checks (skip quota for onboarding imports)
+      if (!onboarding) {
+        const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
+        if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Monthly image upload limit reached. Upgrade your plan for more.", imgQuotaErr);
+      }
       const storageOk = await checkStorageLimit(req.user.id, buffer.length, false);
       if (!storageOk.allowed) return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, { current: storageOk.current, limit: storageOk.limit });
 

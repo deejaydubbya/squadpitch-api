@@ -12,7 +12,7 @@ import { generateStructuredContent } from "./generation/openai.provider.js";
 const CHUNK_SIZE = 100_000; // ~35K tokens per chunk — faster completion, more incremental progress
 const CHUNK_OVERLAP = 2_000; // overlap to avoid splitting items at boundaries
 const MAX_CONCURRENT_CHUNKS = 3;
-const EXTRACTION_TIMEOUT_MS = 120_000;
+const EXTRACTION_TIMEOUT_MS = 180_000;
 const EXTRACTION_TEMPERATURE = 0.3;
 
 const DATA_ITEM_TYPES_DESCRIPTION = `
@@ -48,7 +48,10 @@ INDUSTRY_NEWS — Relevant news/trends
 EVENT — Upcoming or past events
   dataJson: { eventName, date, location, description, registrationUrl }
 
-CUSTOM — Anything that doesn't fit above (e.g. product listings, real estate, job postings, recipes, events)
+PROPERTY — Real estate listings (houses, condos, lots, commercial properties)
+  dataJson: { address, city, state, zip, price (number), beds (number), baths (number), sqft (number), propertyType, yearBuilt, lotSize, description, features, mlsNumber, status, imageUrl, images (array of URLs) }
+
+CUSTOM — Anything that doesn't fit above (e.g. product listings, job postings, recipes, events)
   dataJson: { (any relevant key-value pairs that capture the structured data) }
 `;
 
@@ -67,7 +70,8 @@ Type classification guidelines — ALWAYS prefer a specific type over CUSTOM:
 - Employee bios, team pages, about-us profiles → TEAM_SPOTLIGHT
 - News articles, trend reports, industry analysis → INDUSTRY_NEWS
 - Events with dates, locations, registration links → EVENT
-- ONLY use CUSTOM when none of the above types apply (e.g. real estate listings, job postings, recipes, directory entries)
+- Real estate property listings (houses, condos, lots, etc.) → PROPERTY
+- ONLY use CUSTOM when none of the above types apply (e.g. job postings, recipes, directory entries)
 
 Rules:
 - Extract ALL distinct data items from the content — do not stop early. Extract every product, vehicle, listing, testimonial, team member, FAQ, etc.
@@ -95,7 +99,7 @@ You MUST return a JSON object with an "items" array. Even if the content is unus
 const VALID_TYPES = new Set([
   "TESTIMONIAL", "CASE_STUDY", "PRODUCT_LAUNCH", "PROMOTION",
   "STATISTIC", "MILESTONE", "FAQ", "TEAM_SPOTLIGHT",
-  "INDUSTRY_NEWS", "EVENT", "CUSTOM",
+  "INDUSTRY_NEWS", "EVENT", "PROPERTY", "CUSTOM",
 ]);
 
 // NOTE: dataJson has dynamic keys per item type, so we cannot use strict: true
@@ -201,7 +205,7 @@ async function extractFromChunk(chunk, { hint, sourceUrl, images, chunkIndex, to
   userPrompt += `Extract structured data items from the following content:\n\n${chunk}`;
   if (sourceUrl) userPrompt += `\n\nSource URL: ${sourceUrl}`;
   if (images && images.length > 0) {
-    userPrompt += `\n\nImage URLs found on this page (associate with relevant items in dataJson.imageUrl):\n${images.slice(0, 30).join("\n")}`;
+    userPrompt += `\n\nImage URLs found on this page (associate with relevant items — set dataJson.imageUrl for the hero image and dataJson.images as an array of ALL image URLs for this item):\n${images.slice(0, 100).join("\n")}`;
   }
 
   let result;
@@ -239,12 +243,16 @@ async function extractFromChunk(chunk, { hint, sourceUrl, images, chunkIndex, to
   }
 
   console.log(`[dataExtraction] Chunk ${chunkIndex + 1}/${totalChunks}: extracted ${items.length} items from ${chunk.length} bytes`);
+  if (items.length > 0) {
+    console.log(`[dataExtraction] Sample item keys:`, JSON.stringify(Object.keys(items[0])));
+    console.log(`[dataExtraction] Sample item:`, JSON.stringify({ type: items[0].type, title: items[0].title, name: items[0].name, address: items[0].address, heading: items[0].heading }));
+  }
 
   return items
-    .filter((item) => item.title || item.name || item.heading)
+    .filter((item) => item.title || item.name || item.heading || item.address)
     .map((item) => ({
       type: VALID_TYPES.has(item.type) ? item.type : "CUSTOM",
-      title: String(item.title || item.name || item.heading).slice(0, 200),
+      title: String(item.title || item.name || item.heading || item.address || item.dataJson?.address || "Untitled").slice(0, 200),
       summary: item.summary ? String(item.summary).slice(0, 2000) : null,
       dataJson: item.dataJson && typeof item.dataJson === "object" ? item.dataJson : {},
       tags: Array.isArray(item.tags) ? item.tags.slice(0, 10).map((t) => String(t).slice(0, 100)) : [],

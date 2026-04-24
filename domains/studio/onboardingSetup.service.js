@@ -129,7 +129,10 @@ export async function crawlAndCombine({ url, text, documentTexts = [], onProgres
   // Website content
   if (url) {
     const crawled = await crawlWebsite(url, { onProgress });
-    images = crawled.pages.flatMap((p) => p.images || []);
+    // Only collect images from the root page (the URL the user provided).
+    // Subpages contribute text for brand extraction but their images are
+    // noise (other listings, agent headshots, office photos, etc.).
+    images = crawled.pages[0]?.images || [];
     logoUrl = crawled.logoUrl || "";
     for (const page of crawled.pages) {
       sections.push({
@@ -184,7 +187,13 @@ export async function crawlAndCombine({ url, text, documentTexts = [], onProgres
     }
   }
 
-  return { combinedText: combinedText.trim(), images, logoUrl };
+  // Return the primary page text separately — data extraction should focus
+  // on the user's submitted URL, not the 50+ subpages the crawler discovered.
+  // Subpage text is useful for brand/voice extraction but adds noise + causes
+  // timeouts when sent to structured data extraction.
+  const primaryPageText = sections.find((s) => s.source === "website")?.content || "";
+
+  return { combinedText: combinedText.trim(), images, logoUrl, primaryPageText };
 }
 
 // ── AI Extraction ──────────────────────────────────────────────────────
