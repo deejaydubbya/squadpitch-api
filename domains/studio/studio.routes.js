@@ -948,37 +948,44 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
         sendEvent({ event: "images:found", count: images.length });
       }
 
-      // Extract sequentially: brand first, then data.
-      // Running both in parallel can trigger OpenAI rate limits.
+      // Run brand + data extraction in parallel — they use different
+      // content (full combined text vs primary page only) and 2 concurrent
+      // OpenAI requests is well within rate limits.
       sendEvent({ event: "extract:start" });
 
-      brandData = await onboardingService.extractBrandData(combinedText, {
-        url: hasUrl ? input : undefined,
-        industryKey,
-        agentContext,
-      });
-      sendEvent({ event: "brand:done", brandData, logoUrl });
+      const extractionText = primaryPageText || combinedText;
+      console.log("[onboarding-stream] Data extraction input:", extractionText.length, "chars (primary page:", !!primaryPageText, ")");
 
-      try {
-        // Use primary page text for data extraction — not the full 50-page
-        // combined text which causes timeouts and noisy results.
-        // Brand extraction above uses combinedText (needs full context).
-        const extractionText = primaryPageText || combinedText;
-        console.log("[onboarding-stream] Data extraction input:", extractionText.length, "chars (primary page:", !!primaryPageText, ")");
-        dataItems = await onboardingService.extractDataItems(extractionText, {
+      const [brandResult, dataResult] = await Promise.allSettled([
+        onboardingService.extractBrandData(combinedText, {
+          url: hasUrl ? input : undefined,
+          industryKey,
+          agentContext,
+        }),
+        onboardingService.extractDataItems(extractionText, {
           url: hasUrl ? input : undefined,
           images: allImages,
           industryKey,
           onProgress: (items) => {
             sendEvent({ event: "data:progress", items, count: items.length });
           },
-        });
-        console.log("[onboarding-stream] Data extraction result:", dataItems.length, "items", dataItems.map(d => `${d.type}:${d.title}`));
-        sendEvent({ event: "data:done", items: dataItems, count: dataItems.length });
-      } catch (err) {
-        console.error("[onboarding-stream] Data extraction failed:", err.message || err);
-        sendEvent({ event: "data:done", items: [], count: 0 });
+        }),
+      ]);
+
+      if (brandResult.status === "fulfilled") {
+        brandData = brandResult.value;
+      } else {
+        throw brandResult.reason; // brand is required — let outer catch handle
       }
+      sendEvent({ event: "brand:done", brandData, logoUrl });
+
+      if (dataResult.status === "fulfilled") {
+        dataItems = dataResult.value;
+        console.log("[onboarding-stream] Data extraction result:", dataItems.length, "items", dataItems.map(d => `${d.type}:${d.title}`));
+      } else {
+        console.error("[onboarding-stream] Data extraction failed:", dataResult.reason?.message || dataResult.reason);
+      }
+      sendEvent({ event: "data:done", items: dataItems, count: dataItems.length });
     } else {
       sendEvent({ event: "crawl:start", url: null });
       brandData = await onboardingService.extractBrandFromText(input, { industryKey, agentContext });
