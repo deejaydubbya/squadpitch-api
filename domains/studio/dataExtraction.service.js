@@ -245,14 +245,36 @@ async function extractFromChunk(chunk, { hint, sourceUrl, images, chunkIndex, to
   console.log(`[dataExtraction] Chunk ${chunkIndex + 1}/${totalChunks}: extracted ${items.length} items from ${chunk.length} bytes`);
   if (items.length > 0) {
     console.log(`[dataExtraction] Sample item keys:`, JSON.stringify(Object.keys(items[0])));
-    console.log(`[dataExtraction] Sample item:`, JSON.stringify({ type: items[0].type, title: items[0].title, name: items[0].name, address: items[0].address, heading: items[0].heading }));
+    console.log(`[dataExtraction] Sample dataJson keys:`, JSON.stringify(Object.keys(items[0].dataJson ?? {})));
   }
 
+  // Resolve title/type from top-level OR nested dataJson fields.
+  // The AI sometimes nests everything inside dataJson without top-level fields.
+  const resolveTitle = (item) => {
+    const dj = item.dataJson && typeof item.dataJson === "object" ? item.dataJson : {};
+    return item.title || item.name || item.heading || item.address
+      || dj.address || dj.productName || dj.eventName || dj.headline
+      || dj.name || dj.client || dj.question || dj.achievement
+      || dj.title;
+  };
+
+  const resolveType = (item) => {
+    if (VALID_TYPES.has(item.type)) return item.type;
+    const dj = item.dataJson && typeof item.dataJson === "object" ? item.dataJson : {};
+    if (VALID_TYPES.has(dj.type)) return dj.type;
+    // Infer type from dataJson field presence
+    if (dj.address || dj.beds || dj.baths || dj.sqft || dj.mlsNumber) return "PROPERTY";
+    if (dj.quote || dj.rating) return "TESTIMONIAL";
+    if (dj.productName || dj.features) return "PRODUCT_LAUNCH";
+    if (dj.question && dj.answer) return "FAQ";
+    return "CUSTOM";
+  };
+
   return items
-    .filter((item) => item.title || item.name || item.heading || item.address)
+    .filter((item) => resolveTitle(item))
     .map((item) => ({
-      type: VALID_TYPES.has(item.type) ? item.type : "CUSTOM",
-      title: String(item.title || item.name || item.heading || item.address || item.dataJson?.address || "Untitled").slice(0, 200),
+      type: resolveType(item),
+      title: String(resolveTitle(item) || "Untitled").slice(0, 200),
       summary: item.summary ? String(item.summary).slice(0, 2000) : null,
       dataJson: item.dataJson && typeof item.dataJson === "object" ? item.dataJson : {},
       tags: Array.isArray(item.tags) ? item.tags.slice(0, 10).map((t) => String(t).slice(0, 100)) : [],
