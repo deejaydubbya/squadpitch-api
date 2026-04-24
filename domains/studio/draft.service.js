@@ -61,6 +61,7 @@ export async function updateDraft(draftId, patch) {
       ...(patch.cta !== undefined && { cta: patch.cta }),
       ...(patch.altText !== undefined && { altText: patch.altText }),
       ...(patch.channel !== undefined && { channel: patch.channel }),
+      ...(patch.mediaUrl !== undefined && { mediaUrl: patch.mediaUrl, mediaType: patch.mediaUrl ? "image" : null }),
     },
   });
 }

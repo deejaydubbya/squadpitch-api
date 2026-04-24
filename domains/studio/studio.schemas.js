@@ -5,6 +5,7 @@ import { z } from "zod";
 // ── Enums (mirror Prisma enums) ─────────────────────────────────────────
 
 export const ClientStatusEnum = z.enum([
+  "DRAFT",
   "ACTIVE",
   "PAUSED",
   "ARCHIVED",
@@ -282,6 +283,7 @@ export const UpdateDraftSchema = z.object({
   cta: z.string().max(500).nullable().optional(),
   altText: z.string().max(2000).nullable().optional(),
   channel: ChannelEnum.optional(),
+  mediaUrl: z.string().url().nullable().optional(),
 });
 
 export const RejectDraftSchema = z.object({
@@ -548,6 +550,7 @@ export const UploadFromUrlSchema = z.object({
   url: z.string().url().max(2048),
   folderId: z.string().optional(),
   filename: z.string().max(255).optional(),
+  onboarding: z.boolean().optional(),
 });
 
 export const OnboardingAnalyzeSchema = z
