@@ -16,6 +16,7 @@ enum UserRole {
 }
 
 enum ClientStatus {
+  DRAFT
   ACTIVE
   PAUSED
   ARCHIVED
@@ -732,19 +733,23 @@ model OutboundWebhook {
 }
 
 model WebhookDeliveryLog {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   webhookId      String
   eventType      String
   requestBody    Json
+  requestHeaders Json?
   responseStatus Int?
-  responseBody   String?  @db.Text
-  status         String   @default("pending") // pending | success | failed
-  attemptCount   Int      @default(0)
-  createdAt      DateTime @default(now())
+  responseBody   String?   @db.Text
+  status         String    @default("pending") // pending | success | failed
+  attemptCount   Int       @default(0)
+  deliveredAt    DateTime?
+  replayOfId     String?
+  createdAt      DateTime  @default(now())
 
   webhook        OutboundWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId, createdAt])
+  @@index([replayOfId])
   @@map("webhook_delivery_logs")
 }
 
@@ -1201,4 +1206,29 @@ model BetaFeedback {
   @@index([severity])
   @@index([needsFollowUp])
   @@map("beta_feedback")
+}
+
+// ── Feature Flags ───────────────────────────────────────────────────────
+
+model FeatureFlag {
+  id                String    @id @default(cuid())
+  key               String    @unique // e.g. "video_gen_beta", "new_onboarding_flow"
+  name              String // Human-readable name
+  description       String?   @db.Text
+  category          String    @default("feature") // "feature", "rollout", "ops", "experiment"
+  enabled           Boolean   @default(false)
+  scope             String    @default("global") // "global", "targeted"
+  targetType        String?   // "workspace", "user", "cohort" — null if global
+  targetIds         String[]  // IDs of targeted workspaces, users, or cohort names
+  rolloutPercentage Int?      // 0–100 for gradual rollouts (null = binary on/off)
+  notes             String?   @db.Text // Internal notes / change log
+  createdBy         String?   // admin who created
+  updatedBy         String?   // admin who last modified
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([key])
+  @@index([category])
+  @@index([enabled])
+  @@map("feature_flags")
 }

@@ -97,6 +97,11 @@ export async function crawlWebsite(rootUrl, { maxPages = MAX_PAGES, onProgress }
     if (onProgress) {
       onProgress({ event: "crawl:page", url: page.url, title: page.title, pageNum, totalExpected });
     }
+  }, (failure) => {
+    pageNum++;
+    if (onProgress) {
+      onProgress({ event: "crawl:page:error", url: failure.url, error: failure.error, pageNum, totalExpected });
+    }
   });
 
   // 6. Assemble results
@@ -178,7 +183,7 @@ function scorePath(url) {
   return 0;
 }
 
-async function scrapeWithConcurrency(urls, concurrency, onPageDone) {
+async function scrapeWithConcurrency(urls, concurrency, onPageDone, onPageFailed) {
   const results = [];
   let index = 0;
 
@@ -191,8 +196,9 @@ async function scrapeWithConcurrency(urls, concurrency, onPageDone) {
         const page = { url, text: scraped.text, title: scraped.title, images: scraped.images };
         results[i] = { status: "fulfilled", value: page };
         if (onPageDone) onPageDone(page);
-      } catch {
+      } catch (err) {
         results[i] = { status: "rejected", reason: `Failed to scrape ${url}` };
+        if (onPageFailed) onPageFailed({ url, error: err.message || "Unknown error" });
       }
     }
   }

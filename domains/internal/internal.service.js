@@ -233,6 +233,11 @@ export async function getWorkspaceDetail(clientId) {
   };
 }
 
+export async function deleteAllWorkspaces() {
+  const result = await prisma.client.deleteMany();
+  return { ok: true, deleted: result.count };
+}
+
 // ── Content Debugger ─────────────────────────────────────────────────────
 
 export async function listDrafts({ search, status, channel, clientId, kind, limit = 50, cursor }) {

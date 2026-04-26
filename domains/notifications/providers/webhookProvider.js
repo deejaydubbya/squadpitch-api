@@ -38,13 +38,15 @@ export async function deliverWebhook({ targetUrl, secret, eventType, payload, us
   const body = JSON.stringify(webhookPayload);
   const signature = sign(body, secret);
 
+  const requestHeaders = {
+    "Content-Type": "application/json",
+    "X-Squadpitch-Signature": signature,
+    "X-Squadpitch-Event": eventType,
+  };
+
   const res = await fetch(targetUrl, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Squadpitch-Signature": signature,
-      "X-Squadpitch-Event": eventType,
-    },
+    headers: requestHeaders,
     body,
     signal: AbortSignal.timeout(10_000), // 10s timeout
   });
@@ -53,6 +55,7 @@ export async function deliverWebhook({ targetUrl, secret, eventType, payload, us
 
   return {
     responseStatus: res.status,
-    responseBody: responseBody.slice(0, 2000), // Truncate
+    responseBody: responseBody.slice(0, 8000), // Truncate at 8KB
+    requestHeaders,
   };
 }

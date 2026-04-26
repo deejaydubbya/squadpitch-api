@@ -214,5 +214,12 @@ export async function saveImportedItems(clientId, { items, sourceType, sourceUrl
     })),
   });
 
-  return { created: created.count, dataSourceId: dataSource.id };
+  // Fetch back created items so callers can get their IDs
+  const savedItems = await prisma.workspaceDataItem.findMany({
+    where: { dataSourceId: dataSource.id },
+    select: { id: true, type: true, title: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return { created: created.count, dataSourceId: dataSource.id, items: savedItems };
 }

@@ -124,6 +124,7 @@ import * as listingFeedService from "./listingFeed.service.js";
 import * as trackableLinkService from "./trackableLink.service.js";
 import { logConversionEvent } from "./conversionEvent.service.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
+import { validateDraftMedia } from "./publishing/publishingService.js";
 import { enrichListingById, enrichAllListings } from "../industry/propertyEnrichment.service.js";
 import { evaluateStaleListings, getEvents } from "./listingEvents.service.js";
 import { generateSampleListings, simulateListingEvent } from "./listingSimulator.service.js";
@@ -1858,7 +1859,7 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
     // Pre-validate: ensure the draft's channel has an active connection
     const draftRecord = await prisma.draft.findUnique({
       where: { id: req.params.id },
-      select: { channel: true, clientId: true },
+      select: { channel: true, clientId: true, mediaUrl: true, mediaType: true },
     });
     if (draftRecord) {
       const conn = await prisma.channelConnection.findUnique({
@@ -1870,6 +1871,17 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
           422,
           'SCHEDULE_NO_CONNECTION',
           `Cannot schedule: your ${draftRecord.channel} account is not connected. Please connect it in Settings → Channels before scheduling.`
+        );
+      }
+
+      // Pre-validate media requirements
+      const mediaValidation = validateDraftMedia(draftRecord);
+      if (mediaValidation.errors.length > 0) {
+        return sendError(
+          res,
+          422,
+          'MEDIA_VALIDATION_FAILED',
+          mediaValidation.errors.join("; ")
         );
       }
     }
@@ -1938,6 +1950,36 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
     // Usage limit check
     const allowed = await checkUsageLimit(req.user.id, "posts");
     if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly publish limit. Upgrade your plan for more.");
+
+    // Pre-validate: ensure the draft's channel has an active connection
+    const draftRecord = await prisma.draft.findUnique({
+      where: { id: req.params.id },
+      select: { channel: true, clientId: true, mediaUrl: true, mediaType: true },
+    });
+    if (draftRecord) {
+      const conn = await prisma.channelConnection.findUnique({
+        where: { clientId_channel: { clientId: draftRecord.clientId, channel: draftRecord.channel } },
+      });
+      if (!conn || conn.status !== 'CONNECTED') {
+        return sendError(
+          res,
+          422,
+          'PUBLISH_NO_CONNECTION',
+          `Cannot publish: your ${draftRecord.channel} account is not connected. Please connect it in Settings → Channels before publishing.`
+        );
+      }
+
+      // Pre-validate media requirements
+      const mediaValidation = validateDraftMedia(draftRecord);
+      if (mediaValidation.errors.length > 0) {
+        return sendError(
+          res,
+          422,
+          'MEDIA_VALIDATION_FAILED',
+          mediaValidation.errors.join("; ")
+        );
+      }
+    }
 
     const actorSub = getAuth0Sub(req);
     const draft = await service.publishDraft({
@@ -2062,10 +2104,13 @@ studioRouter.post(
       const contentType = req.headers["content-type"] || "";
       const isVideo = contentType.startsWith("video/") || req.query.assetType === "video";
 
-      // Usage + storage limit checks
+      // Usage + storage limit checks (skip quota for onboarding uploads)
+      const isOnboarding = req.query.onboarding === "true";
       const usageField = isVideo ? "videos" : "images";
-      const quotaErr = await enforceUsageLimit(req.user.id, usageField);
-      if (quotaErr) return sendError(res, 402, quotaErr.code, `Monthly ${usageField} upload limit reached. Upgrade your plan for more.`, quotaErr);
+      if (!isOnboarding) {
+        const quotaErr = await enforceUsageLimit(req.user.id, usageField);
+        if (quotaErr) return sendError(res, 402, quotaErr.code, `Monthly ${usageField} upload limit reached. Upgrade your plan for more.`, quotaErr);
+      }
       const storageOk = await checkStorageLimit(req.user.id, buffer.length, isVideo);
       if (!storageOk.allowed) return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, { current: storageOk.current, limit: storageOk.limit });
 
@@ -2366,6 +2411,66 @@ studioRouter.post(
       }
 
       res.json({ suggestedTags, savedTags: merged });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Batch auto-tag: classify multiple assets in parallel ────────────
+studioRouter.post(
+  `${BASE}/workspaces/:id/assets/batch-auto-tag`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { assetIds } = req.body;
+      if (!Array.isArray(assetIds) || assetIds.length === 0) {
+        return validationError(res, [{ path: ["assetIds"], message: "assetIds must be a non-empty array" }]);
+      }
+      // Cap at 20 to prevent abuse
+      const ids = assetIds.slice(0, 20);
+
+      const client = await prisma.client.findUnique({
+        where: { id: req.params.id },
+        select: { industryKey: true },
+      });
+      const tagDefaults = getAssetTagDefaults(client?.industryKey);
+      const tagList = tagDefaults.length > 0
+        ? tagDefaults.join(", ")
+        : "exterior, kitchen, living_room, dining_room, bedroom, bathroom, backyard, garage, pool, office, laundry, floorplan, aerial, neighborhood, detail, other";
+
+      const { extractFromImage } = await import("./generation/openai.provider.js");
+      const prompt = `Classify this image. Return a JSON object with "tags" (array of strings) from ONLY these options: [${tagList}]. Pick 1-3 tags that best describe what's shown. If unsure, use "other".`;
+
+      // Process in parallel batches of 5
+      const results = [];
+      for (let i = 0; i < ids.length; i += 5) {
+        const batch = ids.slice(i, i + 5);
+        const batchResults = await Promise.allSettled(
+          batch.map(async (assetId) => {
+            const asset = await service.getAsset(assetId);
+            if (!asset || asset.clientId !== req.params.id || !asset.url) {
+              return { assetId, tags: [], error: "not_found" };
+            }
+            try {
+              const result = await extractFromImage({ base64: asset.url, prompt });
+              const suggestedTags = Array.isArray(result?.parsed?.tags) ? result.parsed.tags : [];
+              const merged = Array.from(new Set([...(asset.tags ?? []), ...suggestedTags]));
+              if (merged.length > 0) {
+                await service.updateAssetTags(assetId, merged);
+              }
+              return { assetId, tags: merged };
+            } catch {
+              return { assetId, tags: asset.tags ?? [], error: "classification_failed" };
+            }
+          })
+        );
+        for (const r of batchResults) {
+          results.push(r.status === "fulfilled" ? r.value : { assetId: "unknown", tags: [], error: "failed" });
+        }
+      }
+
+      res.json({ results });
     } catch (err) {
       next(err);
     }

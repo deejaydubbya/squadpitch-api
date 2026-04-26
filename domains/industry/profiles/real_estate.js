@@ -18,7 +18,7 @@ export default {
     { key: "manual", label: "Manual Setup", icon: "Pencil" },
   ],
   extraction: {
-    hints: "Focus on property listings (address, price, bedrooms, sqft), agent bios, testimonials, market stats, neighborhoods, and open house events.",
+    hints: "Focus on property listings — each listing should be a separate data item with dataJson containing: address, price, bedrooms, bathrooms, sqft, city, state, type (e.g. 'listing'), status (e.g. 'active', 'sold'), and imageUrl if available. Also extract agent bios, testimonials, market stats, neighborhoods, and open house events. Mark each property listing item with dataJson.type = 'listing'.",
     priorityDataTypes: ["CUSTOM", "TESTIMONIAL", "STATISTIC", "EVENT"],
   },
   content: {

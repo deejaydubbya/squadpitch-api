@@ -185,7 +185,7 @@ async function processSlackJob({ webhookUrl, eventType, payload }) {
   }
 }
 
-async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payload, userId }) {
+async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payload, userId, replayOfId }) {
   // Create delivery log
   let logId;
   try {
@@ -195,6 +195,7 @@ async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payl
         eventType,
         requestBody: payload,
         status: "pending",
+        ...(replayOfId ? { replayOfId } : {}),
       },
     });
     logId = log.id;
@@ -203,7 +204,7 @@ async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payl
   }
 
   try {
-    const { responseStatus, responseBody } = await deliverWebhook({
+    const { responseStatus, responseBody, requestHeaders } = await deliverWebhook({
       targetUrl,
       secret,
       eventType,
@@ -219,6 +220,8 @@ async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payl
         data: {
           responseStatus,
           responseBody,
+          requestHeaders: requestHeaders ?? undefined,
+          deliveredAt: new Date(),
           status: success ? "success" : "failed",
           attemptCount: { increment: 1 },
         },
@@ -235,6 +238,7 @@ async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payl
       await prisma.webhookDeliveryLog.update({
         where: { id: logId },
         data: {
+          deliveredAt: new Date(),
           status: "failed",
           attemptCount: { increment: 1 },
         },

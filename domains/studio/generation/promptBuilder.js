@@ -232,9 +232,20 @@ export function buildSystemPrompt(ctx) {
     lines.push(`\nReal estate content rules:`);
     lines.push(`- Use specific property details (address, price, beds/baths) when available — never invent them`);
     lines.push(`- Reference the local market area naturally — sound like a local expert`);
-    lines.push(`- Avoid cliches: "dream home", "don't miss out", "act now", "stunning", "gorgeous"`);
     lines.push(`- Keep listings grounded — highlight real features, not superlatives`);
     lines.push(`- Include a soft CTA (schedule a showing, DM for details, link in bio) — never aggressive`);
+    lines.push(`- If a property detail is missing from the data, simply omit it — do not guess or fill in`);
+    lines.push(`\nNEVER invent or fabricate any of these:`);
+    lines.push(`- Open house dates or times`);
+    lines.push(`- Price reductions or price drop amounts`);
+    lines.push(`- Client testimonials, quotes, or names`);
+    lines.push(`- School ratings, crime statistics, or walk scores`);
+    lines.push(`- HOA fees or association details`);
+    lines.push(`- Square footage, beds, baths, or price if not in the listing data`);
+    lines.push(`- Neighborhood restaurants, shops, or landmarks not mentioned in the data`);
+    lines.push(`\nAvoid these clichés — they weaken credibility:`);
+    lines.push(`"dream home", "stunning", "gorgeous", "must-see", "act fast", "won't last", "hidden gem", "don't miss out", "act now", "once in a lifetime", "priced to sell", "turnkey"`);
+    lines.push(`\nSound like a real, knowledgeable agent sharing with their network — not a hype-heavy marketing bot.`);
     lines.push(`--- END REAL ESTATE SPECIALIZATION ---`);
   }
 
@@ -480,6 +491,7 @@ function formatListingForPrompt(listing) {
 
   lines.push(`\nUse these listing details naturally — do not dump them as a bullet list. Weave the most compelling details into the post.`);
   lines.push(`Only mention details listed above. Do not invent or assume any property features not provided.`);
+  lines.push(`If beds, baths, sqft, or price are not listed above, do NOT mention them at all — not even with hedging language like "spacious" or "affordable".`);
   lines.push(`--- END LISTING DATA ---`);
   return lines.join("\n");
 }
@@ -520,7 +532,7 @@ function buildRealEstateFallback(reCtx, hasListing, hasReviews) {
     lines.push(`- The agent's services, experience, and value proposition`);
     lines.push(`- Educational real estate content (buying tips, market trends, process guides)`);
     lines.push(`- Community highlights and local insights`);
-    lines.push(`Do not reference hypothetical listings or invent property details.`);
+    lines.push(`Do not reference hypothetical listings, invent property details, or create fake market statistics.`);
   }
 
   if (!hasReviews) {

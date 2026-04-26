@@ -11,7 +11,7 @@ import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 
 export async function listClients(userId) {
   return prisma.client.findMany({
-    where: { createdBy: userId, status: { not: "ARCHIVED" } },
+    where: { createdBy: userId, status: { notIn: ["ARCHIVED", "DRAFT"] } },
     orderBy: { createdAt: "desc" },
     include: {
       _count: {

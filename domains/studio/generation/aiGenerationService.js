@@ -171,6 +171,15 @@ export async function generateDraft({
     autoSelectedListing = true;
   }
 
+  // Prevent listing templates from generating fake data.
+  // If no real listing data is available, swap to a safe template type.
+  if (!dataItem && templateType && LISTING_TEMPLATE_TYPES.includes(templateType)) {
+    templateType = "brand_authority";
+    guidance = "Create a post that establishes your authority in real estate. " +
+      "Share a unique perspective, market insight, or professional tip. " +
+      "Do NOT reference any specific property listing or invent property details.";
+  }
+
   // Auto-select best blueprint if data item provided but no blueprint specified
   let resolvedBlueprintId = blueprintId;
   let autoSelectedSlug = null;

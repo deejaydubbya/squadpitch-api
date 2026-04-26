@@ -4,6 +4,10 @@ import { sendError } from "../../lib/apiErrors.js";
 import * as service from "./internal.service.js";
 import * as extService from "./externalServices.service.js";
 import * as betaService from "./betaOps.service.js";
+import * as jobsService from "./jobs.service.js";
+import * as webhooksService from "./webhooks.service.js";
+import * as systemHealthService from "./systemHealth.service.js";
+import * as configService from "./config.service.js";
 
 export const internalRouter = Router();
 
@@ -44,6 +48,15 @@ internalRouter.get(`${BASE}/workspaces/:id`, async (req, res, next) => {
     const detail = await service.getWorkspaceDetail(req.params.id);
     if (!detail) return sendError(res, 404, "NOT_FOUND", "Workspace not found");
     res.json(detail);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.delete(`${BASE}/workspaces`, requireInternalAccess, async (req, res, next) => {
+  try {
+    const result = await service.deleteAllWorkspaces();
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -345,6 +358,249 @@ internalRouter.delete(`${BASE}/beta/feedback/:id`, requireAdminRole, async (req,
   try {
     await betaService.deleteFeedback(req.params.id);
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Jobs Monitor ────────────────────────────────────────────────────────
+
+internalRouter.get(`${BASE}/jobs/summary`, async (req, res, next) => {
+  try {
+    const summary = await jobsService.getQueueSummary();
+    res.json({ items: summary });
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.get(`${BASE}/jobs`, async (req, res, next) => {
+  try {
+    const { queue, status, type, limit, offset } = req.query;
+    const result = await jobsService.listJobs({
+      queue: queue || undefined,
+      status: status || "failed",
+      type: type || undefined,
+      limit: limit ? parseInt(limit, 10) : 25,
+      offset: offset ? parseInt(offset, 10) : 0,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.get(`${BASE}/jobs/:queue/:jobId`, async (req, res, next) => {
+  try {
+    const detail = await jobsService.getJobDetail(req.params.queue, req.params.jobId);
+    if (!detail) return sendError(res, 404, "NOT_FOUND", "Job not found");
+    res.json(detail);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.post(`${BASE}/jobs/:queue/:jobId/retry`, requireAdminRole, async (req, res, next) => {
+  try {
+    const result = await jobsService.retryJob(req.params.queue, req.params.jobId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.delete(`${BASE}/jobs/:queue/:jobId`, requireAdminRole, async (req, res, next) => {
+  try {
+    const result = await jobsService.removeJob(req.params.queue, req.params.jobId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Webhooks Monitor ────────────────────────────────────────────────────
+
+internalRouter.get(`${BASE}/webhooks/summary`, async (req, res, next) => {
+  try {
+    const summary = await webhooksService.getWebhookSummary();
+    res.json(summary);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.get(`${BASE}/webhooks/endpoints`, async (req, res, next) => {
+  try {
+    const { status, search, limit } = req.query;
+    const items = await webhooksService.listEndpoints({
+      status: status || undefined,
+      search: search || undefined,
+      limit: limit ? parseInt(limit, 10) : 50,
+    });
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.get(`${BASE}/webhooks/endpoints/:id`, async (req, res, next) => {
+  try {
+    const detail = await webhooksService.getEndpointDetail(req.params.id);
+    if (!detail) return sendError(res, 404, "NOT_FOUND", "Webhook endpoint not found");
+    res.json(detail);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.patch(`${BASE}/webhooks/endpoints/:id/toggle`, requireAdminRole, async (req, res, next) => {
+  try {
+    const { isActive } = req.body;
+    if (typeof isActive !== "boolean") {
+      return sendError(res, 400, "INVALID_INPUT", "isActive must be a boolean");
+    }
+    const result = await webhooksService.toggleEndpoint(req.params.id, isActive);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.get(`${BASE}/webhooks/deliveries`, async (req, res, next) => {
+  try {
+    const { status, eventType, endpointId, userId, limit, cursor } = req.query;
+    const result = await webhooksService.listDeliveries({
+      status: status || undefined,
+      eventType: eventType || undefined,
+      endpointId: endpointId || undefined,
+      webhookUserId: userId || undefined,
+      limit: limit ? parseInt(limit, 10) : 50,
+      cursor: cursor || undefined,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.get(`${BASE}/webhooks/deliveries/:id`, async (req, res, next) => {
+  try {
+    const detail = await webhooksService.getDeliveryDetail(req.params.id);
+    if (!detail) return sendError(res, 404, "NOT_FOUND", "Delivery not found");
+    res.json(detail);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.post(`${BASE}/webhooks/deliveries/:id/replay`, requireAdminRole, async (req, res, next) => {
+  try {
+    const result = await webhooksService.replayDelivery(req.params.id);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── System Health ───────────────────────────────────────────────────────
+
+internalRouter.get(`${BASE}/system-health/summary`, async (req, res, next) => {
+  try {
+    const summary = await systemHealthService.getSystemHealthSummary();
+    res.json(summary);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Config / Feature Flags ──────────────────────────────────────────────
+
+internalRouter.get(`${BASE}/config/flags`, async (req, res, next) => {
+  try {
+    const { category, enabled, search, limit } = req.query;
+    const items = await configService.listFlags({
+      category: category || undefined,
+      enabled: enabled === "true" ? true : enabled === "false" ? false : undefined,
+      search: search || undefined,
+      limit: limit ? parseInt(limit, 10) : 100,
+    });
+    res.json({ items });
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.get(`${BASE}/config/flags/:id`, async (req, res, next) => {
+  try {
+    const flag = await configService.getFlag(req.params.id);
+    if (!flag) return sendError(res, 404, "NOT_FOUND", "Flag not found");
+    res.json(flag);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.post(`${BASE}/config/flags`, requireAdminRole, async (req, res, next) => {
+  try {
+    const adminId = req.auth?.payload?.sub || null;
+    const flag = await configService.createFlag(req.body, adminId);
+    res.status(201).json(flag);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.patch(`${BASE}/config/flags/:id`, requireAdminRole, async (req, res, next) => {
+  try {
+    const adminId = req.auth?.payload?.sub || null;
+    const flag = await configService.updateFlag(req.params.id, req.body, adminId);
+    res.json(flag);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.patch(`${BASE}/config/flags/:id/toggle`, requireAdminRole, async (req, res, next) => {
+  try {
+    const { enabled } = req.body;
+    if (typeof enabled !== "boolean") {
+      return sendError(res, 400, "INVALID_INPUT", "enabled must be a boolean");
+    }
+    const adminId = req.auth?.payload?.sub || null;
+    const flag = await configService.toggleFlag(req.params.id, enabled, adminId);
+    res.json(flag);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.delete(`${BASE}/config/flags/:id`, requireAdminRole, async (req, res, next) => {
+  try {
+    await configService.deleteFlag(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.post(`${BASE}/config/flags/seed`, requireAdminRole, async (req, res, next) => {
+  try {
+    const result = await configService.seedFlags();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+internalRouter.get(`${BASE}/config/flags/evaluate/:key`, async (req, res, next) => {
+  try {
+    const { userId, workspaceId, cohort } = req.query;
+    const result = await configService.evaluateFlag(req.params.key, {
+      userId: userId || undefined,
+      workspaceId: workspaceId || undefined,
+      cohort: cohort || undefined,
+    });
+    res.json({ key: req.params.key, active: result });
   } catch (err) {
     next(err);
   }
