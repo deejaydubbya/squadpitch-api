@@ -199,7 +199,7 @@ export async function checkClientLimit(userId) {
   });
   if (!user) return false;
   const count = await prisma.client.count({
-    where: { createdBy: user.auth0Sub, status: { not: "ARCHIVED" } },
+    where: { createdBy: user.auth0Sub, status: { notIn: ["ARCHIVED", "DRAFT"] } },
   });
   return count < limit;
 }
