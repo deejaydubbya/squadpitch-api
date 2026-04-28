@@ -59,14 +59,14 @@ async function metaCall(url, params) {
 }
 
 /**
- * Poll a media container until it finishes processing (for video/Reels).
- * Max 30 polls × 2s = 60s timeout.
+ * Poll a media container until it finishes processing.
+ * Instagram must download and process the media from the URL before it can
+ * be published. Images are usually fast (~1-5s), videos/Reels can take up to
+ * 60s. Without this check, the /media_publish call returns
+ * "Media ID is not available".
  */
-async function pollContainerUntilReady(containerId, token) {
-  const MAX_POLLS = 30;
-  const POLL_INTERVAL_MS = 2000;
-
-  for (let i = 0; i < MAX_POLLS; i++) {
+async function pollContainerUntilReady(containerId, token, { maxPolls = 30, intervalMs = 2000 } = {}) {
+  for (let i = 0; i < maxPolls; i++) {
     const res = await fetch(
       `${GRAPH_BASE}/${containerId}?fields=status_code&access_token=${encodeURIComponent(token)}`
     );
@@ -75,17 +75,18 @@ async function pollContainerUntilReady(containerId, token) {
     if (body.status_code === "FINISHED") return;
     if (body.status_code === "ERROR") {
       throw new InstagramPublishError(
-        "Instagram Reels container processing failed",
+        `Instagram container processing failed${body.status ? `: ${body.status}` : ""}`,
         { metaError: body }
       );
     }
 
     // Wait before next poll
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
 
+  const timeoutSec = Math.round((maxPolls * intervalMs) / 1000);
   throw new InstagramPublishError(
-    "Instagram Reels container timed out after 60s",
+    `Instagram container timed out after ${timeoutSec}s`,
     { status: 504, code: "INSTAGRAM_CONTAINER_TIMEOUT" }
   );
 }
@@ -157,9 +158,13 @@ export const instagramAdapter = {
       );
     }
 
-    // Step 1b: for video/Reels, poll until container is ready
+    // Step 1b: poll until container is ready.
+    // Instagram must download the media from the URL before publishing.
+    // Images: usually 1-5s, poll up to ~15s. Videos/Reels: up to 60s.
     if (isVideo) {
-      await pollContainerUntilReady(container.id, token);
+      await pollContainerUntilReady(container.id, token, { maxPolls: 30, intervalMs: 2000 });
+    } else {
+      await pollContainerUntilReady(container.id, token, { maxPolls: 10, intervalMs: 1500 });
     }
 
     // Step 2: publish container
