@@ -6,6 +6,13 @@
 
 import { prisma } from "../../prisma.js";
 
+const DRAFT_ASSET_INCLUDE = {
+  draftAssets: {
+    include: { asset: { select: { id: true, url: true, thumbnailUrl: true, assetType: true, filename: true } } },
+    orderBy: { orderIndex: "asc" },
+  },
+};
+
 export async function listDrafts({
   clientId,
   status,
@@ -21,6 +28,7 @@ export async function listDrafts({
       ...(kind && { kind }),
       ...(channel && { channel }),
     },
+    include: DRAFT_ASSET_INCLUDE,
     orderBy: { createdAt: "desc" },
     take: limit,
     ...(cursor && { skip: 1, cursor: { id: cursor } }),
@@ -30,6 +38,7 @@ export async function listDrafts({
 export async function getDraft(draftId) {
   return prisma.draft.findUnique({
     where: { id: draftId },
+    include: DRAFT_ASSET_INCLUDE,
   });
 }
 
@@ -295,6 +304,16 @@ export function formatDraft(draft) {
     publishedAt: draft.publishedAt,
     createdAt: draft.createdAt,
     updatedAt: draft.updatedAt,
+    // Linked media assets (from DraftAsset join table)
+    mediaAssets: (draft.draftAssets ?? []).map((da) => ({
+      id: da.asset.id,
+      url: da.asset.url,
+      thumbnailUrl: da.asset.thumbnailUrl ?? null,
+      assetType: da.asset.assetType ?? "image",
+      filename: da.asset.filename ?? null,
+      role: da.role,
+      orderIndex: da.orderIndex,
+    })),
     // Campaign fields
     campaignId: draft.campaignId ?? null,
     campaignName: draft.campaignName ?? null,
