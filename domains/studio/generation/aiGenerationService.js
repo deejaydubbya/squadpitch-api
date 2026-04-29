@@ -148,9 +148,17 @@ export async function generateDraft({
 }) {
   const ctx = await loadClientGenerationContext(clientId);
 
-  // Load real estate generation assets when applicable
+  // Detect no-data idea post from frontend guidance marker
+  const isNoDataIdeaPost = guidance?.includes("[NO_DATA_IDEA_POST]") || guidance?.includes("no-data educational/idea post");
+  const isMythBuster = guidance?.includes("[MYTH_BUSTER]") || (isNoDataIdeaPost && guidance?.toLowerCase().includes("myth"));
+
+  if (isNoDataIdeaPost) {
+    console.log('[GENERATION] No-data idea post detected — skipping real estate assets and listing context');
+  }
+
+  // Load real estate generation assets when applicable — skip for no-data idea posts
   let realEstateAssets = null;
-  if (ctx.industryKey === "real_estate" && ctx.realEstateContext) {
+  if (!isNoDataIdeaPost && ctx.industryKey === "real_estate" && ctx.realEstateContext) {
     try {
       realEstateAssets = await loadRealEstateGenerationAssets(clientId, ctx.realEstateContext);
     } catch {
@@ -158,15 +166,16 @@ export async function generateDraft({
     }
   }
 
-  // Load optional business data + blueprint
-  let dataItem = dataItemId
+  // Load optional business data + blueprint — force null for no-data idea posts
+  let dataItem = (!isNoDataIdeaPost && dataItemId)
     ? await prisma.workspaceDataItem.findUnique({ where: { id: dataItemId } })
     : null;
 
   // Auto-select best listing for listing-type templates when no dataItem specified
+  // Never auto-select for no-data idea posts
   const LISTING_TEMPLATE_TYPES = ["listing_post", "just_listed", "featured_property", "open_house", "price_drop_alert"];
   let autoSelectedListing = false;
-  if (!dataItem && realEstateAssets?.bestListingSource && templateType && LISTING_TEMPLATE_TYPES.includes(templateType)) {
+  if (!isNoDataIdeaPost && !dataItem && realEstateAssets?.bestListingSource && templateType && LISTING_TEMPLATE_TYPES.includes(templateType)) {
     dataItem = realEstateAssets.bestListingSource;
     autoSelectedListing = true;
   }
@@ -178,6 +187,16 @@ export async function generateDraft({
     guidance = "Create a post that establishes your authority in real estate. " +
       "Share a unique perspective, market insight, or professional tip. " +
       "Do NOT reference any specific property listing or invent property details.";
+  }
+
+  // For no-data idea posts, strengthen guidance to prevent listing references
+  if (isNoDataIdeaPost) {
+    const noDataGuidance = "Write a general educational real estate post. Do not mention a property, listing, address, price, square footage, bedrooms, bathrooms, neighborhood, seller, buyer, or showing.";
+    const mythGuidance = isMythBuster
+      ? " Debunk one common real estate myth in general terms."
+      : "";
+    // Append stronger guidance to whatever the frontend already sent
+    guidance = (guidance ?? "") + " " + noDataGuidance + mythGuidance;
   }
 
   // Auto-select best blueprint if data item provided but no blueprint specified
@@ -207,9 +226,9 @@ export async function generateDraft({
     bucketKey,
     guidance,
     templateType,
-    dataItem,
-    blueprint,
-    realEstateAssets,
+    dataItem: isNoDataIdeaPost ? null : dataItem,
+    blueprint: isNoDataIdeaPost ? null : blueprint,
+    realEstateAssets: isNoDataIdeaPost ? null : realEstateAssets,
     contentAngle,
   });
   const responseFormat = buildResponseFormat();
@@ -248,7 +267,42 @@ export async function generateDraft({
     });
   }
 
-  const content = normalizeGeneratedContent(result.parsed);
+  let content = normalizeGeneratedContent(result.parsed);
+
+  // Guardrail: for no-data idea posts, reject content that references listings
+  if (isNoDataIdeaPost && content.body) {
+    const listingTerms = /\$\d|bedroom|bathroom|sq\s*ft|square\s*feet|listing|showing|open\s*house/i;
+    if (listingTerms.test(content.body)) {
+      console.log('[GENERATION] No-data guardrail triggered — body contains listing terms, regenerating with stricter guidance');
+      try {
+        const stricterGuidance = (guidance ?? "") +
+          " CRITICAL: Your previous response contained property-specific language. " +
+          "Do NOT use dollar amounts, bedroom/bathroom counts, square footage, " +
+          "or words like 'listing', 'showing', or 'open house'. " +
+          "Write ONLY general educational content.";
+        const retryPrompt = buildUserPrompt(ctx, {
+          kind, channel, bucketKey,
+          guidance: stricterGuidance,
+          templateType, dataItem: null, blueprint: null,
+          realEstateAssets: null, contentAngle,
+        });
+        const retry = await generateStructuredContent({
+          systemPrompt, userPrompt: retryPrompt,
+          responseFormat, taskType: "generation", temperature: 0.5,
+        });
+        const retryContent = normalizeGeneratedContent(retry.parsed);
+        if (!listingTerms.test(retryContent.body)) {
+          content = retryContent;
+          console.log('[GENERATION] No-data guardrail retry succeeded');
+        } else {
+          console.log('[GENERATION] No-data guardrail retry still has listing terms — using anyway');
+        }
+      } catch (retryErr) {
+        console.log('[GENERATION] No-data guardrail retry failed', retryErr);
+        // Use original content
+      }
+    }
+  }
 
   const promptVersion = ctx.voice?.version ?? 1;
 
@@ -272,11 +326,12 @@ export async function generateDraft({
       imageGuidance: content.imageGuidance,
       videoGuidance: content.videoGuidance,
       warnings: [
+        ...(isNoDataIdeaPost ? ["source:idea_post"] : []),
         ...(autoSelectedSlug ? [`auto_blueprint: ${autoSelectedSlug}`] : []),
         ...(autoSelectedListing ? [`re_auto_listing: ${dataItem?.title ?? "unknown"}`] : []),
-        ...(realEstateAssets ? [`re_assets: listings=${realEstateAssets.listingCount} reviews=${realEstateAssets.reviewCount}`] : []),
-        ...(realEstateAssets?.rotationApplied ? ["re_rotation: applied"] : []),
-        ...(realEstateAssets && !realEstateAssets.bestListing && !dataItem ? ["re_fallback: no_listing"] : []),
+        ...(!isNoDataIdeaPost && realEstateAssets ? [`re_assets: listings=${realEstateAssets.listingCount} reviews=${realEstateAssets.reviewCount}`] : []),
+        ...(!isNoDataIdeaPost && realEstateAssets?.rotationApplied ? ["re_rotation: applied"] : []),
+        ...(!isNoDataIdeaPost && realEstateAssets && !realEstateAssets.bestListing && !dataItem ? ["re_fallback: no_listing"] : []),
         ...(recommendationId ? [`recommendation: ${recommendationId}`] : []),
       ].filter(Boolean),
       createdBy,
@@ -295,8 +350,8 @@ export async function generateDraft({
     incrementDataItemUsage(dataItem.id).catch(() => {});
   }
 
-  // Auto-attach image from data item if available
-  if (dataItem?.dataJson?.imageUrl && !draft.mediaUrl) {
+  // Auto-attach image from data item if available (skip for no-data idea posts)
+  if (!isNoDataIdeaPost && dataItem?.dataJson?.imageUrl && !draft.mediaUrl) {
     draft.mediaUrl = dataItem.dataJson.imageUrl;
     draft.mediaType = "image";
     await prisma.draft.update({

@@ -284,6 +284,7 @@ export const UpdateDraftSchema = z.object({
   altText: z.string().max(2000).nullable().optional(),
   channel: ChannelEnum.optional(),
   mediaUrl: z.string().url().nullable().optional(),
+  mediaAssetIds: z.array(z.string()).max(6).optional(),
 });
 
 export const RejectDraftSchema = z.object({

@@ -5,6 +5,7 @@
 
 import { prisma } from "../../prisma.js";
 import { getImageStorageService, getVideoStorageService } from "../../services/storage/imageStorage.js";
+import { enforceUsageLimit, incrementUsage, checkStorageLimit } from "../billing/billing.service.js";
 import * as driveProvider from "./providers/driveProvider.js";
 import * as dropboxProvider from "./providers/dropboxProvider.js";
 
@@ -60,6 +61,23 @@ export async function importFile(userId, integrationId, fileRef, clientId) {
     throw Object.assign(new Error(`Unsupported file type: ${mimeType}`), { status: 400 });
   }
 
+  // Enforce usage & storage limits before uploading
+  const usageField = isVideo ? "videos" : "images";
+  const quotaErr = await enforceUsageLimit(userId, usageField);
+  if (quotaErr) {
+    const err = new Error(`Monthly ${usageField} limit reached. Upgrade your plan for more.`);
+    err.status = 402;
+    err.code = isVideo ? "VIDEO_LIMIT_EXCEEDED" : "IMAGE_LIMIT_EXCEEDED";
+    throw err;
+  }
+  const storageCheck = await checkStorageLimit(userId, buffer.length, isVideo);
+  if (!storageCheck.allowed) {
+    const err = new Error(storageCheck.reason);
+    err.status = 402;
+    err.code = "STORAGE_LIMIT";
+    throw err;
+  }
+
   // Upload to Cloudinary
   let cloudResult;
   if (isVideo) {
@@ -89,6 +107,8 @@ export async function importFile(userId, integrationId, fileRef, clientId) {
       createdBy: userId,
     },
   });
+
+  await incrementUsage(userId, usageField);
 
   // Log the import
   try {

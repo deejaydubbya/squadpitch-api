@@ -83,17 +83,18 @@ export async function redisDel(key) {
   }
 }
 
-let bullmqConnection = null;
-
+/**
+ * Create a NEW ioredis connection for BullMQ.
+ * BullMQ requires separate connections for Queues vs Workers (Workers use
+ * blocking commands). Each caller gets its own connection.
+ */
 export function getRedisConnection() {
-  if (bullmqConnection) return bullmqConnection;
-
   if (!env.REDIS_URL) {
     console.warn("[REDIS] No REDIS_URL configured — BullMQ connection unavailable");
     return null;
   }
 
-  bullmqConnection = new Redis(env.REDIS_URL, {
+  const conn = new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
     lazyConnect: true,
@@ -102,17 +103,17 @@ export function getRedisConnection() {
     },
   });
 
-  bullmqConnection.on("error", (err) => {
+  conn.on("error", (err) => {
     console.error("[REDIS BULLMQ] Connection error:", err.message);
   });
 
-  bullmqConnection.on("connect", () => {
+  conn.on("connect", () => {
     console.log("[REDIS BULLMQ] Connected");
   });
 
-  bullmqConnection.connect().catch(() => {});
+  conn.connect().catch(() => {});
 
-  return bullmqConnection;
+  return conn;
 }
 
 export async function redisPing() {

@@ -124,6 +124,7 @@ import * as listingFeedService from "./listingFeed.service.js";
 import * as trackableLinkService from "./trackableLink.service.js";
 import { logConversionEvent } from "./conversionEvent.service.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
+import { requireTier } from "../../middleware/requireTier.js";
 import { validateDraftMedia } from "./publishing/publishingService.js";
 import { enrichListingById, enrichAllListings } from "../industry/propertyEnrichment.service.js";
 import { evaluateStaleListings, getEvents } from "./listingEvents.service.js";
@@ -3232,6 +3233,7 @@ studioRouter.get(
 studioRouter.put(
   `${BASE}/workspaces/:id/autopilot/settings`,
   requireClientOwner,
+  requireTier("PRO"),
   async (req, res, next) => {
     try {
       const parsed = AutopilotSettingsSchema.safeParse(req.body);
@@ -3252,6 +3254,7 @@ studioRouter.put(
 studioRouter.post(
   `${BASE}/workspaces/:id/autopilot/run`,
   requireClientOwner,
+  requireTier("PRO"),
   async (req, res, next) => {
     try {
       const result = await runAutopilot(req.params.id, { mode: "manual" });
@@ -3287,6 +3290,7 @@ studioRouter.get(
 studioRouter.post(
   `${BASE}/workspaces/:id/autopilot/scheduled-run`,
   requireClientOwner,
+  requireTier("PRO"),
   async (req, res, next) => {
     try {
       const result = await runScheduledAutopilot(req.params.id);
@@ -3965,6 +3969,10 @@ studioRouter.post(
       const clientId = req.params.id;
       const userId = req.user.id;
 
+      // Enforce image usage limit before uploading
+      const quotaErr = await enforceUsageLimit(userId, "images");
+      if (quotaErr) return sendError(res, 402, "IMAGE_LIMIT_EXCEEDED", "Monthly image limit reached. Upgrade your plan for more.", quotaErr);
+
       const uploaded = [];
       for (const img of images) {
         if (!img || typeof img !== "object") continue;
@@ -4014,6 +4022,7 @@ studioRouter.post(
               createdBy: userId,
             },
           });
+          await incrementUsage(userId, "images");
           uploaded.push({
             id: asset.id,
             url: asset.url,
@@ -4145,6 +4154,7 @@ studioRouter.post(
         for (let dIdx = 0; dIdx < drafts.length; dIdx += 1) {
           const draft = drafts[dIdx];
           const post = campaign.posts[dIdx];
+          console.log('[MEDIA SAVE] campaign post assignedImageIds', post?.assignedImageIds);
           // Per-post assigned images take priority
           const perPost = Array.isArray(post?.assignedImageIds) && post.assignedImageIds.length > 0
             ? post.assignedImageIds.filter((id) => validAssetIdSet.has(id))
@@ -4186,12 +4196,22 @@ studioRouter.post(
                   data: { mediaUrl: info.url, mediaType: info.type || "image" },
                 })
               );
+              // Update the in-memory draft so the response includes mediaUrl
+              const draftObj = drafts.find((d) => d.id === draftId);
+              if (draftObj) {
+                draftObj.mediaUrl = info.url;
+                draftObj.mediaType = info.type || "image";
+              }
             }
           }
           if (updates.length > 0) await Promise.all(updates);
         }
       }
 
+      // Log final media state for each draft
+      for (const d of drafts) {
+        console.log('[MEDIA SAVE] campaign draft mediaUrl', d.id, d.mediaUrl);
+      }
       res.json({ drafts, campaignId, campaignName, attachedAssetCount: validAssetIds.length });
     } catch (err) {
       next(err);

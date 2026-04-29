@@ -39,6 +39,15 @@ export async function getDraft(draftId) {
  * locked for audit purposes.
  */
 export async function updateDraft(draftId, patch) {
+  console.log('[DRAFT PATCH] updateDraft called', {
+    draftId,
+    hasMediaUrl: patch.mediaUrl !== undefined,
+    mediaUrl: patch.mediaUrl?.slice?.(0, 80),
+    hasMediaAssetIds: Array.isArray(patch.mediaAssetIds),
+    mediaAssetIds: patch.mediaAssetIds,
+    patchKeys: Object.keys(patch),
+  });
+
   const existing = await prisma.draft.findUnique({
     where: { id: draftId },
   });
@@ -52,7 +61,7 @@ export async function updateDraft(draftId, patch) {
     );
   }
 
-  return prisma.draft.update({
+  const draft = await prisma.draft.update({
     where: { id: draftId },
     data: {
       ...(patch.body !== undefined && { body: patch.body }),
@@ -64,6 +73,68 @@ export async function updateDraft(draftId, patch) {
       ...(patch.mediaUrl !== undefined && { mediaUrl: patch.mediaUrl, mediaType: patch.mediaUrl ? "image" : null }),
     },
   });
+
+  console.log('[DRAFT PATCH] after update', {
+    draftId,
+    savedMediaUrl: draft.mediaUrl?.slice?.(0, 80),
+    savedMediaType: draft.mediaType,
+  });
+
+  // Sync DraftAsset rows when mediaAssetIds are provided
+  if (Array.isArray(patch.mediaAssetIds)) {
+    console.log('[MEDIA SAVE] updateDraft received mediaAssetIds', patch.mediaAssetIds);
+
+    // Remove existing DraftAsset rows for this draft
+    await prisma.draftAsset.deleteMany({ where: { draftId } });
+
+    if (patch.mediaAssetIds.length > 0) {
+      // Validate assets belong to the draft's workspace
+      const validAssets = await prisma.mediaAsset.findMany({
+        where: { id: { in: patch.mediaAssetIds }, clientId: existing.clientId },
+        select: { id: true, url: true, assetType: true },
+      });
+      const validAssetMap = new Map(validAssets.map((a) => [a.id, a]));
+      const validIds = patch.mediaAssetIds.filter((id) => validAssetMap.has(id));
+
+      if (validIds.length === 0) {
+        console.log('[MEDIA SAVE] updateDraft — no valid assets found for workspace', existing.clientId);
+      }
+
+      if (validIds.length > 0) {
+        // Create new rows
+        await prisma.draftAsset.createMany({
+          data: validIds.map((assetId, i) => ({
+            draftId,
+            assetId,
+            role: i === 0 ? "primary" : null,
+            orderIndex: i,
+          })),
+        });
+
+        // Hydrate draft.mediaUrl from the primary asset
+        const primary = validAssetMap.get(validIds[0]);
+        console.log('[MEDIA SAVE] updateDraft primary asset', primary?.id, primary?.url);
+        if (primary?.url) {
+          await prisma.draft.update({
+            where: { id: draftId },
+            data: {
+              mediaUrl: primary.url,
+              mediaType: primary.assetType ?? "image",
+            },
+          });
+          draft.mediaUrl = primary.url;
+          draft.mediaType = primary.assetType ?? "image";
+        }
+      }
+    }
+    console.log('[MEDIA SAVE] updateDraft returning', draft.mediaUrl, draft.mediaType);
+
+    // Re-fetch to ensure the response includes hydrated mediaUrl
+    const freshDraft = await prisma.draft.findUnique({ where: { id: draftId } });
+    if (freshDraft) return freshDraft;
+  }
+
+  return draft;
 }
 
 export async function deleteDraft(draftId) {

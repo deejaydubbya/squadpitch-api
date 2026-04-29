@@ -264,7 +264,13 @@ export async function enqueueGeneration({
     throw { status: 400, code: "NO_MEDIA_PROFILE", message: "Client has no media profile" };
   }
 
-  const renderedPrompt = buildImagePrompt(mediaProfile, guidance);
+  const enrichment = {
+    brandName: ctx.client?.name,
+    industry: ctx.client?.industryKey ?? ctx.brand?.industry,
+    channel,
+  };
+
+  const renderedPrompt = buildImagePrompt(mediaProfile, guidance, enrichment);
   const { modelId, loraConfig } = resolveModelConfig(mediaProfile);
 
   const asset = await prisma.mediaAsset.create({
@@ -309,8 +315,14 @@ export async function enqueueGeneration({
  * Build the image generation prompt. Order matters — Flux/SDXL weight tokens
  * from the front, so subject guidance comes first, style/character second,
  * and LoRA trigger word last (where the model expects it).
+ *
+ * @param {object} enrichment - Optional context for better prompts
+ * @param {string} enrichment.brandName - Brand/workspace name
+ * @param {string} enrichment.industry - Industry key (e.g. "real_estate")
+ * @param {string} enrichment.channel - Target channel (e.g. "INSTAGRAM")
+ * @param {string} enrichment.angle - Content angle (e.g. "lifestyle")
  */
-export function buildImagePrompt(mediaProfile, guidance) {
+export function buildImagePrompt(mediaProfile, guidance, enrichment = {}) {
   const parts = [];
 
   // 1. Subject / guidance first (highest weight)
@@ -328,18 +340,66 @@ export function buildImagePrompt(mediaProfile, guidance) {
     parts.push("professional photography, high quality, sharp focus, well-lit");
   }
 
-  // 3. Character prompt (identity details)
+  // 3. Industry-specific style hints
+  if (enrichment.industry) {
+    const industryHints = INDUSTRY_STYLE_HINTS[enrichment.industry];
+    if (industryHints) parts.push(industryHints);
+  }
+
+  // 4. Channel-specific style notes
+  if (enrichment.channel) {
+    const channelHint = CHANNEL_STYLE_HINTS[enrichment.channel];
+    if (channelHint) parts.push(channelHint);
+  }
+
+  // 5. Angle-specific style influence
+  if (enrichment.angle) {
+    const angleHint = ANGLE_STYLE_HINTS[enrichment.angle];
+    if (angleHint) parts.push(angleHint);
+  }
+
+  // 6. Character prompt (identity details)
   if (mediaProfile.characterPrompt) {
     parts.push(mediaProfile.characterPrompt);
   }
 
-  // 4. LoRA trigger word last
+  // 7. LoRA trigger word last
   if (mediaProfile.loraTriggerWord) {
     parts.push(mediaProfile.loraTriggerWord);
   }
 
+  // 8. Universal safety suffix
+  parts.push("no text overlays, no watermarks, no logos");
+
   return parts.join(", ").trim();
 }
+
+const INDUSTRY_STYLE_HINTS = {
+  real_estate: "lifestyle and architectural photography, natural lighting, no fake property photos",
+  automotive: "sleek automotive photography, showroom lighting, dynamic angles",
+  fitness: "energetic fitness photography, natural movement, motivational atmosphere",
+  food: "appetizing food photography, warm tones, shallow depth of field",
+  fashion: "editorial fashion photography, clean backgrounds, confident poses",
+  beauty: "soft beauty photography, flawless lighting, aspirational aesthetic",
+};
+
+const CHANNEL_STYLE_HINTS = {
+  INSTAGRAM: "visually striking, square-friendly composition",
+  TIKTOK: "vertical composition, vibrant colors, eye-catching",
+  YOUTUBE: "cinematic wide composition, thumbnail-worthy",
+  LINKEDIN: "professional, clean, corporate-friendly",
+  FACEBOOK: "warm and approachable, community-focused",
+  X: "bold and attention-grabbing, works at small sizes",
+};
+
+const ANGLE_STYLE_HINTS = {
+  lifestyle: "warm scene, people enjoying spaces, aspirational living",
+  feature: "detailed close-up, highlighting quality and craftsmanship",
+  exterior: "wide establishing shot, curb appeal, natural surroundings",
+  aerial: "drone perspective, bird's eye view, expansive landscape",
+  authority: "professional portrait setting, confident and approachable",
+  social_proof: "community gathering, happy people, authentic moments",
+};
 
 const DEFAULT_NEGATIVE_PROMPT =
   "blurry, low quality, text, watermark, logo, distorted, deformed, disfigured, bad anatomy, extra limbs, cropped, out of frame";
