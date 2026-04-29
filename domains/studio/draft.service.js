@@ -48,15 +48,6 @@ export async function getDraft(draftId) {
  * locked for audit purposes.
  */
 export async function updateDraft(draftId, patch) {
-  console.log('[DRAFT PATCH] updateDraft called', {
-    draftId,
-    hasMediaUrl: patch.mediaUrl !== undefined,
-    mediaUrl: patch.mediaUrl?.slice?.(0, 80),
-    hasMediaAssetIds: Array.isArray(patch.mediaAssetIds),
-    mediaAssetIds: patch.mediaAssetIds,
-    patchKeys: Object.keys(patch),
-  });
-
   const existing = await prisma.draft.findUnique({
     where: { id: draftId },
   });
@@ -81,12 +72,6 @@ export async function updateDraft(draftId, patch) {
       ...(patch.channel !== undefined && { channel: patch.channel }),
       ...(patch.mediaUrl !== undefined && { mediaUrl: patch.mediaUrl, mediaType: patch.mediaUrl ? "image" : null }),
     },
-  });
-
-  console.log('[DRAFT PATCH] after update', {
-    draftId,
-    savedMediaUrl: draft.mediaUrl?.slice?.(0, 80),
-    savedMediaType: draft.mediaType,
   });
 
   // Sync DraftAsset rows when mediaAssetIds are provided
