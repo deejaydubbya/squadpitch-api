@@ -269,6 +269,7 @@ export function formatDraft(draft) {
     altText: draft.altText,
     imageGuidance: draft.imageGuidance ?? null,
     videoGuidance: draft.videoGuidance ?? null,
+    mediaPlan: draft.mediaPlan ?? null,
     warnings: draft.warnings ?? [],
     ...(sourceMeta && { sourceMeta }),
     mediaUrl: draft.mediaUrl ?? null,

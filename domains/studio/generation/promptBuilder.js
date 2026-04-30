@@ -9,6 +9,54 @@ import { buildContentContext } from "../../industry/contentContextBuilder.js";
 import { buildPatternPromptBlock } from "../viralPatterns.js";
 
 /**
+ * Structured media recommendation produced alongside every generated post.
+ * Tells the frontend what kind of visual to use, where to source it, and why.
+ */
+const MEDIA_PLAN_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    recommendedMediaType: {
+      type: "string",
+      enum: ["image", "video", "carousel", "none"],
+    },
+    visualConcept: {
+      type: "string",
+      description: "1-2 sentence description of the ideal visual.",
+    },
+    prompt: {
+      type: "string",
+      description: "Ready-to-use AI generation prompt. Empty string if recommendedMediaType is 'none'.",
+    },
+    negativePrompt: {
+      type: "string",
+      description: "What to avoid in AI generation. Empty string if n/a.",
+    },
+    style: {
+      type: "string",
+      description: "Visual style (e.g. 'editorial photography', 'clean minimal'). Empty string if n/a.",
+    },
+    reason: {
+      type: "string",
+      description: "One sentence explaining the media recommendation.",
+    },
+    fallbackStrategy: {
+      type: "string",
+      description: "What to do if AI generation fails (e.g. 'use exterior property photo').",
+    },
+    preferredSources: {
+      type: "array",
+      items: {
+        type: "string",
+        enum: ["property_images", "brand_library", "ai_generated", "stock_like", "none"],
+      },
+      description: "Ordered preferred media sources, best first.",
+    },
+  },
+  required: ["recommendedMediaType", "visualConcept", "prompt", "negativePrompt", "style", "reason", "fallbackStrategy", "preferredSources"],
+};
+
+/**
  * JSON schema consumed by OpenAI's response_format: { type: "json_schema" }.
  * This is the authoritative shape that drafts are persisted in.
  */
@@ -96,8 +144,9 @@ export const CONTENT_OUTPUT_SCHEMA = {
         description:
           "Detailed scene description for AI video generation — describe the ideal video scene, camera movement, pacing, transitions, and visual mood. Include what the viewer should see in motion: subject action, environment, camera angles, and tempo. Empty string if not applicable.",
       },
+      mediaPlan: MEDIA_PLAN_SCHEMA,
     },
-    required: ["body", "hooks", "hashtags", "cta", "variations", "scoredHooks", "altText", "imageGuidance", "videoGuidance"],
+    required: ["body", "hooks", "hashtags", "cta", "variations", "scoredHooks", "altText", "imageGuidance", "videoGuidance", "mediaPlan"],
   },
 };
 
@@ -730,6 +779,24 @@ HOOKS — generate 5–10 scored opening hooks in the 'scoredHooks' array:
 - Vary styles: bold claims, questions, numbers, stories, surprises, contrarian takes
 - The best hook should also be the first line of the Version A body`);
 
+  lines.push(`
+MEDIA PLAN — populate the 'mediaPlan' object:
+- recommendedMediaType: image (most posts), video (walkthroughs, tutorials, BTS), carousel (multi-feature, step-by-step), none (rare)
+- visualConcept: What the viewer should see
+- prompt: Detailed AI generation prompt — composition, lighting, color palette, mood, style
+- negativePrompt: What to avoid (text overlays, watermarks, etc.)
+- style: Visual style suggestion
+- reason: One sentence explaining your recommendation
+- fallbackStrategy: What to do if AI generation fails
+- preferredSources ordered list. RULES:
+  - Listing/property posts → ["property_images", "brand_library", "ai_generated"]
+  - Testimonial posts → ["brand_library", "property_images"] — NEVER invent people or client photos
+  - Educational/tip posts → ["ai_generated", "brand_library"]
+  - Market update posts → ["brand_library", "ai_generated"]
+  - Personal brand posts → ["brand_library"]
+  - NEVER suggest AI-generated images of real properties when property photos exist
+  - NEVER suggest AI-generated testimonial images or fake client photos`);
+
   lines.push(
     "\nRespond with JSON matching the draft schema."
   );
@@ -805,6 +872,7 @@ export const CAMPAIGN_OUTPUT_SCHEMA = {
               type: "string",
               description: "Label of the suggested image for this post (e.g. 'exterior', 'kitchen')",
             },
+            mediaPlan: MEDIA_PLAN_SCHEMA,
             slotType: {
               type: "string",
               enum: ["social_post", "email", "listing_description"],
@@ -824,7 +892,7 @@ export const CAMPAIGN_OUTPUT_SCHEMA = {
               description: "Email subject line. Empty string if not an email post.",
             },
           },
-          required: ["campaignDay", "channel", "angle", "label", "body", "bodyAlt", "hookScore", "imageHint", "slotType", "hashtags", "cta", "subject"],
+          required: ["campaignDay", "channel", "angle", "label", "body", "bodyAlt", "hookScore", "imageHint", "mediaPlan", "slotType", "hashtags", "cta", "subject"],
         },
       },
     },
@@ -1044,6 +1112,25 @@ RULES:`);
 - For each post, suggest which property image best fits this post in \`imageHint\` — use the image labels provided above (e.g. 'exterior', 'kitchen'). If no images were provided, leave imageHint empty.
 - Set \`slotType\` to 'social_post' for all social media posts, 'email' for email content, 'listing_description' for MLS/website listings.`);
 
+  lines.push(`
+MEDIA PLAN — for each post, populate the 'mediaPlan' object:
+- recommendedMediaType: image (most posts), video (walkthroughs, tutorials, BTS), carousel (multi-feature, step-by-step), none (rare)
+- visualConcept: What the viewer should see
+- prompt: Detailed AI generation prompt — composition, lighting, color palette, mood, style
+- negativePrompt: What to avoid (text overlays, watermarks, etc.)
+- style: Visual style suggestion
+- reason: One sentence explaining your recommendation
+- fallbackStrategy: What to do if AI generation fails
+- preferredSources ordered list. RULES:
+  - Listing/property posts → ["property_images", "brand_library", "ai_generated"]
+  - Testimonial posts → ["brand_library", "property_images"] — NEVER invent people or client photos
+  - Educational/tip posts → ["ai_generated", "brand_library"]
+  - Market update posts → ["brand_library", "ai_generated"]
+  - Personal brand posts → ["brand_library"]
+  - NEVER suggest AI-generated images of real properties when property photos exist
+  - NEVER suggest AI-generated testimonial images or fake client photos
+- Match imageHint to mediaPlan — they should be consistent.`);
+
   lines.push("\nRespond with JSON matching the listing_campaign schema.");
 
   return lines.join("\n");
@@ -1110,6 +1197,7 @@ export const SINGLE_POST_SCHEMA = {
             type: "string",
             description: "Label of the suggested image for this post (e.g. 'exterior', 'kitchen')",
           },
+          mediaPlan: MEDIA_PLAN_SCHEMA,
           slotType: {
             type: "string",
             enum: ["social_post", "email", "listing_description"],
@@ -1129,7 +1217,7 @@ export const SINGLE_POST_SCHEMA = {
             description: "Email subject line. Empty string if not an email post.",
           },
         },
-        required: ["campaignDay", "channel", "angle", "label", "body", "bodyAlt", "hookScore", "imageHint", "slotType", "hashtags", "cta", "subject"],
+        required: ["campaignDay", "channel", "angle", "label", "body", "bodyAlt", "hookScore", "imageHint", "mediaPlan", "slotType", "hashtags", "cta", "subject"],
       },
     },
     required: ["post"],
@@ -1195,6 +1283,24 @@ RULES:
 - Suggest which property image best fits this post in \`imageHint\` — use the image labels provided above. If no images were provided, leave imageHint empty.
 - Set \`slotType\` to 'social_post' for social media posts, 'email' for email content, 'listing_description' for MLS/website listings.
 - Set "subject" to empty string for non-email posts
+
+MEDIA PLAN — populate the 'mediaPlan' object:
+- recommendedMediaType: image (most posts), video (walkthroughs, tutorials, BTS), carousel (multi-feature, step-by-step), none (rare)
+- visualConcept: What the viewer should see
+- prompt: Detailed AI generation prompt — composition, lighting, color palette, mood, style
+- negativePrompt: What to avoid (text overlays, watermarks, etc.)
+- style: Visual style suggestion
+- reason: One sentence explaining your recommendation
+- fallbackStrategy: What to do if AI generation fails
+- preferredSources ordered list. RULES:
+  - Listing/property posts → ["property_images", "brand_library", "ai_generated"]
+  - Testimonial posts → ["brand_library", "property_images"] — NEVER invent people or client photos
+  - Educational/tip posts → ["ai_generated", "brand_library"]
+  - Market update posts → ["brand_library", "ai_generated"]
+  - Personal brand posts → ["brand_library"]
+  - NEVER suggest AI-generated images of real properties when property photos exist
+  - NEVER suggest AI-generated testimonial images or fake client photos
+- Match imageHint to mediaPlan — they should be consistent.
 
 Respond with JSON matching the single_campaign_post schema.`);
 

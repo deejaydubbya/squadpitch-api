@@ -57,6 +57,7 @@ async function persistFailedDraft({
       cta: null,
       variations: null,
       altText: null,
+      mediaPlan: null,
       warnings: [`[${code}] ${message}`],
       createdBy,
     },
@@ -122,6 +123,20 @@ function normalizeGeneratedContent(parsed) {
       typeof parsed?.videoGuidance === "string" && parsed.videoGuidance.length > 0
         ? parsed.videoGuidance
         : null,
+    mediaPlan: parsed?.mediaPlan && typeof parsed.mediaPlan === "object"
+      ? {
+          recommendedMediaType: parsed.mediaPlan.recommendedMediaType ?? "image",
+          visualConcept: typeof parsed.mediaPlan.visualConcept === "string" ? parsed.mediaPlan.visualConcept : "",
+          prompt: typeof parsed.mediaPlan.prompt === "string" ? parsed.mediaPlan.prompt : "",
+          negativePrompt: typeof parsed.mediaPlan.negativePrompt === "string" ? parsed.mediaPlan.negativePrompt : "",
+          style: typeof parsed.mediaPlan.style === "string" ? parsed.mediaPlan.style : "",
+          reason: typeof parsed.mediaPlan.reason === "string" ? parsed.mediaPlan.reason : "",
+          fallbackStrategy: typeof parsed.mediaPlan.fallbackStrategy === "string" ? parsed.mediaPlan.fallbackStrategy : "",
+          preferredSources: Array.isArray(parsed.mediaPlan.preferredSources)
+            ? parsed.mediaPlan.preferredSources.filter(s => typeof s === "string")
+            : [],
+        }
+      : null,
   };
 }
 
@@ -325,6 +340,7 @@ export async function generateDraft({
       altText: content.altText,
       imageGuidance: content.imageGuidance,
       videoGuidance: content.videoGuidance,
+      mediaPlan: content.mediaPlan,
       warnings: [
         ...(isNoDataIdeaPost ? ["source:idea_post"] : []),
         ...(autoSelectedSlug ? [`auto_blueprint: ${autoSelectedSlug}`] : []),
