@@ -402,7 +402,7 @@ const ANGLE_STYLE_HINTS = {
 };
 
 const DEFAULT_NEGATIVE_PROMPT =
-  "blurry, low quality, text, watermark, logo, distorted, deformed, disfigured, bad anatomy, extra limbs, cropped, out of frame";
+  "blurry, low quality, text, letters, words, signage, typography, slogans, readable text, watermark, logo, fake logo, distorted, deformed, disfigured, bad anatomy, extra limbs, cropped, out of frame";
 
 export function resolveModelConfig(mediaProfile) {
   const hasLora = Boolean(mediaProfile.loraModelUrl);

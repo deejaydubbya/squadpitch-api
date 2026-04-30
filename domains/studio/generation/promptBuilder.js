@@ -30,7 +30,7 @@ const MEDIA_PLAN_SCHEMA = {
     },
     negativePrompt: {
       type: "string",
-      description: "What to avoid in AI generation. Empty string if n/a.",
+      description: "What to avoid in AI generation. ALWAYS include 'no text, no letters, no words, no signage, no watermark, no logo' to prevent gibberish text in generated images. Empty string if n/a.",
     },
     style: {
       type: "string",
