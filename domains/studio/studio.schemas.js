@@ -349,7 +349,9 @@ export const GenerateMediaSchema = z.object({
   clientId: z.string().min(1),
   guidance: z.string().min(1).max(4000),
   draftId: z.string().optional(),
+  folderId: z.string().optional(),
   channel: ChannelEnum.optional(),
+  usePersona: z.boolean().optional(),
   overrides: z
     .object({
       width: z.number().int().min(256).max(2048).optional(),
@@ -725,6 +727,149 @@ export const ListingConfirmUrlSchema = z.object({
   features: z.union([z.string(), z.array(z.string())]).optional().nullable(),
   sourceType: z.string().optional(),
   sourceId: z.string().optional().nullable(),
+});
+
+// ── Brand Persona ──────────────────────────────────────────────────────
+
+export const PersonaTypeEnum = z.enum(["AGENT", "BRAND_STYLE", "TEAM"]);
+
+export const PersonaTrainingStatusEnum = z.enum([
+  "DRAFT",
+  "UPLOADING",
+  "READY_TO_TRAIN",
+  "QUEUED",
+  "TRAINING",
+  "COMPLETED",
+  "FAILED",
+]);
+
+export const UpsertBrandPersonaSchema = z.object({
+  personaType: PersonaTypeEnum.optional(),
+  name: z.string().max(120).nullable().optional(),
+  status: PersonaTrainingStatusEnum.optional(),
+  visualStyle: z.string().max(200).nullable().optional(),
+  usageSettings: z
+    .object({
+      personalBrandPosts: z.boolean().optional(),
+      educationalGraphics: z.boolean().optional(),
+      listingPromotions: z.boolean().optional(),
+      smartVideoThumbnails: z.boolean().optional(),
+      smartVideoIntroOutro: z.boolean().optional(),
+      campaignCoverImages: z.boolean().optional(),
+      askBeforeUsing: z.boolean().optional(),
+    })
+    .optional(),
+  styleProfile: z.object({
+    colors: z.array(z.string().max(20)).max(8).optional(),
+    fonts: z.array(z.string().max(60)).max(4).optional(),
+    styleDescriptors: z.array(z.string().max(100)).max(6).optional(),
+    promptModifiers: z.string().max(500).optional(),
+    mood: z.string().max(100).optional(),
+  }).optional(),
+});
+
+export const AddTrainingImageSchema = z.object({
+  url: z.string().url().max(2048),
+  filename: z.string().max(255).optional(),
+  size: z.number().int().optional(),
+  mimeType: z.string().max(100).optional(),
+});
+
+export const PersonaFramePurposeEnum = z.enum(['intro', 'outro', 'thumbnail']);
+
+export const GeneratePersonaFramesSchema = z.object({
+  frames: z.array(z.object({
+    purpose: PersonaFramePurposeEnum,
+    overlayText: z.string().max(200).optional(),
+  })).min(1).max(3),
+});
+
+// ── Persona Feedback ────────────────────────────────────────────────────
+
+export const PersonaFeedbackSchema = z.object({
+  reason: z.enum([
+    'doesnt_look_like_me',
+    'wrong_style',
+    'too_artificial',
+    'not_relevant',
+    'other',
+  ]),
+  detail: z.string().max(500).optional(),
+});
+
+// ── Persona Compose (Add Me to Photo) ──────────────────────────────────
+
+export const PersonaLayerSchema = z.object({
+  centerX: z.number().min(0).max(1),
+  footY: z.number().min(-0.5).max(2.5),
+  scale: z.number().min(0.15).max(1.5),
+  allowOverflow: z.boolean().default(true),
+  framingPreset: z.enum(['full_body', 'waist_up', 'bust', 'custom']).default('full_body'),
+});
+
+export const PersonaComposeSchema = z.object({
+  clientId: z.string().min(1),
+  sourceImageUrl: z.string().url(),
+  sourceAssetId: z.string().optional(),
+  pose: z.enum(['standing', 'pointing', 'casual', 'presenting', 'arms_crossed', 'walking']).default('standing'),
+  sceneType: z.enum(['auto', 'interior', 'exterior']).default('auto'),
+  lightingStyle: z.enum([
+    // Interior
+    'warm_cozy', 'bright_clean', 'natural_window', 'moody_cinematic', 'luxury_high_end',
+    // Exterior
+    'golden_hour', 'midday_sun', 'overcast', 'sunset_dusk', 'twilight_lights_on',
+  ]).optional(),
+  outfit: z.enum(['business_suit', 'smart_casual', 'polo_casual', 'branded_shirt', 'luxury_agent', 'outdoor_casual']).optional(),
+  vibe: z.enum(['friendly_smile', 'professional', 'confident', 'welcoming', 'energetic']).optional(),
+  personaLayer: PersonaLayerSchema.optional(),
+  folderId: z.string().optional(),
+  draftId: z.string().optional(),
+});
+
+// ── Lighting enum (shared) ───────────────────────────────────────────────
+
+const LightingStyleEnum = z.enum([
+  'warm_cozy', 'bright_clean', 'natural_window', 'moody_cinematic', 'luxury_high_end',
+  'golden_hour', 'midday_sun', 'overcast', 'sunset_dusk', 'twilight_lights_on',
+]);
+
+// ── Persona Cutout Generation ───────────────────────────────────────────
+
+export const PersonaCutoutSchema = z.object({
+  clientId: z.string().min(1),
+  pose: z.enum(['standing', 'pointing', 'casual', 'presenting', 'arms_crossed', 'walking']).default('standing'),
+  outfit: z.enum(['business_suit', 'smart_casual', 'polo_casual', 'branded_shirt', 'luxury_agent', 'outdoor_casual']).optional(),
+  vibe: z.enum(['friendly_smile', 'professional', 'confident', 'welcoming', 'energetic']).optional(),
+  sceneType: z.enum(['auto', 'interior', 'exterior']).default('auto'),
+  lightingStyle: LightingStyleEnum.optional(),
+  framingPreset: z.enum(['full_body', 'waist_up', 'bust']).default('full_body'),
+  folderId: z.string().optional(),
+});
+
+// ── Persona Blend (Composite cutout onto background) ────────────────────
+
+export const PersonaBlendSchema = z.object({
+  clientId: z.string().min(1),
+  backgroundImageUrl: z.string().url(),
+  backgroundAssetId: z.string().optional(),
+  cutoutImageUrl: z.string().url(),
+  cutoutAssetId: z.string().optional(),
+  transform: z.object({
+    x: z.number(),
+    y: z.number(),
+    scale: z.number().min(0.05).max(2),
+    rotation: z.number().min(-45).max(45).default(0),
+    opacity: z.number().min(0).max(1).default(1),
+  }),
+  sceneType: z.enum(['auto', 'interior', 'exterior']).default('auto'),
+  lightingStyle: LightingStyleEnum.optional(),
+  advanced: z.object({
+    shadowIntensity: z.number().min(0).max(1).default(0.5),
+    warmthAdjust: z.number().min(-1).max(1).default(0),
+    blendStrength: z.number().min(0).max(1).default(0.8),
+  }).optional(),
+  folderId: z.string().optional(),
+  draftId: z.string().optional(),
 });
 
 // ── GBP Integration ─────────────────────────────────────────────────────

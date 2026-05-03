@@ -48,6 +48,15 @@ export async function listAssets({
     ];
   }
 
+  // Exclude intermediate persona cutout assets — only blended composites should show.
+  // Use OR so rows with NULL personaSnapshot (most assets) are still included.
+  where.AND = [...(where.AND || []), {
+    OR: [
+      { personaSnapshot: null },
+      { NOT: { personaSnapshot: { startsWith: "cutout:" } } },
+    ],
+  }];
+
   const assets = await prisma.mediaAsset.findMany({
     where,
     include: {
@@ -252,10 +261,15 @@ export async function enqueueGeneration({
   clientId,
   guidance,
   draftId,
+  folderId,
   channel,
   overrides,
   createdBy,
   userId,
+  usePersona,
+  referenceImageUrl,
+  composePlacement,
+  composePersonaLayer,
 }) {
   const ctx = await loadClientGenerationContext(clientId);
   const mediaProfile = ctx.media;
@@ -270,8 +284,19 @@ export async function enqueueGeneration({
     channel,
   };
 
-  const renderedPrompt = buildImagePrompt(mediaProfile, guidance, enrichment);
-  const { modelId, loraConfig } = resolveModelConfig(mediaProfile);
+  // Resolve persona if requested
+  let persona = null;
+  if (usePersona && ctx.brandPersona) {
+    const bp = ctx.brandPersona;
+    const hasLoRA = bp.status === "COMPLETED" && bp.providerModelId && bp.triggerPhrase;
+    const hasStyleProfile = bp.personaType === "BRAND_STYLE" && bp.styleProfile;
+    if ((hasLoRA || hasStyleProfile) && isPersonaAllowedForContent(guidance, enrichment)) {
+      persona = bp;
+    }
+  }
+
+  const renderedPrompt = buildImagePrompt(mediaProfile, guidance, enrichment, persona);
+  const { modelId, loraConfig } = resolveModelConfig(mediaProfile, persona);
 
   const asset = await prisma.mediaAsset.create({
     data: {
@@ -279,11 +304,19 @@ export async function enqueueGeneration({
       source: "AI_GENERATED",
       status: "PENDING",
       draftId: draftId ?? null,
+      folderId: folderId ?? null,
       falModelId: modelId,
       renderedPrompt,
       negativePrompt: DEFAULT_NEGATIVE_PROMPT,
       loraSnapshot: loraConfig?.path ?? null,
       loraScaleSnapshot: loraConfig?.scale ?? null,
+      personaSnapshot: persona
+        ? (referenceImageUrl
+          ? `composite:${persona.name}`
+          : persona.personaType === 'BRAND_STYLE'
+            ? `style:${persona.name}`
+            : persona.name)
+        : null,
       createdBy,
     },
   });
@@ -293,6 +326,12 @@ export async function enqueueGeneration({
   const mergedOverrides = {
     ...(channelDims ?? {}),
     ...(overrides ?? {}),
+    ...(referenceImageUrl ? {
+      referenceImageUrl,
+      composePlacement: composePlacement ?? 'auto',
+      compositeMode: true,
+      ...(composePersonaLayer ? { composePersonaLayer } : {}),
+    } : {}),
   };
 
   const queue = getMediaGenQueue();
@@ -302,6 +341,113 @@ export async function enqueueGeneration({
     await queue.add("generate", {
       assetId: asset.id,
       overrides: Object.keys(mergedOverrides).length > 0 ? mergedOverrides : null,
+    }, { priority });
+    queued = true;
+  }
+
+  return {
+    ...asset,
+    queued,
+    personaUsed: !!persona,
+    personaSkipped: usePersona && !persona,
+    personaType: persona?.personaType ?? null,
+  };
+}
+
+// ── Cutout generation ───────────────────────────────────────────────────
+
+export async function enqueueCutout({
+  clientId, pose, outfit, vibe, sceneType, lightingStyle, framingPreset,
+  folderId, createdBy, userId,
+}) {
+  const ctx = await loadClientGenerationContext(clientId);
+  const mediaProfile = ctx.media;
+  if (!mediaProfile) {
+    throw { status: 400, code: "NO_MEDIA_PROFILE", message: "Client has no media profile" };
+  }
+
+  let persona = null;
+  if (ctx.brandPersona) {
+    const bp = ctx.brandPersona;
+    if (bp.status === "COMPLETED" && bp.providerModelId && bp.triggerPhrase) {
+      persona = bp;
+    }
+  }
+  if (!persona) {
+    throw { status: 400, code: "PERSONA_NOT_READY", message: "Brand persona must be fully trained." };
+  }
+
+  const guidance = buildCutoutPrompt(persona, { pose, outfit, vibe, sceneType, lightingStyle, framing: framingPreset });
+  const { modelId, loraConfig } = resolveModelConfig(mediaProfile, persona);
+
+  const asset = await prisma.mediaAsset.create({
+    data: {
+      clientId,
+      source: "AI_GENERATED",
+      status: "PENDING",
+      folderId: folderId ?? null,
+      falModelId: modelId,
+      renderedPrompt: guidance,
+      negativePrompt: DEFAULT_NEGATIVE_PROMPT,
+      loraSnapshot: loraConfig?.path ?? null,
+      loraScaleSnapshot: loraConfig?.scale ?? null,
+      personaSnapshot: `cutout:${persona.name}`,
+      createdBy,
+    },
+  });
+
+  const queue = getMediaGenQueue();
+  let queued = false;
+  if (queue) {
+    const priority = userId ? await getJobPriorityForUser(userId) : 5;
+    await queue.add("generate", {
+      assetId: asset.id,
+      overrides: { cutoutMode: true, framingPreset },
+    }, { priority });
+    queued = true;
+  }
+
+  return { ...asset, queued, personaUsed: true };
+}
+
+// ── Blend (composite cutout onto background) ────────────────────────────
+
+export async function enqueueBlend({
+  clientId, backgroundImageUrl, backgroundAssetId, cutoutImageUrl, cutoutAssetId,
+  transform, sceneType, lightingStyle, advanced, folderId, draftId, createdBy, userId,
+}) {
+  const ctx = await loadClientGenerationContext(clientId);
+  const persona = ctx.brandPersona;
+
+  const asset = await prisma.mediaAsset.create({
+    data: {
+      clientId,
+      source: "AI_GENERATED",
+      status: "PENDING",
+      draftId: draftId ?? null,
+      folderId: folderId ?? null,
+      falModelId: "blend",
+      renderedPrompt: `Blend persona into scene (${sceneType}, ${lightingStyle || 'auto'})`,
+      personaSnapshot: persona ? `composite:${persona.name}` : null,
+      createdBy,
+    },
+  });
+
+  const queue = getMediaGenQueue();
+  let queued = false;
+  if (queue) {
+    const priority = userId ? await getJobPriorityForUser(userId) : 5;
+    await queue.add("generate", {
+      assetId: asset.id,
+      overrides: {
+        blendMode: true,
+        backgroundImageUrl,
+        cutoutImageUrl,
+        transform,
+        sceneType,
+        lightingStyle,
+        advanced,
+      },
     }, { priority });
     queued = true;
   }
@@ -322,7 +468,7 @@ export async function enqueueGeneration({
  * @param {string} enrichment.channel - Target channel (e.g. "INSTAGRAM")
  * @param {string} enrichment.angle - Content angle (e.g. "lifestyle")
  */
-export function buildImagePrompt(mediaProfile, guidance, enrichment = {}) {
+export function buildImagePrompt(mediaProfile, guidance, enrichment = {}, persona = null) {
   const parts = [];
 
   // 1. Subject / guidance first (highest weight)
@@ -338,6 +484,17 @@ export function buildImagePrompt(mediaProfile, guidance, enrichment = {}) {
   } else {
     // Baseline quality modifiers when no visual style is configured (e.g. during onboarding)
     parts.push("professional photography, high quality, sharp focus, well-lit");
+  }
+
+  // 2b. Brand style profile (when persona is BRAND_STYLE and has styleProfile)
+  if (persona?.personaType === 'BRAND_STYLE' && persona.styleProfile) {
+    const sp = persona.styleProfile;
+    const styleParts = [];
+    if (sp.colors?.length) styleParts.push(`color palette: ${sp.colors.join(', ')}`);
+    if (sp.mood) styleParts.push(sp.mood);
+    if (sp.styleDescriptors?.length) styleParts.push(sp.styleDescriptors.join(', '));
+    if (sp.promptModifiers) styleParts.push(sp.promptModifiers);
+    if (styleParts.length) parts.push(styleParts.join(', '));
   }
 
   // 3. Industry-specific style hints
@@ -363,13 +520,30 @@ export function buildImagePrompt(mediaProfile, guidance, enrichment = {}) {
     parts.push(mediaProfile.characterPrompt);
   }
 
-  // 7. LoRA trigger word last
-  if (mediaProfile.loraTriggerWord) {
+  // 7. Persona trigger phrase (replaces MediaProfile trigger word to avoid conflicts)
+  if (persona?.triggerPhrase) {
+    parts.push(persona.triggerPhrase);
+  } else if (mediaProfile.loraTriggerWord) {
     parts.push(mediaProfile.loraTriggerWord);
   }
 
   // 8. Universal safety suffix
   parts.push("no text overlays, no watermarks, no logos");
+
+  // 9. Persona safety suffix
+  if (persona) {
+    if (persona.personaType === 'BRAND_STYLE') {
+      parts.push(
+        `[Brand Style: ${persona.name}]`,
+        "consistent brand aesthetic, no factual property photos, AI-generated content"
+      );
+    } else {
+      parts.push(
+        `[Persona: ${persona.name}]`,
+        "no fake client testimonials, no fake sold signs, no fabricated claims, no factual property photos, no misleading listing images, no false endorsements, AI-generated content"
+      );
+    }
+  }
 
   return parts.join(", ").trim();
 }
@@ -404,7 +578,151 @@ const ANGLE_STYLE_HINTS = {
 const DEFAULT_NEGATIVE_PROMPT =
   "blurry, low quality, text, letters, words, signage, typography, slogans, readable text, watermark, logo, fake logo, distorted, deformed, disfigured, bad anatomy, extra limbs, cropped, out of frame";
 
-export function resolveModelConfig(mediaProfile) {
+// ── Compose prompt (Add Me to Photo) ─────────────────────────────────────
+
+const COMPOSE_POSE_MAP = {
+  standing: 'standing confidently',
+  pointing: 'pointing forward engagingly',
+  casual: 'in a relaxed casual pose',
+  presenting: 'presenting with an open gesture',
+  arms_crossed: 'standing with arms crossed confidently',
+  walking: 'walking forward naturally',
+};
+
+const COMPOSE_PLACEMENT_MAP = {
+  auto: '',
+  left: 'on the left side of the scene',
+  right: 'on the right side of the scene',
+  center: 'in the center of the scene',
+};
+
+// ── Lighting prompt maps (Interior + Exterior) ─────────────────────────
+const INTERIOR_LIGHTING_MAP = {
+  warm_cozy: 'warm color temperature, soft indoor shadows, cozy ambient light, realistic skin tone warmth',
+  bright_clean: 'bright neutral lighting, clean white balance, evenly lit subject, minimal harsh shadows',
+  natural_window: 'natural daylight from window direction, soft highlights, subtle shadows, balanced exposure',
+  moody_cinematic: 'cinematic indoor lighting, controlled contrast, visible shadow grounding, realistic low-key interior mood',
+  luxury_high_end: 'luxury interior editorial lighting, balanced warm-neutral tones, soft realistic shadows, premium staging feel',
+};
+
+const EXTERIOR_LIGHTING_MAP = {
+  golden_hour: 'golden hour sunlight, warm directional light, long realistic shadows, warm highlights on subject',
+  midday_sun: 'bright midday exterior lighting, clear sun direction, stronger ground shadow, realistic exposure',
+  overcast: 'overcast daylight, soft diffuse light, muted shadows, even subject lighting',
+  sunset_dusk: 'dusk lighting, warm sky glow, soft fading daylight, realistic low-light subject exposure',
+  twilight_lights_on: 'twilight real estate lighting, cool ambient sky, warm building lights, realistic low-light subject integration',
+};
+
+const ALL_LIGHTING_MAP = { ...INTERIOR_LIGHTING_MAP, ...EXTERIOR_LIGHTING_MAP };
+
+const COMPOSE_OUTFIT_MAP = {
+  business_suit: 'wearing a professional business suit',
+  smart_casual: 'wearing smart casual attire',
+  polo_casual: 'wearing a polo shirt and casual pants',
+  branded_shirt: 'wearing a branded company shirt',
+  luxury_agent: 'wearing luxury designer clothing',
+  outdoor_casual: 'wearing outdoor casual clothing',
+};
+
+const COMPOSE_VIBE_MAP = {
+  friendly_smile: 'with a friendly warm smile',
+  professional: 'with a professional composed expression',
+  confident: 'with a confident powerful expression',
+  welcoming: 'with a welcoming inviting expression',
+  energetic: 'with an energetic enthusiastic expression',
+};
+
+const COMPOSE_FRAMING_MAP = {
+  full_body: {
+    intro: 'Full body photo',
+    constraints: 'full body standing, feet visible, head to toe visible, entire person in frame, no cropping, centered, realistic proportions, full figure',
+  },
+  three_quarter: {
+    intro: 'Three-quarter body photo',
+    constraints: 'three-quarter body shot, visible from knees up, upper body and legs to knees, no feet required, centered, realistic proportions',
+  },
+  waist_up: {
+    intro: 'Waist-up portrait',
+    constraints: 'waist-up portrait, upper body visible, cropped at waist, professional marketing image, centered',
+  },
+  bust: {
+    intro: 'Head and shoulders portrait',
+    constraints: 'head and shoulders portrait, bust shot, professional marketing image, centered, close-up',
+  },
+};
+
+/**
+ * Build lighting prompt segment based on scene type and lighting style.
+ * Returns a detailed lighting instruction string for the generation prompt.
+ */
+export function buildLightingPrompt({ sceneType, lightingStyle, framing }) {
+  // Resolve lighting text
+  const lightingText = lightingStyle ? ALL_LIGHTING_MAP[lightingStyle] : null;
+
+  // Scene-aware prefix
+  const scenePrefix = sceneType === 'exterior'
+    ? 'The inserted person must match the exterior lighting of the original image.'
+    : 'The inserted person must match the interior lighting of the original image.';
+
+  // Grounding rules based on framing
+  const groundingRule = framing === 'full_body'
+    ? 'Ensure the person is physically grounded on the visible floor/ground plane with realistic contact shadows. The subject must not float.'
+    : 'Respect the placement preview exactly. Generate only the visible portion matching the preview crop and position.';
+
+  return [scenePrefix, lightingText, groundingRule].filter(Boolean).join(' ');
+}
+
+export function buildComposePrompt(persona, { pose, sceneType, lightingStyle, outfit, vibe, framing }) {
+  const frame = COMPOSE_FRAMING_MAP[framing] || COMPOSE_FRAMING_MAP.full_body;
+  const lightingPrompt = buildLightingPrompt({ sceneType, lightingStyle, framing });
+  const lightingText = lightingStyle ? (ALL_LIGHTING_MAP[lightingStyle] || 'natural lighting') : 'natural lighting';
+
+  const parts = [
+    `${frame.intro} of a person ${persona.triggerPhrase}`,
+    COMPOSE_POSE_MAP[pose],
+    outfit ? COMPOSE_OUTFIT_MAP[outfit] : null,
+    vibe ? COMPOSE_VIBE_MAP[vibe] : null,
+    frame.constraints,
+    lightingText,
+    'clean solid white background, studio lighting',
+    'high quality, sharp focus, marketing photography',
+    lightingPrompt,
+  ].filter(Boolean);
+
+  return parts.join(', ');
+}
+
+export function buildCutoutPrompt(persona, { pose, outfit, vibe, sceneType, lightingStyle, framing }) {
+  const frame = COMPOSE_FRAMING_MAP[framing] || COMPOSE_FRAMING_MAP.full_body;
+  const lightingText = lightingStyle ? (ALL_LIGHTING_MAP[lightingStyle] || 'natural lighting') : 'natural lighting';
+
+  const parts = [
+    `${frame.intro} of a person ${persona.triggerPhrase}`,
+    COMPOSE_POSE_MAP[pose],
+    outfit ? COMPOSE_OUTFIT_MAP[outfit] : null,
+    vibe ? COMPOSE_VIBE_MAP[vibe] : null,
+    frame.constraints,
+    lightingText,
+    'clean solid white background, no room, no floor, no furniture, no props',
+    'isolated person only, clean realistic edges, no blur',
+    'high quality, sharp focus, crisp detail, high resolution, marketing photography',
+  ].filter(Boolean);
+
+  return parts.join(', ');
+}
+
+export function resolveModelConfig(mediaProfile, persona = null) {
+  // Persona LoRA takes priority over MediaProfile LoRA
+  if (persona?.providerModelId) {
+    return {
+      modelId: "fal-ai/flux-lora",
+      loraConfig: {
+        path: persona.providerModelId,
+        scale: 1.0,
+      },
+    };
+  }
+
   const hasLora = Boolean(mediaProfile.loraModelUrl);
 
   if (hasLora) {
@@ -421,6 +739,23 @@ export function resolveModelConfig(mediaProfile) {
     modelId: "fal-ai/flux/dev",
     loraConfig: null,
   };
+}
+
+// ── Persona safety guardrails ────────────────────────────────────────────
+
+export const PERSONA_BLOCKED_PATTERNS = [
+  /\b(testimonial|client\s*story|review)\b/i,
+  /\b(sold\s*sign|just\s*sold|fabricated|factual)\b/i,
+  /\b(factual\s*(listing|property)\s*photo)\b/i,
+];
+
+/**
+ * Check whether persona usage is appropriate for the given content.
+ * Returns false for content types where a persona likeness would be misleading.
+ */
+function isPersonaAllowedForContent(guidance, enrichment = {}) {
+  const textToCheck = [guidance, enrichment.contentType].filter(Boolean).join(" ");
+  return !PERSONA_BLOCKED_PATTERNS.some((re) => re.test(textToCheck));
 }
 
 // ── Link / Unlink (many-to-many via DraftAsset) ─────────────────────────
@@ -506,6 +841,7 @@ export function formatAsset(asset) {
     displayOrder: asset.displayOrder,
     falModelId: asset.falModelId,
     renderedPrompt: asset.renderedPrompt,
+    personaSnapshot: asset.personaSnapshot ?? null,
     seed: asset.seed != null ? asset.seed.toString() : null,
     externalJobId: asset.externalJobId,
     durationMs: asset.durationMs,

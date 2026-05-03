@@ -13,6 +13,7 @@ import {
   buildRemixUserPrompt,
   buildRemixResponseFormat,
 } from "./promptBuilder.js";
+import { evaluatePersonaRecommendation } from "../personaRecommendation.service.js";
 import {
   generateStructuredContent,
   OpenAIProviderError,
@@ -376,7 +377,18 @@ export async function generateDraft({
     }).catch(() => {});
   }
 
-  return formatDraft(draft);
+  const formatted = formatDraft(draft);
+  const personaRecommendation = evaluatePersonaRecommendation({
+    brandPersona: ctx.brandPersona,
+    templateType,
+    guidance,
+    kind,
+    channel,
+    dataItemType: dataItem?.type ?? null,
+  });
+  return personaRecommendation
+    ? { ...formatted, personaRecommendation }
+    : formatted;
 }
 
 // ── Remix ────────────────────────────────────────────────────────────

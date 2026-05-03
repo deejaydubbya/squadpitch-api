@@ -128,6 +128,22 @@ enum ConversionEventType {
   CUSTOM
 }
 
+enum PersonaType {
+  AGENT
+  BRAND_STYLE
+  TEAM
+}
+
+enum PersonaTrainingStatus {
+  DRAFT
+  UPLOADING
+  READY_TO_TRAIN
+  QUEUED
+  TRAINING
+  COMPLETED
+  FAILED
+}
+
 // ── User ───────────────────────────────────────────────────────────────
 
 model User {
@@ -160,6 +176,7 @@ model Client {
   brandProfile      BrandProfile?
   voiceProfile      VoiceProfile?
   mediaProfile      MediaProfile?
+  brandPersona      BrandPersona?
   channelSettings   ChannelSettings[]
   drafts            Draft[]
   moderationLogs    ModerationLog[]
@@ -237,6 +254,40 @@ model MediaProfile {
   client             Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@map("media_profiles")
+}
+
+// ── Brand Persona ─────────────────────────────────────────────────────
+
+model BrandPersona {
+  clientId            String                @id
+  userId              String?
+  personaType         PersonaType           @default(AGENT)
+  name                String?
+  status              PersonaTrainingStatus @default(DRAFT)
+  trainingImages      Json                  @default("[]")
+  imageCount          Int                   @default(0)
+  visualStyle         String?
+  usageSettings       Json                  @default("{}")
+  trainingProgress    Int?                  @default(0)
+  previewImages       Json?
+  styleProfile        Json?                 // Brand Style Profile (colors, fonts, prompt modifiers)
+
+  // Provider integration (fal.ai LoRA training)
+  provider            String?               @default("fal")
+  providerTrainingId  String?
+  providerModelId     String?
+  triggerPhrase       String?
+  errorMessage        String?               @db.Text
+
+  // Consent
+  consentAt           DateTime?
+
+  updatedBy           String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  client              Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("brand_personas")
 }
 
 // ── Channel Settings ───────────────────────────────────────────────────
@@ -417,6 +468,7 @@ model MediaAsset {
   negativePrompt    String?          @db.Text
   loraSnapshot      String?
   loraScaleSnapshot Float?
+  personaSnapshot   String?           // Name of persona used (if any)
   seed              BigInt?
 
   // Screenshot-import enhancement metadata (spinstr97)

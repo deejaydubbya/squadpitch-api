@@ -66,7 +66,7 @@ export async function upsertConnection({
     lastError: null,
   };
 
-  return prisma.channelConnection.upsert({
+  const connection = await prisma.channelConnection.upsert({
     where: { clientId_channel: { clientId, channel } },
     create: {
       clientId,
@@ -76,12 +76,29 @@ export async function upsertConnection({
     },
     update: data,
   });
+
+  // Auto-enable channel in settings when connected
+  await prisma.channelSettings.upsert({
+    where: { clientId_channel: { clientId, channel } },
+    create: { clientId, channel, isEnabled: true },
+    update: { isEnabled: true },
+  });
+
+  return connection;
 }
 
 export async function deleteConnection(clientId, channel) {
-  return prisma.channelConnection.deleteMany({
+  const result = await prisma.channelConnection.deleteMany({
     where: { clientId, channel },
   });
+
+  // Auto-disable channel in settings when disconnected
+  await prisma.channelSettings.updateMany({
+    where: { clientId, channel },
+    data: { isEnabled: false },
+  });
+
+  return result;
 }
 
 export async function updateConnectionStatus(

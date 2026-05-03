@@ -12,6 +12,7 @@
   "dependencies": {
     "@fal-ai/client": "^1.2.0",
     "@prisma/client": "^6.19.0",
+    "archiver": "^7.0.1",
     "bullmq": "^5.73.0",
     "cheerio": "^1.2.0",
     "cloudinary": "^2.9.0",

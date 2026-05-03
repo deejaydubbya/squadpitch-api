@@ -189,6 +189,7 @@ let weeklyDigestWorker;
 let metricsSyncWorker;
 let recalculateAnalyticsWorker;
 let refreshInsightsWorker;
+let personaTrainingWorker;
 
 let server;
 (async () => {
@@ -255,6 +256,11 @@ let server;
         "./workers/refreshInsightsWorker.js"
       );
       refreshInsightsWorker = startRefreshInsightsWorker();
+
+      const { startPersonaTrainingWorker } = await import(
+        "./workers/personaTrainingWorker.js"
+      );
+      personaTrainingWorker = startPersonaTrainingWorker();
     }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
@@ -272,6 +278,7 @@ const shutdown = (sig) => async () => {
   try { if (metricsSyncWorker) await metricsSyncWorker.close(); } catch {}
   try { if (recalculateAnalyticsWorker) await recalculateAnalyticsWorker.close(); } catch {}
   try { if (refreshInsightsWorker) await refreshInsightsWorker.close(); } catch {}
+  try { if (personaTrainingWorker) await personaTrainingWorker.close(); } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
   } catch {}

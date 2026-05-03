@@ -54,6 +54,7 @@ export async function loadClientGenerationContext(clientId) {
       voiceProfile: true,
       mediaProfile: true,
       channelSettings: true,
+      brandPersona: true,
     },
   });
 
@@ -139,6 +140,7 @@ export async function loadClientGenerationContext(clientId) {
     brand: client.brandProfile ?? null,
     voice: client.voiceProfile ?? null,
     media: client.mediaProfile ?? null,
+    brandPersona: client.brandPersona ?? null,
     channelSettings: client.channelSettings ?? [],
     contentBuckets,
   };

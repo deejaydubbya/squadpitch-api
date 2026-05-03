@@ -76,6 +76,13 @@ import {
   UploadFromUrlSchema,
   CreateTrackableLinkSchema,
   LogConversionEventSchema,
+  UpsertBrandPersonaSchema,
+  AddTrainingImageSchema,
+  GeneratePersonaFramesSchema,
+  PersonaFeedbackSchema,
+  PersonaComposeSchema,
+  PersonaCutoutSchema,
+  PersonaBlendSchema,
 } from "./studio.schemas.js";
 import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
 import { getPostMetricHistory, getPostMetricGrowth } from "./postMetricHistory.service.js";
@@ -124,6 +131,7 @@ import * as listingFeedService from "./listingFeed.service.js";
 import * as trackableLinkService from "./trackableLink.service.js";
 import { logConversionEvent } from "./conversionEvent.service.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
+import * as personaService from "./brandPersona.service.js";
 import { requireTier } from "../../middleware/requireTier.js";
 import { validateDraftMedia } from "./publishing/publishingService.js";
 import { enrichListingById, enrichAllListings } from "../industry/propertyEnrichment.service.js";
@@ -165,6 +173,7 @@ async function requireClientOwner(req, res, next) {
     });
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
     if (client.createdBy !== getAuth0Sub(req)) {
+      req.log?.warn({ clientId, owner: client.createdBy, actor: getAuth0Sub(req) }, "client_owner_mismatch");
       return sendError(res, 403, "FORBIDDEN", "Forbidden");
     }
     next();
@@ -312,6 +321,318 @@ studioRouter.put(`${BASE}/workspaces/:id/media`, requireClientOwner, async (req,
       actorSub
     );
     res.json({ media: service.formatMediaProfile(media) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Brand Persona ──────────────────────────────────────────────────────
+
+studioRouter.get(`${BASE}/workspaces/:id/brand-persona`, requireClientOwner, async (req, res, next) => {
+  try {
+    const persona = await personaService.getBrandPersona(req.params.id);
+    res.json({ persona: personaService.formatBrandPersona(persona) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.put(`${BASE}/workspaces/:id/brand-persona`, requireClientOwner, async (req, res, next) => {
+  try {
+    const parsed = UpsertBrandPersonaSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const actorSub = getAuth0Sub(req);
+    const persona = await personaService.upsertBrandPersona(
+      req.params.id,
+      parsed.data,
+      actorSub
+    );
+
+    // Fire PERSONA_CREATED for new personas (createdAt matches updatedAt)
+    if (persona.createdAt?.getTime() === persona.updatedAt?.getTime()) {
+      recordActivity({
+        userId: req.user.id,
+        clientId: req.params.id,
+        eventType: "PERSONA_CREATED",
+        payload: { personaName: persona.name, personaType: persona.personaType, clientId: req.params.id },
+        resourceType: "persona",
+        resourceId: req.params.id,
+      }).catch(() => {});
+    }
+
+    res.json({ persona: personaService.formatBrandPersona(persona) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.delete(`${BASE}/workspaces/:id/brand-persona`, requireClientOwner, async (req, res, next) => {
+  try {
+    await personaService.deleteBrandPersona(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.post(`${BASE}/workspaces/:id/brand-persona/training-images`, requireClientOwner, async (req, res, next) => {
+  try {
+    const parsed = AddTrainingImageSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const actorSub = getAuth0Sub(req);
+    const image = await personaService.addTrainingImage(
+      req.params.id,
+      parsed.data,
+      actorSub
+    );
+    res.status(201).json({ image });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.delete(`${BASE}/workspaces/:id/brand-persona/training-images/:imageId`, requireClientOwner, async (req, res, next) => {
+  try {
+    const actorSub = getAuth0Sub(req);
+    await personaService.removeTrainingImage(
+      req.params.id,
+      req.params.imageId,
+      actorSub
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.post(`${BASE}/workspaces/:id/brand-persona/consent`, requireClientOwner, async (req, res, next) => {
+  try {
+    const actorSub = getAuth0Sub(req);
+    const persona = await personaService.recordConsent(req.params.id, actorSub);
+    res.json({ persona: personaService.formatBrandPersona(persona) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.post(`${BASE}/workspaces/:id/brand-persona/train`, requireClientOwner, async (req, res, next) => {
+  try {
+    const actorSub = getAuth0Sub(req);
+
+    // Check fal service health before starting expensive training
+    if (await getServiceStatus("fal") === "down") {
+      return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI training temporarily unavailable");
+    }
+    if (await isProviderBudgetExceeded("fal")) {
+      return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded. Try again later");
+    }
+
+    const result = await personaService.startTraining(req.params.id, actorSub);
+
+    recordActivity({
+      userId: req.user.id,
+      clientId: req.params.id,
+      eventType: "PERSONA_TRAINING_STARTED",
+      payload: { personaName: result.personaName ?? null, clientId: req.params.id },
+      resourceType: "persona",
+      resourceId: req.params.id,
+    }).catch(() => {});
+
+    res.status(202).json({ ok: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.post(`${BASE}/workspaces/:id/brand-persona/previews`, requireClientOwner, async (req, res, next) => {
+  try {
+    const actorSub = getAuth0Sub(req);
+    const previews = await personaService.requestPreviews(req.params.id, actorSub);
+    res.json({ previews });
+  } catch (err) {
+    next(err);
+  }
+});
+
+studioRouter.post(`${BASE}/workspaces/:id/brand-persona/generate-frames`, (req, _res, next) => {
+  req.log?.info({ route: "generate-frames", clientId: req.params.id, hasSub: !!getAuth0Sub(req) }, "generate_frames_hit");
+  next();
+}, requireClientOwner, async (req, res, next) => {
+  try {
+    const parsed = GeneratePersonaFramesSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    if (await getServiceStatus("fal") === "down") {
+      return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI image generation temporarily unavailable");
+    }
+    if (await isProviderBudgetExceeded("fal")) {
+      return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded. Try again later");
+    }
+
+    const frames = await personaService.generatePersonaFrames(req.params.id, parsed.data.frames);
+
+    recordActivity({
+      userId: req.user.id,
+      clientId: req.params.id,
+      eventType: "PERSONA_USED_IN_SMART_VIDEO",
+      payload: { personaName: null, frameCount: frames.length, clientId: req.params.id },
+      resourceType: "persona",
+      resourceId: req.params.id,
+    }).catch(() => {});
+
+    res.json({ frames });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Persona Compose (Add Me to Photo) ──────────────────────────────────
+
+studioRouter.post(`${BASE}/persona/compose`, async (req, res, next) => {
+  try {
+    const parsed = PersonaComposeSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const { clientId, sourceImageUrl, sourceAssetId, pose, sceneType, lightingStyle, outfit, vibe, personaLayer, folderId, draftId } = parsed.data;
+
+    // Ownership check
+    const client = await prisma.client.findUnique({ where: { id: clientId }, select: { createdBy: true } });
+    if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
+    if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
+
+    // Service health pre-flight
+    if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily unavailable.");
+    if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded. Try again later.");
+
+    // Usage limit checks
+    const genQuotaErr = await enforceUsageLimit(req.user.id, "imageGenerations");
+    if (genQuotaErr) return sendError(res, 402, genQuotaErr.code, "Image generation limit reached. Upgrade for more.", genQuotaErr);
+    const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
+    if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Image limit reached. Upgrade for more.", imgQuotaErr);
+
+    // Check persona is COMPLETED with LoRA
+    const persona = await personaService.getBrandPersona(clientId);
+    if (!persona || persona.status !== "COMPLETED" || !persona.providerModelId || !persona.triggerPhrase) {
+      return sendError(res, 400, "PERSONA_NOT_READY", "Brand persona must be fully trained before compositing.");
+    }
+
+    // Build compose prompt — use framingPreset for prompt generation
+    const framingPreset = personaLayer?.framingPreset ?? 'full_body';
+    const guidance = service.buildComposePrompt(persona, { pose, sceneType, lightingStyle, outfit, vibe, framing: framingPreset });
+
+    // Enqueue generation with reference image
+    const actorSub = getAuth0Sub(req);
+    const asset = await service.enqueueGeneration({
+      clientId,
+      guidance,
+      draftId,
+      folderId: folderId ?? (sourceAssetId ? (await service.getAsset(sourceAssetId))?.folderId : null) ?? undefined,
+      usePersona: true,
+      referenceImageUrl: sourceImageUrl,
+      composePlacement: 'auto',
+      composePersonaLayer: personaLayer,
+      createdBy: actorSub,
+      userId: req.user.id,
+    });
+
+    await Promise.all([
+      incrementUsage(req.user.id, "imageGenerations"),
+      incrementUsage(req.user.id, "images"),
+    ]);
+
+    trackAiUsage({
+      userId: req.user.id,
+      clientId,
+      actionType: "IMAGE",
+      model: "fal-ai/flux-lora/image-to-image",
+      promptTokens: 0,
+      completionTokens: 0,
+    });
+
+    recordActivity({
+      userId: req.user.id,
+      clientId,
+      eventType: "PERSONA_USED_IN_IMAGE",
+      payload: { personaName: persona.name, compose: true, pose, sceneType, lightingStyle, outfit, vibe, framingPreset, clientId },
+      resourceType: "asset",
+      resourceId: asset.id,
+    }).catch(() => {});
+
+    res.status(201).json({ asset: service.formatAsset(asset), metadata: { pose, sceneType, lightingStyle, outfit, vibe, framingPreset, personaLayer } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Persona cutout generation ────────────────────────────────────────────
+
+studioRouter.post(`${BASE}/persona/cutout`, async (req, res, next) => {
+  try {
+    const parsed = PersonaCutoutSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const { clientId, pose, outfit, vibe, sceneType, lightingStyle, framingPreset, folderId } = parsed.data;
+
+    const client = await prisma.client.findUnique({ where: { id: clientId }, select: { createdBy: true } });
+    if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
+    if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
+
+    if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily unavailable.");
+    if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded.");
+
+    const genQuotaErr = await enforceUsageLimit(req.user.id, "imageGenerations");
+    if (genQuotaErr) return sendError(res, 402, genQuotaErr.code, "Image generation limit reached.", genQuotaErr);
+
+    const persona = await personaService.getBrandPersona(clientId);
+    if (!persona || persona.status !== "COMPLETED" || !persona.providerModelId || !persona.triggerPhrase) {
+      return sendError(res, 400, "PERSONA_NOT_READY", "Brand persona must be fully trained.");
+    }
+
+    const actorSub = getAuth0Sub(req);
+    const asset = await service.enqueueCutout({
+      clientId, pose, outfit, vibe, sceneType, lightingStyle, framingPreset,
+      folderId, createdBy: actorSub, userId: req.user.id,
+    });
+
+    await incrementUsage(req.user.id, "imageGenerations");
+
+    trackAiUsage({
+      userId: req.user.id, clientId, actionType: "IMAGE",
+      model: "fal-ai/flux-lora", promptTokens: 0, completionTokens: 0,
+    });
+
+    res.status(201).json({ asset: service.formatAsset(asset), metadata: { pose, outfit, vibe, sceneType, lightingStyle, framingPreset } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Persona blend (composite cutout onto background) ─────────────────���──
+
+studioRouter.post(`${BASE}/persona/blend`, async (req, res, next) => {
+  try {
+    const parsed = PersonaBlendSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    const { clientId, backgroundImageUrl, backgroundAssetId, cutoutImageUrl, cutoutAssetId, transform, sceneType, lightingStyle, advanced, folderId, draftId } = parsed.data;
+
+    const client = await prisma.client.findUnique({ where: { id: clientId }, select: { createdBy: true } });
+    if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
+    if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
+
+    const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
+    if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Image limit reached.", imgQuotaErr);
+
+    const actorSub = getAuth0Sub(req);
+    const asset = await service.enqueueBlend({
+      clientId, backgroundImageUrl, backgroundAssetId, cutoutImageUrl, cutoutAssetId,
+      transform, sceneType, lightingStyle, advanced, folderId, draftId,
+      createdBy: actorSub, userId: req.user.id,
+    });
+
+    await incrementUsage(req.user.id, "images");
+
+    res.status(201).json({ asset: service.formatAsset(asset), metadata: { transform, sceneType, lightingStyle } });
   } catch (err) {
     next(err);
   }
@@ -1820,6 +2141,23 @@ studioRouter.post(`${BASE}/drafts/:id/approve`, async (req, res, next) => {
       resourceId: draft.id,
     }).catch(() => {});
 
+    // Check if approved draft has persona-generated media
+    const linkedAssets = await prisma.draftAsset.findMany({
+      where: { draftId: req.params.id },
+      include: { asset: { select: { personaSnapshot: true } } },
+    });
+    const personaAsset = linkedAssets.find(da => da.asset?.personaSnapshot);
+    if (personaAsset) {
+      recordActivity({
+        userId: req.user.id,
+        clientId: draft.clientId,
+        eventType: "PERSONA_IMAGE_APPROVED",
+        payload: { personaSnapshot: personaAsset.asset.personaSnapshot, postId: req.params.id, clientId: draft.clientId },
+        resourceType: "draft",
+        resourceId: req.params.id,
+      }).catch(() => {});
+    }
+
     res.json(service.formatDraft(draft));
   } catch (err) {
     next(err);
@@ -2553,6 +2891,27 @@ studioRouter.post(
         });
       }).catch(() => {});
 
+      // Persona analytics
+      if (asset.personaUsed) {
+        recordActivity({
+          userId: req.user.id,
+          clientId: parsed.data.clientId,
+          eventType: "PERSONA_USED_IN_IMAGE",
+          payload: { personaType: asset.personaType, postId: parsed.data.draftId, clientId: parsed.data.clientId },
+          resourceType: "asset",
+          resourceId: asset.id,
+        }).catch(() => {});
+      } else if (asset.personaSkipped) {
+        recordActivity({
+          userId: req.user.id,
+          clientId: parsed.data.clientId,
+          eventType: "PERSONA_SKIPPED",
+          payload: { guidance: parsed.data.guidance?.slice(0, 100), clientId: parsed.data.clientId },
+          resourceType: "asset",
+          resourceId: asset.id,
+        }).catch(() => {});
+      }
+
       const response = service.formatAsset(asset);
       if (asset.queued === false) response.processingNote = "Processing delayed — your content is being generated";
       res.status(201).json(response);
@@ -2703,7 +3062,53 @@ studioRouter.delete(
   `${BASE}/assets/:assetId/link/:draftId`,
   async (req, res, next) => {
     try {
+      // Check if the asset being unlinked has persona data
+      const unlinkingAsset = await service.getAsset(req.params.assetId);
       await service.unlinkAssetFromDraft(req.params.assetId, req.params.draftId);
+
+      if (unlinkingAsset?.personaSnapshot) {
+        recordActivity({
+          userId: req.user.id,
+          clientId: unlinkingAsset.clientId,
+          eventType: "PERSONA_MEDIA_REPLACED",
+          payload: { personaSnapshot: unlinkingAsset.personaSnapshot, draftId: req.params.draftId, clientId: unlinkingAsset.clientId },
+          resourceType: "asset",
+          resourceId: req.params.assetId,
+        }).catch(() => {});
+      }
+
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/assets/:assetId/persona-feedback`,
+  async (req, res, next) => {
+    try {
+      const parsed = PersonaFeedbackSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const asset = await service.getAsset(req.params.assetId);
+      if (!asset) return sendError(res, 404, "NOT_FOUND", "Asset not found");
+      if (!asset.personaSnapshot) return sendError(res, 422, "NOT_PERSONA_ASSET", "Asset was not generated with a persona");
+
+      recordActivity({
+        userId: req.user.id,
+        clientId: asset.clientId,
+        eventType: "PERSONA_IMAGE_REJECTED",
+        payload: {
+          feedbackReason: parsed.data.reason,
+          feedbackDetail: parsed.data.detail ?? null,
+          personaSnapshot: asset.personaSnapshot,
+          clientId: asset.clientId,
+        },
+        resourceType: "asset",
+        resourceId: asset.id,
+      }).catch(() => {});
+
       res.json({ ok: true });
     } catch (err) {
       next(err);
@@ -3686,9 +4091,18 @@ studioRouter.post(
         }
         await incrementUsage(req.user.id, "posts");
 
+        const campaignData = result.parsed;
+        if (ctx.brandPersona?.status === "COMPLETED") {
+          const { evaluateCampaignPostRecommendation } = await import("./personaRecommendation.service.js");
+          campaignData.posts = campaignData.posts.map((post) => ({
+            ...post,
+            personaRecommendation: evaluateCampaignPostRecommendation(ctx.brandPersona, post),
+          }));
+        }
+
         res.json({
           dataItemId: resolvedDataItemId,
-          campaign: result.parsed,
+          campaign: campaignData,
         });
       } finally {
         await releaseDedup(dedupKey);
@@ -3773,7 +4187,13 @@ studioRouter.post(
         }
         await incrementUsage(req.user.id, "posts");
 
-        res.json({ post: result.parsed?.post ?? result.parsed });
+        const postData = result.parsed?.post ?? result.parsed;
+        if (ctx.brandPersona?.status === "COMPLETED") {
+          const { evaluateCampaignPostRecommendation } = await import("./personaRecommendation.service.js");
+          postData.personaRecommendation = evaluateCampaignPostRecommendation(ctx.brandPersona, postData);
+        }
+
+        res.json({ post: postData });
       } finally {
         await releaseDedup(dedupKey);
       }

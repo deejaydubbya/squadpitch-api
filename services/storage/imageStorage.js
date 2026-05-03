@@ -24,8 +24,13 @@ function createCloudinaryService() {
         const uploadOptions = {
           folder: options.folder || "squadpitch/images",
           resource_type: "image",
-          transformation: [{ quality: "auto:good" }, { fetch_format: "auto" }],
+          transformation: options.preserveAlpha
+            ? [{ quality: "auto:good" }]
+            : [{ quality: "auto:good" }, { fetch_format: "auto" }],
         };
+        if (options.preserveAlpha) {
+          uploadOptions.format = "png";
+        }
         if (options.publicId) {
           uploadOptions.public_id = options.publicId;
         }
