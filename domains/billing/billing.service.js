@@ -19,6 +19,42 @@ const TIER_PRICE_MAP = {
   AGENCY: env.STRIPE_AGENCY_PRICE_ID,
 };
 
+// ── Plans (fetch prices from Stripe) ─────────────────────────────────────
+
+let _plansCache = null;
+let _plansCacheAt = 0;
+const PLANS_CACHE_TTL = 300_000; // 5 minutes
+
+export async function getPlans() {
+  // Return cached if fresh
+  if (_plansCache && Date.now() - _plansCacheAt < PLANS_CACHE_TTL) return _plansCache;
+
+  const s = requireStripe();
+  const tiers = ["STARTER", "PRO", "GROWTH", "AGENCY"];
+  const plans = [{ tier: "FREE", priceId: null, amount: 0, currency: "usd", interval: "month" }];
+
+  for (const tier of tiers) {
+    const priceId = TIER_PRICE_MAP[tier];
+    if (!priceId) continue;
+    try {
+      const price = await s.prices.retrieve(priceId);
+      plans.push({
+        tier,
+        priceId,
+        amount: price.unit_amount ?? 0, // cents
+        currency: price.currency ?? "usd",
+        interval: price.recurring?.interval ?? "month",
+      });
+    } catch (err) {
+      console.error(`[BILLING] Failed to fetch price for ${tier}:`, err.message);
+    }
+  }
+
+  _plansCache = plans;
+  _plansCacheAt = Date.now();
+  return plans;
+}
+
 // ── Customer management ──────────────────────────────────────────────────
 
 export async function getOrCreateCustomer(userId, email) {

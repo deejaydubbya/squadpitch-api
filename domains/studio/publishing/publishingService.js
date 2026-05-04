@@ -123,6 +123,15 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
     );
   }
 
+  // Content validation — cannot publish empty/blank content
+  const bodyText = (draft.body ?? "").trim();
+  if (!bodyText && !draft.mediaUrl) {
+    throw Object.assign(
+      new Error("Cannot publish a post with no content and no media"),
+      { status: 422, code: "EMPTY_CONTENT" }
+    );
+  }
+
   // Pre-publish media validation
   const mediaValidation = validateDraftMedia(draft);
   if (mediaValidation.errors.length > 0) {

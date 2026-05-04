@@ -1747,6 +1747,7 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
     const actorSub = getAuth0Sub(req);
     const { dataItemId, blueprintId, ...genData } = parsed.data;
+    req.log?.info({ clientId: parsed.data.clientId, userId: req.user?.id, channel: parsed.data.channel }, "generation_started");
     const draft = await service.generateDraft({
       ...genData,
       createdBy: actorSub,
@@ -1757,6 +1758,7 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
     await releaseDedup(dedupKey);
     await incrementUsage(req.user.id, "posts");
+    req.log?.info({ draftId: draft.id, clientId: parsed.data.clientId, channel: draft.channel }, "generation_succeeded");
 
     // Fire-and-forget: record activity
     recordActivity({
@@ -1781,6 +1783,7 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
     res.status(201).json(draft);
   } catch (err) {
+    req.log?.error({ clientId: parsed.data.clientId, userId: req.user?.id, err: err?.message, code: err?.code }, "generation_failed");
     next(err);
   }
 });
@@ -2226,11 +2229,14 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
     }
 
     const actorSub = getAuth0Sub(req);
+    req.log?.info({ draftId: req.params.id, channel: draftRecord?.channel, clientId: draftRecord?.clientId, scheduledFor: parsed.data.scheduledFor }, "schedule_started");
     const draft = await service.scheduleDraft(
       req.params.id,
       parsed.data.scheduledFor,
       actorSub
     );
+
+    req.log?.info({ draftId: req.params.id, channel: draft.channel, clientId: draft.clientId, scheduledFor: parsed.data.scheduledFor }, "schedule_succeeded");
 
     recordActivity({
       userId: req.user.id,
@@ -2243,6 +2249,7 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
 
     res.json(service.formatDraft(draft));
   } catch (err) {
+    req.log?.error({ draftId: req.params.id, err: err?.message, code: err?.code }, "schedule_failed");
     next(err);
   }
 });
@@ -2321,6 +2328,7 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
     }
 
     const actorSub = getAuth0Sub(req);
+    req.log?.info({ draftId: req.params.id, channel: draftRecord?.channel, clientId: draftRecord?.clientId, userId: req.user?.id }, "publish_started");
     const draft = await service.publishDraft({
       draftId: req.params.id,
       actorSub,
@@ -2328,19 +2336,24 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
     });
 
     await incrementUsage(req.user.id, "posts");
+    req.log?.info({ draftId: req.params.id, channel: draftRecord?.channel, clientId: draftRecord?.clientId }, "publish_succeeded");
 
     checkUsageNearing(req.user.id, "posts").then((info) => {
-      if (info) enqueueNotification({
-        userId: req.user.id,
-        eventType: "USAGE_LIMIT_NEARING",
-        payload: info,
-        resourceType: "usage",
-        resourceId: `${req.user.id}:posts`,
-      });
+      if (info) {
+        req.log?.info({ userId: req.user.id, metric: info.metric, used: info.used, limit: info.limit, status: info.status }, "billing_limit_nearing");
+        enqueueNotification({
+          userId: req.user.id,
+          eventType: "USAGE_LIMIT_NEARING",
+          payload: info,
+          resourceType: "usage",
+          resourceId: `${req.user.id}:posts`,
+        });
+      }
     }).catch(() => {});
 
     res.json(draft);
   } catch (err) {
+    req.log?.error({ draftId: req.params.id, channel: draftRecord?.channel, clientId: draftRecord?.clientId, err: err?.message, code: err?.code }, "publish_failed");
     next(err);
   }
 });
@@ -3322,6 +3335,8 @@ studioRouter.post(
         createdBy: actorSub,
       });
 
+      req.log?.info({ clientId, channel, userId: req.user?.id }, "oauth_connected");
+
       recordActivity({
         userId: req.user.id,
         clientId,
@@ -3333,6 +3348,7 @@ studioRouter.post(
 
       res.json({ connection: service.formatConnection(row) });
     } catch (err) {
+      req.log?.error({ err: err?.message, code: err?.code }, "oauth_failed");
       next(err);
     }
   }
@@ -4011,6 +4027,7 @@ studioRouter.post(
       try {
         const clientId = req.params.id;
         const actorSub = getAuth0Sub(req);
+        req.log?.info({ clientId, userId: req.user?.id, campaignType }, "campaign_extraction_started");
 
         // Reuse existing data item if one was selected from the property library
         let resolvedDataItemId = null;
@@ -4100,6 +4117,7 @@ studioRouter.post(
           }));
         }
 
+        req.log?.info({ clientId, postCount: campaignData?.posts?.length, campaignType }, "campaign_extraction_succeeded");
         res.json({
           dataItemId: resolvedDataItemId,
           campaign: campaignData,
@@ -4108,6 +4126,7 @@ studioRouter.post(
         await releaseDedup(dedupKey);
       }
     } catch (err) {
+      req.log?.error({ clientId: req.params.id, userId: req.user?.id, campaignType, err: err?.message, code: err?.code }, "campaign_extraction_failed");
       next(err);
     }
   }
@@ -4375,7 +4394,7 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { images } = req.body;
+      const { images, folderId } = req.body;
       if (!Array.isArray(images) || images.length === 0) {
         return validationError(res, [{ path: ["images"], message: "images array is required" }]);
       }
@@ -4440,6 +4459,7 @@ studioRouter.post(
               qualityScore: safeQualityScore,
               qualityLabel: safeQualityLabel,
               createdBy: userId,
+              ...(typeof folderId === "string" && folderId ? { folderId } : {}),
             },
           });
           await incrementUsage(userId, "images");

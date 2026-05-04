@@ -6,7 +6,7 @@
 
 import { env } from "../../../config/env.js";
 
-const TIKTOK_SCOPES = ["user.info.basic", "video.publish"];
+const TIKTOK_SCOPES = ["user.info.basic", "video.upload"];
 
 function assertConfigured() {
   if (

@@ -15,7 +15,7 @@ const FAILURE_THRESHOLD_DOWN = 10;
 const REDIS_HEALTH_CACHE_MS = 10_000;
 
 // In-memory fallback counters (survive Redis outages).
-const failureCounts = { openai: 0, fal: 0 };
+const failureCounts = { openai: 0, fal: 0, replicate: 0 };
 
 let _redisHealthCache = { value: null, ts: 0 };
 
@@ -77,12 +77,13 @@ export async function getServiceStatus(service) {
  * @returns {Promise<{ openai: string, fal: string, redis: string }>}
  */
 export async function getAllServicesHealth() {
-  const [openai, fal, redis] = await Promise.all([
+  const [openai, fal, replicate, redis] = await Promise.all([
     getServiceStatus("openai"),
     getServiceStatus("fal"),
+    getServiceStatus("replicate"),
     getServiceStatus("redis"),
   ]);
-  return { openai, fal, redis };
+  return { openai, fal, replicate, redis };
 }
 
 // ── Throttle policy ─────────────────────────────────────────────────────────

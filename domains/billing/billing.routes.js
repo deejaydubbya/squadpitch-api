@@ -23,6 +23,17 @@ billingRouter.get(`${BASE}/subscription`, async (req, res, next) => {
   }
 });
 
+// ── Get plans (prices from Stripe) ──────────────────────────────────────
+
+billingRouter.get(`${BASE}/plans`, async (req, res, next) => {
+  try {
+    const plans = await billingService.getPlans();
+    res.json({ plans });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── Get usage ────────────────────────────────────────────────────────────
 
 billingRouter.get(`${BASE}/usage`, async (req, res, next) => {

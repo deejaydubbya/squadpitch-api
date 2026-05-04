@@ -92,8 +92,27 @@ export async function rejectDraft(draftId, reason, actorSub) {
 }
 
 export async function scheduleDraft(draftId, scheduledFor, actorSub) {
+  if (!scheduledFor) {
+    throw Object.assign(
+      new Error("A scheduled date/time is required"),
+      { status: 400, code: "MISSING_SCHEDULE_DATE" }
+    );
+  }
+  const scheduleDate = new Date(scheduledFor);
+  if (isNaN(scheduleDate.getTime())) {
+    throw Object.assign(
+      new Error("Invalid scheduled date/time"),
+      { status: 400, code: "INVALID_SCHEDULE_DATE" }
+    );
+  }
+  if (scheduleDate.getTime() < Date.now() - 60_000) {
+    throw Object.assign(
+      new Error("Scheduled date must be in the future"),
+      { status: 400, code: "SCHEDULE_DATE_IN_PAST" }
+    );
+  }
   return transitionDraft(draftId, "SCHEDULED", actorSub, {
-    scheduledFor: new Date(scheduledFor),
+    scheduledFor: scheduleDate,
   });
 }
 
