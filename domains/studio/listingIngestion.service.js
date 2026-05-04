@@ -909,8 +909,12 @@ function extractListingFromScrapedData(scraped, url) {
   // Best-effort extraction from text content
   const text = scraped.text || "";
 
-  // Price: look for $xxx,xxx patterns
-  const priceMatch = text.match(/\$[\d,]+(?:\.\d{2})?/);
+  // Price: look for $xxx,xxx patterns. Require either valid comma grouping
+  // (1-3 digits, then groups of exactly 3) or an unbroken digit run — the
+  // looser /\$[\d,]+/ would eat digits from an adjacent value when cheerio's
+  // .text() concatenates elements without whitespace, e.g. "$470,000" +
+  // "8 beds" → "$470,0008" → 4,700,008.
+  const priceMatch = text.match(/\$(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?/);
   if (priceMatch) {
     listing.price = priceMatch[0];
   }
