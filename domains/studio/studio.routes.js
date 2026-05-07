@@ -2805,7 +2805,26 @@ studioRouter.post(
       if (!name || typeof name !== "string" || !name.trim()) {
         return validationError(res, [{ path: ["name"], message: "Folder name is required" }]);
       }
-      const folder = await service.createFolder({ clientId: req.params.id, name });
+      const trimmed = name.trim();
+      // Idempotent create: if a folder with this name already exists in
+      // the workspace, return it with 200 instead of 409. Eliminates the
+      // cross-tab / cache-stale race the campaign builder hits when it
+      // optimistically tries to create a per-listing folder.
+      const existing = await prisma.assetFolder.findFirst({
+        where: { clientId: req.params.id, name: trimmed },
+        include: { _count: { select: { assets: true } } },
+      });
+      if (existing) {
+        return res.status(200).json({
+          id: existing.id,
+          clientId: existing.clientId,
+          name: existing.name,
+          assetCount: existing._count.assets,
+          createdAt: existing.createdAt,
+          updatedAt: existing.updatedAt,
+        });
+      }
+      const folder = await service.createFolder({ clientId: req.params.id, name: trimmed });
       res.status(201).json({
         id: folder.id,
         clientId: folder.clientId,
@@ -2815,7 +2834,25 @@ studioRouter.post(
         updatedAt: folder.updatedAt,
       });
     } catch (err) {
+      // Even with the pre-check above, a concurrent insert can still
+      // race past it and trip the unique index. Treat that as the same
+      // "already exists" case rather than surfacing a 409 — re-fetch
+      // and return the winner.
       if (err?.code === "P2002") {
+        const winner = await prisma.assetFolder.findFirst({
+          where: { clientId: req.params.id, name: req.body?.name?.trim?.() ?? "" },
+          include: { _count: { select: { assets: true } } },
+        });
+        if (winner) {
+          return res.status(200).json({
+            id: winner.id,
+            clientId: winner.clientId,
+            name: winner.name,
+            assetCount: winner._count.assets,
+            createdAt: winner.createdAt,
+            updatedAt: winner.updatedAt,
+          });
+        }
         return sendError(res, 409, "DUPLICATE_FOLDER", "A folder with that name already exists");
       }
       next(err);
