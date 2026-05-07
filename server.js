@@ -2,10 +2,11 @@ import { createServer } from "node:http";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import pinoHttp from "pino-http";
 import { rateLimit } from "express-rate-limit";
 
 import { env, bootEnvWarnings } from "./config/env.js";
+import { buildRequestLogger } from "./lib/requestLogger.js";
+import { initSentry, sentryRequestHandler, setupSentryErrorHandler } from "./lib/sentry.js";
 import { prisma, isConnected } from "./prisma.js";
 import { getRedis } from "./redis.js";
 
@@ -28,16 +29,26 @@ import { requireUser } from "./middleware/requireUser.js";
 // ===== Boot warnings =====
 bootEnvWarnings();
 
+// ===== Sentry (optional — controlled by SENTRY_DSN) =====
+// Production startup uses `node --import ./instrument.js server.js`,
+// which initializes Sentry BEFORE this file is even loaded so v8 auto
+// instrumentation can hook Express. The call below is idempotent and
+// covers test/dev paths that import server.js directly without the
+// pre-loader (e.g. tests/routeImports.test.js, ad-hoc node -e checks).
+initSentry();
+
 // ===== App =====
 const app = express();
 app.set("trust proxy", true);
 
-// logging
-const pretty =
-  env.NODE_ENV !== "production"
-    ? { transport: { target: "pino-pretty", options: { colorize: true } } }
-    : undefined;
-app.use(pinoHttp(pretty ? pretty : {}));
+// Sentry's request handler must run before any routes — captures req
+// metadata so unhandled errors below carry context. No-op when SENTRY_DSN
+// is absent.
+app.use(sentryRequestHandler());
+
+// Structured request logging — see lib/requestLogger.js. Adds
+// requestId + userId + clientId to every log line, redacts secrets.
+app.use(buildRequestLogger());
 
 // security / hardening
 app.use(
@@ -162,6 +173,12 @@ app.use((req, res) => {
   return sendError(res, 404, "NOT_FOUND", "Not found");
 });
 
+// Sentry's official Express error handler — must run BEFORE the JSON
+// responder so unhandled 5xx errors carry full request context. v8 of
+// @sentry/node installs the handler via setupExpressErrorHandler(app);
+// the helper is a no-op when SENTRY_DSN is unset.
+setupSentryErrorHandler(app);
+
 app.use((err, req, res, _next) => {
   const status = err?.status || err?.statusCode || 500;
   req.log?.error({ err, status }, "unhandled_error");
@@ -175,7 +192,10 @@ app.use((err, req, res, _next) => {
   }
 
   const message = status >= 500 ? "Internal Server Error" : (err.message || "Request failed");
-  const code = status >= 500 ? "INTERNAL" : "REQUEST_FAILED";
+  // Preserve a caller-supplied error code (e.g. CHANNEL_NOT_CONNECTED) for
+  // non-5xx responses so the client can branch on it; never leak details
+  // for 5xx.
+  const code = status >= 500 ? "INTERNAL" : (err?.code || "REQUEST_FAILED");
   return sendError(res, status, code, message);
 });
 

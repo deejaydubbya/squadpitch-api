@@ -1,14 +1,29 @@
 import { sendError } from "../lib/apiErrors.js";
 
-const ROLES_CLAIM = "https://mivalta.com/roles";
+// Custom JWT claim namespaces for the user's role array.
+// During the Auth0 Action migration we read the new Squadpitch namespace
+// first, then fall back to the legacy Mivalta namespace so users issued
+// tokens before the Action change keep working.
+//
+// TODO: remove ROLES_CLAIM_LEGACY (and the fallback below) once the Auth0
+// Action stops emitting the mivalta.com claim. See
+// docs/admin-console-production-review/11-domain-migration-plan.md § 5.
+const ROLES_CLAIM = "https://squadpitch.com/roles";
+const ROLES_CLAIM_LEGACY = "https://mivalta.com/roles";
 
 /**
  * Read Auth0 roles from the JWT custom claim.
  * Returns an array of role strings (e.g. ["admin", "developer"]).
+ *
+ * Reads the Squadpitch namespace first; falls back to the legacy Mivalta
+ * namespace for backward compatibility during the migration window.
  */
 export function getUserRoles(req) {
-  const roles = req.auth?.payload?.[ROLES_CLAIM];
-  return Array.isArray(roles) ? roles : [];
+  const payload = req.auth?.payload;
+  const primary = payload?.[ROLES_CLAIM];
+  if (Array.isArray(primary)) return primary;
+  const legacy = payload?.[ROLES_CLAIM_LEGACY];
+  return Array.isArray(legacy) ? legacy : [];
 }
 
 /**

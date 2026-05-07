@@ -233,10 +233,11 @@ export async function getWorkspaceDetail(clientId) {
   };
 }
 
-export async function deleteAllWorkspaces() {
-  const result = await prisma.client.deleteMany();
-  return { ok: true, deleted: result.count };
-}
+// `deleteAllWorkspaces` was removed in 2026-05 — it was reachable by the
+// `developer` role and would wipe every Client row with no confirmation.
+// If you need bulk workspace cleanup, write a CLI script under `scripts/`
+// that reads DATABASE_URL directly. Do not re-introduce a HTTP-callable
+// version.
 
 // ── Content Debugger ─────────────────────────────────────────────────────
 

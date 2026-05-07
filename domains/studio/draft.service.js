@@ -15,6 +15,11 @@ const DRAFT_ASSET_INCLUDE = {
 
 export async function listDrafts({
   clientId,
+  // Optional list of client IDs to scope the query to. The route handler
+  // populates this with the authenticated user's owned clients when no
+  // `clientId` filter is supplied — without it the route would return
+  // every draft in the database. Tenant-isolation defence.
+  clientIds,
   status,
   kind,
   channel,
@@ -24,6 +29,7 @@ export async function listDrafts({
   return prisma.draft.findMany({
     where: {
       ...(clientId && { clientId }),
+      ...(!clientId && Array.isArray(clientIds) && { clientId: { in: clientIds } }),
       ...(status && { status }),
       ...(kind && { kind }),
       ...(channel && { channel }),

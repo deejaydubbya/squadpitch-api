@@ -6,6 +6,7 @@
 import { prisma } from "../../prisma.js";
 import { getImageStorageService, getVideoStorageService } from "../../services/storage/imageStorage.js";
 import { enforceUsageLimit, incrementUsage, checkStorageLimit } from "../billing/billing.service.js";
+import { sniffImageMime, sniffVideoMime } from "../../lib/mimeDetect.js";
 import * as driveProvider from "./providers/driveProvider.js";
 import * as dropboxProvider from "./providers/dropboxProvider.js";
 
@@ -48,18 +49,29 @@ export async function importFile(userId, integrationId, fileRef, clientId) {
   if (!provider) throw Object.assign(new Error(`Unsupported provider: ${integration.type}`), { status: 400 });
 
   // Download from provider
-  const { buffer, mimeType, filename } = await provider.downloadFile(
+  const { buffer, mimeType: providerMime, filename } = await provider.downloadFile(
     integrationId,
     integration.config,
     fileRef
   );
 
-  // Determine asset type
-  const isVideo = mimeType.startsWith("video/");
-  const isImage = mimeType.startsWith("image/");
-  if (!isVideo && !isImage) {
-    throw Object.assign(new Error(`Unsupported file type: ${mimeType}`), { status: 400 });
+  // MIME safety: sniff the actual bytes rather than trust the provider's
+  // declared mimeType. We allowlist only formats our publishing channels
+  // support.
+  const sniffedImage = sniffImageMime(buffer);
+  const sniffedVideo = sniffVideoMime(buffer);
+  if (!sniffedImage && !sniffedVideo) {
+    const err = new Error(
+      `Unsupported file type. Allowed: JPEG, PNG, WebP, GIF, MP4, MOV, WebM.`
+    );
+    err.status = 415;
+    err.code = "UNSUPPORTED_MEDIA_TYPE";
+    throw err;
   }
+  const mimeType = sniffedImage ?? sniffedVideo;
+  const isVideo = Boolean(sniffedVideo);
+  // Drop providerMime intentionally — recorded MIME is always the sniffed one.
+  void providerMime;
 
   // Enforce usage & storage limits before uploading
   const usageField = isVideo ? "videos" : "images";
@@ -147,8 +159,20 @@ export async function exportFile(userId, integrationId, assetId, folderRef) {
     throw Object.assign(new Error(`Provider ${integration.type} does not support export`), { status: 400 });
   }
 
-  // Look up the asset
-  const asset = await prisma.mediaAsset.findUnique({ where: { id: assetId } });
+  // Tenant isolation: only export assets that live in a workspace
+  // owned by the requesting user. Without this, anyone with a connected
+  // Drive could call export with another user's MediaAsset id and have
+  // its bytes copied into their own cloud storage. Client.createdBy
+  // stores the auth0 sub (no FK relation to User), so we resolve the
+  // sub once and filter via the relation.
+  const requester = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { auth0Sub: true },
+  });
+  if (!requester) throw Object.assign(new Error("Asset not found"), { status: 404 });
+  const asset = await prisma.mediaAsset.findFirst({
+    where: { id: assetId, client: { createdBy: requester.auth0Sub } },
+  });
   if (!asset) throw Object.assign(new Error("Asset not found"), { status: 404 });
   if (!asset.url) throw Object.assign(new Error("Asset has no URL"), { status: 400 });
 

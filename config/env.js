@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { assertStripeEnvConfigured } from "../domains/billing/billing.constants.js";
 
 export const env = {
   PORT: process.env.PORT ?? "8080",
@@ -116,6 +117,19 @@ export const env = {
   ATTOM_API_KEY: process.env.ATTOM_API_KEY,
   ATTOM_API_BASE: process.env.ATTOM_API_BASE ?? "https://api.gateway.attomdata.com",
 
+  // Observability (all optional — code degrades gracefully if unset)
+  SENTRY_DSN: process.env.SENTRY_DSN,
+  SENTRY_ENVIRONMENT: process.env.SENTRY_ENVIRONMENT,
+  SENTRY_TRACES_SAMPLE_RATE: process.env.SENTRY_TRACES_SAMPLE_RATE,
+
+  // Publishing reliability
+  // - PUBLISH_ADAPTER_TIMEOUT_MS: hard cap on per-channel adapter calls
+  //   (default 45_000). See domains/studio/publishing/publishTimeout.js.
+  // - OPS_SLACK_WEBHOOK_URL: optional Slack incoming webhook for backlog/
+  //   failure alerts. If unset, alerts are logged as structured JSON.
+  PUBLISH_ADAPTER_TIMEOUT_MS: process.env.PUBLISH_ADAPTER_TIMEOUT_MS,
+  OPS_SLACK_WEBHOOK_URL: process.env.OPS_SLACK_WEBHOOK_URL,
+
   // Stripe billing
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
@@ -158,6 +172,10 @@ export function bootEnvWarnings() {
   }
   if (!env.STRIPE_SECRET_KEY) {
     console.warn("[BOOT] STRIPE_SECRET_KEY missing; billing features disabled");
+  } else {
+    // Defer to billing.constants for the per-tier price-id check so we
+    // get a single warning that names every missing var.
+    assertStripeEnvConfigured(env);
   }
   if (!env.RENTCAST_API_KEY) {
     console.warn("[BOOT] RENTCAST_API_KEY missing; property data lookups will fail");

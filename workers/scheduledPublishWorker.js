@@ -3,6 +3,7 @@ import { getRedisConnection } from "../redis.js";
 import { prisma } from "../prisma.js";
 import { publishDraft } from "../domains/studio/publishing/publishingService.js";
 import { transitionDraft } from "../domains/studio/draftWorkflow.service.js";
+import { sendOpsAlert } from "../lib/opsAlert.js";
 
 const QUEUE_NAME = "sp-scheduled-publish";
 const POLL_INTERVAL_MS = 60_000;
@@ -10,16 +11,36 @@ const MAX_PUBLISH_ATTEMPTS = 5;
 const BATCH_CAP = 50;
 const ACTOR_SUB = "system|sp-scheduled-worker";
 
+// Alert thresholds. These are deliberately loose — sendOpsAlert dedupes for
+// 10 minutes per `key`, so we don't need extra hysteresis here.
+const ALERT_BACKLOG_THRESHOLD = 25;        // beyond BATCH_CAP
+const ALERT_FAIL_RATE_THRESHOLD = 0.5;     // 50% of a tick failed permanently
+const ALERT_FAIL_MIN_COUNT = 3;            // ignore tiny ticks
+
 // ---------------------------------------------------------------------------
 // Error classification
 // ---------------------------------------------------------------------------
 
+// Permanent: content/config the user must fix; retrying won't help.
 const PERMANENT_CODES = new Set([
   "NO_MEDIA",
   "CAPTION_TOO_LONG",
   "CONNECTION_INVALID",
   "INVALID_STATUS",
   "DRAFT_NOT_FOUND",
+  "VALIDATION_FAILED",
+]);
+
+// Connection: token/auth issue — user must reconnect the channel before
+// any further attempt will succeed.
+const CONNECTION_CODES = new Set([
+  "CHANNEL_NOT_CONNECTED",
+  "TOKEN_EXPIRED",
+  "PROVIDER_AUTH_FAILED",
+  "META_OAUTH_FAILED",
+  // Legacy code from the previous publishingService — keep recognising it
+  // so any in-flight retries from before the upgrade still classify right.
+  "SCHEDULED_PUBLISH_NO_CONNECTION",
 ]);
 
 function classifyError(err) {
@@ -32,10 +53,11 @@ function classifyError(err) {
   if (status === 400 && !isAuthError(status, code, metaCode)) return "permanent";
 
   // Connection — auth / credential problems
+  if (CONNECTION_CODES.has(code)) return "connection";
   if (isAuthError(status, code, metaCode)) return "connection";
-  if (code === "SCHEDULED_PUBLISH_NO_CONNECTION") return "connection";
 
-  // Everything else is transient (5xx, network, rate-limit, unknown)
+  // Everything else is transient (PROVIDER_TIMEOUT, RATE_LIMITED, 5xx,
+  // network, PROVIDER_NO_EXTERNAL_ID, unknown).
   return "transient";
 }
 
@@ -44,6 +66,7 @@ function isAuthError(status, code, metaCode) {
     status === 401 ||
     status === 403 ||
     code === "META_OAUTH_FAILED" ||
+    code === "PROVIDER_AUTH_FAILED" ||
     metaCode === 190 ||
     metaCode === 102
   );
@@ -136,6 +159,16 @@ async function processTick() {
   console.log(
     `[SP-WORKER] Tick start: ${dueDrafts.length} draft(s) due${backlogMsg}`
   );
+
+  if (backlog >= ALERT_BACKLOG_THRESHOLD) {
+    sendOpsAlert({
+      key: "sp-scheduled-publish:backlog",
+      severity: "warning",
+      title: "Scheduled publish backlog growing",
+      message: `${backlog} draft(s) past their scheduledFor are waiting beyond the per-tick batch cap (${BATCH_CAP}).`,
+      context: { backlog, batchCap: BATCH_CAP, totalDue, queue: QUEUE_NAME },
+    }).catch(() => {});
+  }
 
   const tickStart = Date.now();
   let success = 0;
@@ -244,6 +277,24 @@ async function processTick() {
   console.log(
     `[SP-WORKER] Tick done in ${elapsed}ms: success=${success} fail=${fail} skip=${skip}`
   );
+
+  // Failure-rate alert. Only fire when the tick was big enough that a
+  // ratio is meaningful — we don't want a single fluky failure paging
+  // anybody.
+  const decided = success + fail;
+  if (
+    fail >= ALERT_FAIL_MIN_COUNT &&
+    decided > 0 &&
+    fail / decided >= ALERT_FAIL_RATE_THRESHOLD
+  ) {
+    sendOpsAlert({
+      key: "sp-scheduled-publish:fail-rate",
+      severity: "critical",
+      title: "Scheduled publish failure rate is high",
+      message: `${fail}/${decided} drafts marked FAILED in this tick.`,
+      context: { success, fail, skip, decided, queue: QUEUE_NAME },
+    }).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------

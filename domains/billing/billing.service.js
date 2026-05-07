@@ -1,7 +1,8 @@
 import Stripe from "stripe";
 import { env } from "../../config/env.js";
 import { prisma } from "../../prisma.js";
-import { getLimitsForTier, getTierRank } from "./billing.constants.js";
+import { getLimitsForTier, getTierRank, PAID_TIERS } from "./billing.constants.js";
+import { logEvent } from "../../lib/logger.js";
 
 const stripe = env.STRIPE_SECRET_KEY
   ? new Stripe(env.STRIPE_SECRET_KEY)
@@ -18,6 +19,33 @@ const TIER_PRICE_MAP = {
   GROWTH: env.STRIPE_GROWTH_PRICE_ID,
   AGENCY: env.STRIPE_AGENCY_PRICE_ID,
 };
+
+// ── Effective tier — single source of truth ─────────────────────────────
+//
+// Why this exists: a Subscription row can exist *before* checkout completes
+// (we create one to track the Stripe customer ID — see `getOrCreateCustomer`).
+// Such a pre-checkout row has no `stripeSubscriptionId` and must NEVER
+// confer paid-tier limits, even though `tier` defaults to STARTER and
+// `status` defaults to ACTIVE at the schema level.
+//
+// All usage limits, workspace limits, feature gates, and billing UI MUST
+// route their tier decision through this function. Never read `sub.tier`
+// directly.
+//
+// Returns "FREE" unless ALL of the following hold:
+//   - subscription row exists
+//   - it has a real `stripeSubscriptionId`
+//   - status is ACTIVE or TRIALING (live billing states)
+//   - tier is one of STARTER / PRO / GROWTH / AGENCY
+const ACTIVE_STATUSES = new Set(["ACTIVE", "TRIALING"]);
+
+export function getEffectiveTier(sub) {
+  if (!sub) return "FREE";
+  if (!sub.stripeSubscriptionId) return "FREE";
+  if (!ACTIVE_STATUSES.has(sub.status)) return "FREE";
+  if (!PAID_TIERS.includes(sub.tier)) return "FREE";
+  return sub.tier;
+}
 
 // ── Plans (fetch prices from Stripe) ─────────────────────────────────────
 
@@ -67,13 +95,18 @@ export async function getOrCreateCustomer(userId, email) {
     metadata: { userId },
   });
 
+  // Persist the Stripe customer ID without claiming any paid-tier state.
+  // The schema-level defaults (`tier: STARTER`, `status: ACTIVE`) still
+  // apply, BUT `stripeSubscriptionId` stays null until checkout completes
+  // and the webhook fires. `getEffectiveTier()` keys off
+  // `stripeSubscriptionId`, so this row is treated as FREE for limits
+  // until `checkout.session.completed` lands. Do NOT set `tier` or
+  // `status` explicitly here — both are misleading pre-checkout.
   await prisma.subscription.upsert({
     where: { userId },
     create: {
       userId,
       stripeCustomerId: customer.id,
-      tier: "STARTER",
-      status: "TRIALING",
     },
     update: { stripeCustomerId: customer.id },
   });
@@ -96,6 +129,13 @@ export async function createCheckoutSession({ userId, email, tier, successUrl, c
     success_url: successUrl,
     cancel_url: cancelUrl,
     metadata: { userId, tier },
+  });
+
+  logEvent("billing.checkout.session_created", {
+    userId,
+    tier,
+    stripeCustomerId: customerId,
+    stripeSessionId: session.id,
   });
 
   return { url: session.url };
@@ -136,7 +176,7 @@ export async function getUsage(userId) {
   });
 
   const sub = await prisma.subscription.findUnique({ where: { userId } });
-  const tier = sub?.tier ?? "FREE";
+  const tier = getEffectiveTier(sub);
   const limits = getLimitsForTier(tier);
 
   // Compute storage across all user's workspaces
@@ -225,7 +265,7 @@ export async function checkUsageNearing(userId, field) {
  */
 export async function checkClientLimit(userId) {
   const sub = await prisma.subscription.findUnique({ where: { userId } });
-  const tier = sub?.tier ?? "FREE";
+  const tier = getEffectiveTier(sub);
   const limit = getLimitsForTier(tier).workspaces;
   if (limit === Infinity) return true;
   // Client.createdBy stores auth0Sub, so look up the user's sub
@@ -344,7 +384,7 @@ export async function getRemainingUsage(userId) {
 export async function getJobPriorityForUser(userId) {
   try {
     const sub = await prisma.subscription.findUnique({ where: { userId } });
-    const tier = sub?.tier ?? "FREE";
+    const tier = getEffectiveTier(sub);
 
     // Paid users get priority 5
     if (tier !== "FREE") return 5;
@@ -441,12 +481,70 @@ const PRICE_TO_TIER = Object.fromEntries(
     .map(([k, v]) => [v, k])
 );
 
+// ── Stripe webhook ordering / dedup guard ─────────────────────────────
+//
+// Stripe occasionally retries events out of order — a delayed
+// `customer.subscription.deleted` arriving after a fresh upgrade
+// would silently downgrade the user. We track the last processed
+// event's `created` timestamp and id per subscription and skip stale
+// or duplicate events.
+//
+// Keys:
+//   { userId }                       (when we have it from session.metadata)
+//   { stripeSubscriptionId }         (everything else)
+//   { stripeCustomerId }             (only as a last resort)
+//
+// Returns:
+//   { allow: boolean, reason?: string, sub: Subscription | null }
+//
+// Callers MUST call `markEventProcessed(...)` after a successful update
+// so the next event with this row's `stripeSubscriptionId` is compared
+// against the right baseline.
+async function shouldProcessEvent(event, lookup) {
+  const sub = await prisma.subscription.findUnique({ where: lookup });
+  if (!sub) return { allow: true, sub: null };
+
+  // Duplicate-event guard. Only fires when BOTH ids are present —
+  // otherwise undefined === undefined would falsely match for any
+  // subscription that pre-dates the ordering guard fields.
+  if (event.id && sub.lastStripeEventId && sub.lastStripeEventId === event.id) {
+    return { allow: false, reason: "duplicate_event_id", sub };
+  }
+  if (
+    typeof sub.lastStripeEventCreated === "number" &&
+    typeof event.created === "number" &&
+    event.created < sub.lastStripeEventCreated
+  ) {
+    return { allow: false, reason: "stale_event", sub };
+  }
+  return { allow: true, sub };
+}
+
+function logSkippedEvent(event, reason, sub) {
+  logEvent("stripe.webhook.skipped", {
+    stripeEventId: event.id,
+    type: event.type,
+    reason,
+    eventCreated: event.created,
+    lastEventCreated: sub?.lastStripeEventCreated ?? null,
+    lastEventId: sub?.lastStripeEventId ?? null,
+    userId: sub?.userId ?? null,
+    stripeSubscriptionId: sub?.stripeSubscriptionId ?? null,
+  });
+}
+
 export async function handleWebhookEvent(event) {
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object;
       const { userId, tier } = session.metadata;
       if (!userId) break;
+
+      const guard = await shouldProcessEvent(event, { userId });
+      if (!guard.allow) {
+        logSkippedEvent(event, guard.reason, guard.sub);
+        break;
+      }
 
       const subscriptionId = session.subscription;
       const s = requireStripe();
@@ -455,6 +553,8 @@ export async function handleWebhookEvent(event) {
       // current_period_end moved to items in newer Stripe API versions
       const periodEnd = sub.current_period_end
         ?? sub.items?.data?.[0]?.current_period_end;
+
+      const before = guard.sub;
 
       await prisma.subscription.upsert({
         where: { userId },
@@ -465,22 +565,36 @@ export async function handleWebhookEvent(event) {
           tier: tier || "STARTER",
           status: "ACTIVE",
           ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
+          lastStripeEventId: event.id,
+          lastStripeEventCreated: event.created,
         },
         update: {
           stripeSubscriptionId: subscriptionId,
           tier: tier || "STARTER",
           status: "ACTIVE",
           ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
+          lastStripeEventId: event.id,
+          lastStripeEventCreated: event.created,
         },
+      });
+
+      logEvent("billing.subscription.activated", {
+        userId,
+        fromTier: before ? getEffectiveTier(before) : "FREE",
+        toTier: tier || "STARTER",
+        stripeSubscriptionId: subscriptionId,
       });
       break;
     }
 
     case "customer.subscription.updated": {
       const sub = event.data.object;
-      const dbSub = await prisma.subscription.findUnique({
-        where: { stripeSubscriptionId: sub.id },
-      });
+      const guard = await shouldProcessEvent(event, { stripeSubscriptionId: sub.id });
+      if (!guard.allow) {
+        logSkippedEvent(event, guard.reason, guard.sub);
+        break;
+      }
+      const dbSub = guard.sub;
       if (!dbSub) break;
 
       const status = sub.status === "active" ? "ACTIVE"
@@ -494,6 +608,7 @@ export async function handleWebhookEvent(event) {
       // Sync tier from Stripe price ID (handles plan changes via Stripe dashboard or API)
       const currentPriceId = sub.items?.data?.[0]?.price?.id;
       const syncedTier = currentPriceId ? PRICE_TO_TIER[currentPriceId] : null;
+      const newTier = syncedTier ?? sub.metadata?.tier ?? dbSub.tier;
 
       await prisma.subscription.update({
         where: { stripeSubscriptionId: sub.id },
@@ -503,16 +618,46 @@ export async function handleWebhookEvent(event) {
           ...(sub.metadata?.tier && !syncedTier && { tier: sub.metadata.tier }),
           ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
           cancelAtPeriodEnd: sub.cancel_at_period_end,
+          lastStripeEventId: event.id,
+          lastStripeEventCreated: event.created,
         },
       });
+
+      // Emit a tier-change event only when the tier actually moved.
+      if (newTier !== dbSub.tier) {
+        logEvent("billing.subscription.tier_changed", {
+          userId: dbSub.userId,
+          fromTier: dbSub.tier,
+          toTier: newTier,
+          status,
+          stripeSubscriptionId: sub.id,
+        });
+      } else if (status !== dbSub.status) {
+        logEvent("billing.subscription.status_changed", {
+          userId: dbSub.userId,
+          tier: newTier,
+          fromStatus: dbSub.status,
+          toStatus: status,
+          stripeSubscriptionId: sub.id,
+        });
+      }
       break;
     }
 
     case "customer.subscription.deleted": {
       const sub = event.data.object;
+      const guard = await shouldProcessEvent(event, { stripeSubscriptionId: sub.id });
+      if (!guard.allow) {
+        logSkippedEvent(event, guard.reason, guard.sub);
+        break;
+      }
       await prisma.subscription.updateMany({
         where: { stripeSubscriptionId: sub.id },
-        data: { status: "CANCELED" },
+        data: {
+          status: "CANCELED",
+          lastStripeEventId: event.id,
+          lastStripeEventCreated: event.created,
+        },
       });
       break;
     }
@@ -523,9 +668,18 @@ export async function handleWebhookEvent(event) {
       const subId = invoice.subscription;
       if (!subId) break;
 
+      const guard = await shouldProcessEvent(event, { stripeSubscriptionId: subId });
+      if (!guard.allow) {
+        logSkippedEvent(event, guard.reason, guard.sub);
+        break;
+      }
       await prisma.subscription.updateMany({
         where: { stripeSubscriptionId: subId },
-        data: { status: "ACTIVE" },
+        data: {
+          status: "ACTIVE",
+          lastStripeEventId: event.id,
+          lastStripeEventCreated: event.created,
+        },
       });
       break;
     }
@@ -536,9 +690,18 @@ export async function handleWebhookEvent(event) {
       const subId = invoice.subscription;
       if (!subId) break;
 
+      const guard = await shouldProcessEvent(event, { stripeSubscriptionId: subId });
+      if (!guard.allow) {
+        logSkippedEvent(event, guard.reason, guard.sub);
+        break;
+      }
       await prisma.subscription.updateMany({
         where: { stripeSubscriptionId: subId },
-        data: { status: "PAST_DUE" },
+        data: {
+          status: "PAST_DUE",
+          lastStripeEventId: event.id,
+          lastStripeEventCreated: event.created,
+        },
       });
       break;
     }

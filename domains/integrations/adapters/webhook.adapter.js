@@ -11,9 +11,12 @@ export class WebhookAdapter extends BaseAdapter {
   name = "webhook";
 
   async handleEvent(userId, eventType, payload) {
+    // Pull only the columns we need to *decide* whether to enqueue. The
+    // signing secret stays in Postgres — the worker fetches it at execute
+    // time so it never lands in the BullMQ payload (Redis).
     const hooks = await prisma.outboundWebhook.findMany({
       where: { userId, isActive: true },
-      select: { id: true, targetUrl: true, secret: true, subscribedEvents: true },
+      select: { id: true, subscribedEvents: true },
     });
 
     if (!hooks.length) return [];
@@ -37,8 +40,6 @@ export class WebhookAdapter extends BaseAdapter {
       try {
         await queue.add("send-notification-webhook", {
           webhookId: hook.id,
-          targetUrl: hook.targetUrl,
-          secret: hook.secret,
           eventType,
           payload,
           userId,

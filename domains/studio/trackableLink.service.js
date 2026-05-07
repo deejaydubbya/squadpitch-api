@@ -70,3 +70,10 @@ export async function incrementClickCount(id) {
 export async function deleteLink(id) {
   return prisma.trackableLink.delete({ where: { id } });
 }
+
+// Scoped delete: only deletes the link if it lives in the given workspace.
+// deleteMany returns { count }, so a count of 0 signals cross-workspace
+// attempt or already-gone — the route maps that to 404.
+export async function deleteLinkInClient(id, clientId) {
+  return prisma.trackableLink.deleteMany({ where: { id, clientId } });
+}

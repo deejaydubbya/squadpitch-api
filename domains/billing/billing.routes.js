@@ -2,11 +2,18 @@ import express from "express";
 import Stripe from "stripe";
 import { env } from "../../config/env.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
+import { logEvent } from "../../lib/logger.js";
 import * as billingService from "./billing.service.js";
 import { getUsageForPeriod, getAiCostBreakdown } from "./aiUsageTracking.service.js";
 import { getAllServicesHealth, checkBudgetStatus, getThrottlePolicy, setAdminFlag, clearAdminFlag } from "./serviceHealth.service.js";
 import { CreateCheckoutSchema, CreatePortalSchema, ChangePlanSchema } from "./billing.schemas.js";
-import { requireAdmin } from "../../middleware/requireAdmin.js";
+// requireAdminRole reads the Auth0 roles claim (squadpitch.com /
+// mivalta.com fallback) and only lets through users with the "admin"
+// role. The legacy requireAdmin middleware (env ADMIN_USER_IDS) is
+// intentionally NOT used here — it lets a former-admin sub keep
+// elevated access after role revocation in Auth0, and a developer-role
+// user shouldn't pause AI generation for the whole platform.
+import { requireAdminRole } from "../../middleware/requireRole.js";
 
 export const billingRouter = express.Router();
 
@@ -151,7 +158,7 @@ billingRouter.get(`${BASE}/system-health`, async (req, res, next) => {
 
 // ── Admin Controls ──────────────────────────────────────────────────────
 
-billingRouter.post(`${BASE}/admin/pause-ai`, requireAdmin, async (req, res, next) => {
+billingRouter.post(`${BASE}/admin/pause-ai`, requireAdminRole, async (req, res, next) => {
   try {
     await setAdminFlag("sp:admin:pause_ai");
     res.json({ ok: true, flag: "pause_ai", value: true });
@@ -160,7 +167,7 @@ billingRouter.post(`${BASE}/admin/pause-ai`, requireAdmin, async (req, res, next
   }
 });
 
-billingRouter.post(`${BASE}/admin/resume-ai`, requireAdmin, async (req, res, next) => {
+billingRouter.post(`${BASE}/admin/resume-ai`, requireAdminRole, async (req, res, next) => {
   try {
     await clearAdminFlag("sp:admin:pause_ai");
     res.json({ ok: true, flag: "pause_ai", value: false });
@@ -169,7 +176,7 @@ billingRouter.post(`${BASE}/admin/resume-ai`, requireAdmin, async (req, res, nex
   }
 });
 
-billingRouter.post(`${BASE}/admin/disable-video`, requireAdmin, async (req, res, next) => {
+billingRouter.post(`${BASE}/admin/disable-video`, requireAdminRole, async (req, res, next) => {
   try {
     await setAdminFlag("sp:admin:disable_video");
     res.json({ ok: true, flag: "disable_video", value: true });
@@ -178,7 +185,7 @@ billingRouter.post(`${BASE}/admin/disable-video`, requireAdmin, async (req, res,
   }
 });
 
-billingRouter.post(`${BASE}/admin/enable-video`, requireAdmin, async (req, res, next) => {
+billingRouter.post(`${BASE}/admin/enable-video`, requireAdminRole, async (req, res, next) => {
   try {
     await clearAdminFlag("sp:admin:disable_video");
     res.json({ ok: true, flag: "disable_video", value: false });
@@ -187,7 +194,7 @@ billingRouter.post(`${BASE}/admin/enable-video`, requireAdmin, async (req, res, 
   }
 });
 
-billingRouter.get(`${BASE}/admin/status`, requireAdmin, async (req, res, next) => {
+billingRouter.get(`${BASE}/admin/status`, requireAdminRole, async (req, res, next) => {
   try {
     const [services, openai, fal, throttle] = await Promise.all([
       getAllServicesHealth(),
@@ -216,14 +223,28 @@ billingRouter.post(`${BASE}/webhook`, async (req, res) => {
     const stripe = new Stripe(env.STRIPE_SECRET_KEY);
     event = stripe.webhooks.constructEvent(req.body, sig, env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
+    logEvent("stripe.webhook.signature_failed", { error: err.message });
     return sendError(res, 400, "WEBHOOK_SIGNATURE_ERROR", `Webhook signature verification failed: ${err.message}`);
   }
 
+  logEvent("stripe.webhook.received", {
+    stripeEventId: event.id,
+    type: event.type,
+  });
+
   try {
     await billingService.handleWebhookEvent(event);
+    logEvent("stripe.webhook.processed", {
+      stripeEventId: event.id,
+      type: event.type,
+    });
     res.json({ received: true });
   } catch (err) {
-    console.error("[BILLING WEBHOOK]", err);
+    logEvent("stripe.webhook.failed", {
+      stripeEventId: event.id,
+      type: event.type,
+      error: err?.message ?? "unknown",
+    });
     res.status(500).json({ received: false, error: "Internal error" });
   }
 });

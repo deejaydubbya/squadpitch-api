@@ -2,6 +2,8 @@
 // Mounted under /api/v1/integrations/webhooks
 
 import express from "express";
+import { z } from "zod";
+import { validationError } from "../../lib/apiErrors.js";
 import {
   getWebhooks,
   getWebhook,
@@ -15,6 +17,41 @@ import { deliverWebhook } from "./providers/webhookProvider.js";
 export const webhookRouter = express.Router();
 
 const BASE = "/api/v1/integrations/webhooks";
+
+// ── Validation schemas ────────────────────────────────────────────────
+//
+// targetUrl must be an http(s) URL. We don't allow file:, javascript:, or
+// other custom schemes — webhooks are an outbound HTTP feature.
+
+const HttpsUrl = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((u) => /^https?:\/\//i.test(u), {
+    message: "targetUrl must be an http(s) URL",
+  });
+
+// Known event types we'll deliver. Anything else is rejected so a typo
+// can't silently never fire.
+const SubscribedEventEnum = z.enum([
+  "POST_PUBLISHED",
+  "POST_FAILED",
+  "USAGE_LIMIT_NEARING",
+  "CONNECTION_EXPIRED",
+  "BATCH_COMPLETE",
+  "TEST",
+]);
+
+const CreateWebhookSchema = z.object({
+  targetUrl: HttpsUrl,
+  subscribedEvents: z.array(SubscribedEventEnum).min(1).max(20).optional(),
+});
+
+const UpdateWebhookSchema = z.object({
+  targetUrl: HttpsUrl.optional(),
+  subscribedEvents: z.array(SubscribedEventEnum).min(1).max(20).optional(),
+  isActive: z.boolean().optional(),
+});
 
 // GET all webhooks
 webhookRouter.get(BASE, async (req, res, next) => {
@@ -31,11 +68,9 @@ webhookRouter.get(BASE, async (req, res, next) => {
 // POST create webhook
 webhookRouter.post(BASE, async (req, res, next) => {
   try {
-    const { targetUrl, subscribedEvents } = req.body;
-    if (!targetUrl) {
-      return res.status(400).json({ error: "targetUrl is required" });
-    }
-    const webhook = await createWebhook(req.user.id, { targetUrl, subscribedEvents });
+    const parsed = CreateWebhookSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const webhook = await createWebhook(req.user.id, parsed.data);
     // Return secret only on creation so user can copy it
     res.status(201).json({ webhook });
   } catch (err) {
@@ -46,15 +81,12 @@ webhookRouter.post(BASE, async (req, res, next) => {
 // PUT update webhook
 webhookRouter.put(`${BASE}/:id`, async (req, res, next) => {
   try {
-    const { targetUrl, subscribedEvents, isActive } = req.body;
-    await updateWebhook(req.user.id, req.params.id, {
-      targetUrl,
-      subscribedEvents,
-      isActive,
-    });
+    const parsed = UpdateWebhookSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    await updateWebhook(req.user.id, req.params.id, parsed.data);
     const updated = await getWebhook(req.user.id, req.params.id);
     if (!updated) return res.status(404).json({ error: "Webhook not found" });
-    const { secret, ...safe } = updated;
+    const { secret: _secret, ...safe } = updated;
     res.json({ webhook: safe });
   } catch (err) {
     next(err);

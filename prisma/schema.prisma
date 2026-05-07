@@ -563,6 +563,14 @@ model Subscription {
   status               SubscriptionStatus @default(ACTIVE)
   currentPeriodEnd     DateTime?
   cancelAtPeriodEnd    Boolean            @default(false)
+  // Stripe webhook ordering guard. Older events (delayed retries, network
+  // re-orderings) must not overwrite newer subscription state.
+  // `lastStripeEventCreated` is the unix-second timestamp of the most
+  // recent processed event for this subscription; stale events are
+  // ignored. `lastStripeEventId` lets us detect duplicates of the same
+  // event id and skip cleanly.
+  lastStripeEventCreated Int?
+  lastStripeEventId      String?
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
@@ -1284,4 +1292,36 @@ model FeatureFlag {
   @@index([category])
   @@index([enabled])
   @@map("feature_flags")
+}
+
+// ── Audit Log ───────────────────────────────────────────────────────────
+//
+// Append-only record of admin/developer mutations on the internal admin
+// console. Read by ops + support to answer "who toggled this flag" /
+// "why did the tester get deleted".
+//
+// Critical: nothing in `metadata` should be a secret. The audit-log
+// service redacts known sensitive keys before write. Schema-level
+// guarantees aren't possible here (Json column), so the discipline lives
+// in lib/auditLog.js.
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorSub     String   // Auth0 sub of the admin/developer who acted
+  actorEmail   String?  // Snapshot of email at action time (for reads after a user is renamed/deleted)
+  actorRoles   String[] // Snapshot of roles at action time
+  action       String   // e.g. "flag.toggle", "service.delete", "tester.update"
+  resourceType String   // "FeatureFlag" | "ExternalService" | "BetaTester" | "BetaFeedback" | …
+  resourceId   String?  // ID of the touched record (null for bulk actions)
+  route        String?  // HTTP method + path, e.g. "PATCH /api/v1/internal/config/flags/abc"
+  metadata     Json?    // Action-specific context (before/after diff, reason, etc.) — secrets redacted
+  ip           String?
+  userAgent    String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  @@index([actorSub, createdAt])
+  @@index([resourceType, resourceId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
 }

@@ -1,10 +1,12 @@
 import { sendError } from "../lib/apiErrors.js";
-import { getSubscription } from "../domains/billing/billing.service.js";
+import { getSubscription, getEffectiveTier } from "../domains/billing/billing.service.js";
 import { getTierRank } from "../domains/billing/billing.constants.js";
 
 /**
  * Middleware factory that enforces a minimum plan tier.
- * No subscription record → treated as FREE (rank 0).
+ * No subscription, abandoned-checkout sub, or non-active sub → treated as
+ * FREE (rank 0). Uses `getEffectiveTier` so a Stripe-customer-only row
+ * (created during checkout setup but not yet paid) cannot grant a paid tier.
  *
  * Usage: requireTier('PRO')
  */
@@ -14,7 +16,7 @@ export function requireTier(minimumTier) {
   return async (req, res, next) => {
     try {
       const sub = await getSubscription(req.user.id);
-      const currentTier = sub?.tier ?? "FREE";
+      const currentTier = getEffectiveTier(sub);
       const currentRank = getTierRank(currentTier);
 
       if (currentRank < minRank) {

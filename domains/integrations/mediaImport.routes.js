@@ -12,6 +12,7 @@ import * as driveProvider from "./providers/driveProvider.js";
 import * as dropboxProvider from "./providers/dropboxProvider.js";
 import * as sheetsProvider from "./providers/sheetsProvider.js";
 import { listFiles, importFile, exportFile } from "./mediaImport.service.js";
+import { getAuth0Sub } from "../../middleware/auth.js";
 
 export const mediaImportRouter = express.Router();
 const BASE = "/api/v1/integrations/media-import";
@@ -211,6 +212,18 @@ mediaImportRouter.post(`${BASE}/:integrationId/import`, async (req, res, next) =
 
     if (!fileRef || !clientId) {
       return res.status(400).json({ error: "fileRef and clientId are required" });
+    }
+
+    // Tenant isolation: verify the user owns the destination workspace
+    // BEFORE the integration service does any provider work. Without
+    // this, a user could import files from their own connected Drive
+    // into another user's workspace.
+    const owner = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { createdBy: true },
+    });
+    if (!owner || owner.createdBy !== getAuth0Sub(req)) {
+      return res.status(404).json({ error: "Client not found", code: "NOT_FOUND" });
     }
 
     const asset = await importFile(req.user.id, integrationId, fileRef, clientId);

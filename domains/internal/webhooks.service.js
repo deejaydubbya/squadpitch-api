@@ -293,7 +293,10 @@ export async function replayDelivery(deliveryId) {
     throw new Error("Webhook endpoint is inactive — activate it first");
   }
 
-  // Enqueue a new delivery job via the notification queue
+  // Enqueue a new delivery job via the notification queue.
+  // IMPORTANT: never include the webhook signing secret in the BullMQ
+  // payload — Redis is not a secret store. The worker fetches the secret
+  // from Postgres at execution time. (Same rule applies to webhook.adapter.js.)
   const queue = getNotificationQueue();
   if (!queue) {
     throw new Error("Notification queue unavailable — Redis may be down");
@@ -301,8 +304,6 @@ export async function replayDelivery(deliveryId) {
 
   await queue.add("send-notification-webhook", {
     webhookId: delivery.webhook.id,
-    targetUrl: delivery.webhook.targetUrl,
-    secret: delivery.webhook.secret,
     eventType: delivery.eventType,
     payload: delivery.requestBody,
     userId: delivery.webhook.userId,

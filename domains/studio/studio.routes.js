@@ -7,6 +7,21 @@ import express from "express";
 import { prisma } from "../../prisma.js";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
+import { sniffImageMime, sniffVideoMime } from "../../lib/mimeDetect.js";
+import { computeAutoScheduleSlots, resolveClientTimezone } from "../../lib/scheduleHelpers.js";
+import {
+  requireClientOwner,
+  requireDraftOwner,
+  requireAssetOwner,
+  requireAssetAndDraftSameWorkspace,
+  requireBodyClientOwner,
+  assertClientOwnedByCurrentUser,
+  assertDraftInClient,
+  assertFolderInClient,
+  assertAssetInClient,
+  assertDataItemInClient,
+} from "./ownership.js";
+import { classifyAutoScheduleResult } from "./autoScheduleClassifier.js";
 import * as service from "./studio.service.js";
 import {
   CreateClientSchema,
@@ -98,7 +113,7 @@ import { getRecommendations } from "./recommendationEngine.service.js";
 import { getUnusedData, getDataSuggestions } from "./dataUsage.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
-import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit, getSubscription, checkStorageLimit, buildQuotaError, enforceUsageLimit } from "../billing/billing.service.js";
+import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit, getSubscription, getEffectiveTier, checkStorageLimit, buildQuotaError, enforceUsageLimit } from "../billing/billing.service.js";
 import { getLimitsForTier } from "../billing/billing.constants.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { isProviderBudgetExceeded, getServiceStatus, getThrottlePolicy } from "../billing/serviceHealth.service.js";
@@ -163,24 +178,11 @@ async function releaseDedup(key) {
   if (key) await redisDel(key);
 }
 
-// Ownership middleware: verifies the client belongs to the authenticated user.
-async function requireClientOwner(req, res, next) {
-  try {
-    const clientId = req.params.id || req.params.clientId;
-    const client = await prisma.client.findUnique({
-      where: { id: clientId },
-      select: { createdBy: true },
-    });
-    if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
-    if (client.createdBy !== getAuth0Sub(req)) {
-      req.log?.warn({ clientId, owner: client.createdBy, actor: getAuth0Sub(req) }, "client_owner_mismatch");
-      return sendError(res, 403, "FORBIDDEN", "Forbidden");
-    }
-    next();
-  } catch (err) {
-    next(err);
-  }
-}
+// Ownership middleware lives in ./ownership.js so the isolation tests
+// can import the four guards (`requireClientOwner`, `requireDraftOwner`,
+// `requireAssetOwner`, `requireAssetAndDraftSameWorkspace`) without
+// booting this entire router. The middlewares are imported at the top
+// of this file.
 
 // ── Clients ─────────────────────────────────────────────────────────────
 
@@ -500,6 +502,15 @@ studioRouter.post(`${BASE}/persona/compose`, async (req, res, next) => {
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
     if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
 
+    // Cross-workspace checks for any optional id references in the body.
+    try {
+      await assertAssetInClient(sourceAssetId, clientId);
+      await assertDraftInClient(draftId, clientId);
+      await assertFolderInClient(folderId, clientId);
+    } catch (e) {
+      return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+    }
+
     // Service health pre-flight
     if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily unavailable.");
     if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded. Try again later.");
@@ -577,6 +588,12 @@ studioRouter.post(`${BASE}/persona/cutout`, async (req, res, next) => {
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
     if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
 
+    try {
+      await assertFolderInClient(folderId, clientId);
+    } catch (e) {
+      return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+    }
+
     if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily unavailable.");
     if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded.");
 
@@ -619,6 +636,15 @@ studioRouter.post(`${BASE}/persona/blend`, async (req, res, next) => {
     const client = await prisma.client.findUnique({ where: { id: clientId }, select: { createdBy: true } });
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
     if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
+
+    try {
+      await assertAssetInClient(backgroundAssetId, clientId);
+      await assertAssetInClient(cutoutAssetId, clientId);
+      await assertDraftInClient(draftId, clientId);
+      await assertFolderInClient(folderId, clientId);
+    } catch (e) {
+      return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+    }
 
     const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
     if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Image limit reached.", imgQuotaErr);
@@ -1686,7 +1712,15 @@ studioRouter.get(`${BASE}/workspaces/:id/links`, requireClientOwner, async (req,
 
 studioRouter.delete(`${BASE}/workspaces/:id/links/:linkId`, requireClientOwner, async (req, res, next) => {
   try {
-    await trackableLinkService.deleteLink(req.params.linkId);
+    // Cross-workspace guard: requireClientOwner verified :id is owned,
+    // but the link may belong to some other workspace. Scope the delete.
+    const result = await trackableLinkService.deleteLinkInClient(
+      req.params.linkId,
+      req.params.id
+    );
+    if (!result || result.count === 0) {
+      return sendError(res, 404, "NOT_FOUND", "Link not found");
+    }
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -1728,6 +1762,17 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
   try {
     const parsed = GenerateContentSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    // Tenant isolation: every body-supplied resource ID must belong to
+    // a workspace the requester owns. We check before doing any
+    // expensive AI work so a probe attack returns instantly.
+    const ownerCheck = await assertClientOwnedByCurrentUser(parsed.data.clientId, req);
+    if (ownerCheck) return sendError(res, ownerCheck.status, ownerCheck.code, ownerCheck.message);
+    try {
+      await assertDataItemInClient(parsed.data.dataItemId, parsed.data.clientId);
+    } catch (e) {
+      return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+    }
 
     // Service health pre-flight
     if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
@@ -1794,6 +1839,14 @@ studioRouter.post(`${BASE}/workspaces/:id/remix`, requireClientOwner, async (req
   try {
     const { draftId } = req.body;
     if (!draftId || typeof draftId !== "string") return sendError(res, 400, "VALIDATION_ERROR", "draftId is required.");
+
+    // Cross-workspace check: requireClientOwner verified :id, but the
+    // body draftId could be smuggled in from another workspace.
+    try {
+      await assertDraftInClient(draftId, req.params.id);
+    } catch (e) {
+      return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+    }
 
     // Service health pre-flight
     if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
@@ -1910,6 +1963,14 @@ studioRouter.post(
     try {
       const parsed = RatePerformanceSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      // requireClientOwner only verifies :id. The :draftId path param
+      // could point at a draft in some other workspace.
+      try {
+        await assertDraftInClient(req.params.draftId, req.params.id);
+      } catch (e) {
+        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      }
 
       const draft = await service.ratePerformance(req.params.draftId, {
         rating: parsed.data.rating,
@@ -2070,6 +2131,35 @@ studioRouter.get(`${BASE}/drafts`, async (req, res, next) => {
   try {
     const parsed = ListDraftsQuerySchema.safeParse(req.query);
     if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    // Tenant isolation: only return drafts whose parent Client is owned
+    // by the authenticated user. If a clientId filter was supplied,
+    // verify the requester owns it; otherwise, scope the query to all
+    // clients owned by the requester.
+    const actorSub = getAuth0Sub(req);
+    if (parsed.data.clientId) {
+      const owner = await prisma.client.findUnique({
+        where: { id: parsed.data.clientId },
+        select: { createdBy: true },
+      });
+      if (!owner || owner.createdBy !== actorSub) {
+        return sendError(res, 404, "NOT_FOUND", "Client not found");
+      }
+    } else {
+      const owned = await prisma.client.findMany({
+        where: { createdBy: actorSub },
+        select: { id: true },
+      });
+      // No clients → empty list. Don't query drafts at all.
+      if (owned.length === 0) {
+        return res.json({ drafts: [] });
+      }
+      // Pass the explicit owned-id list down to the service. If the
+      // service supports `clientIds`, prefer that; else pass each
+      // request through and post-filter as a defensive measure.
+      parsed.data.clientIds = owned.map((c) => c.id);
+    }
+
     const drafts = await service.listDrafts(parsed.data);
     res.json({ drafts: drafts.map(service.formatDraft) });
   } catch (err) {
@@ -2077,7 +2167,7 @@ studioRouter.get(`${BASE}/drafts`, async (req, res, next) => {
   }
 });
 
-studioRouter.get(`${BASE}/drafts/:id`, async (req, res, next) => {
+studioRouter.get(`${BASE}/drafts/:id`, requireDraftOwner, async (req, res, next) => {
   try {
     const draft = await service.getDraft(req.params.id);
     if (!draft) return sendError(res, 404, "NOT_FOUND", "Draft not found");
@@ -2087,7 +2177,7 @@ studioRouter.get(`${BASE}/drafts/:id`, async (req, res, next) => {
   }
 });
 
-studioRouter.patch(`${BASE}/drafts/:id`, async (req, res, next) => {
+studioRouter.patch(`${BASE}/drafts/:id`, requireDraftOwner, async (req, res, next) => {
   try {
     const parsed = UpdateDraftSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -2098,7 +2188,7 @@ studioRouter.patch(`${BASE}/drafts/:id`, async (req, res, next) => {
   }
 });
 
-studioRouter.delete(`${BASE}/drafts/:id`, async (req, res, next) => {
+studioRouter.delete(`${BASE}/drafts/:id`, requireDraftOwner, async (req, res, next) => {
   try {
     await service.deleteDraft(req.params.id);
     res.json({ ok: true });
@@ -2120,7 +2210,7 @@ studioRouter.delete(
   }
 );
 
-studioRouter.post(`${BASE}/drafts/:id/duplicate`, async (req, res, next) => {
+studioRouter.post(`${BASE}/drafts/:id/duplicate`, requireDraftOwner, async (req, res, next) => {
   try {
     const actorSub = getAuth0Sub(req);
     const draft = await service.duplicateDraft(req.params.id, actorSub);
@@ -2130,7 +2220,7 @@ studioRouter.post(`${BASE}/drafts/:id/duplicate`, async (req, res, next) => {
   }
 });
 
-studioRouter.post(`${BASE}/drafts/:id/approve`, async (req, res, next) => {
+studioRouter.post(`${BASE}/drafts/:id/approve`, requireDraftOwner, async (req, res, next) => {
   try {
     const actorSub = getAuth0Sub(req);
     const draft = await service.approveDraft(req.params.id, actorSub);
@@ -2167,7 +2257,7 @@ studioRouter.post(`${BASE}/drafts/:id/approve`, async (req, res, next) => {
   }
 });
 
-studioRouter.post(`${BASE}/drafts/:id/reject`, async (req, res, next) => {
+studioRouter.post(`${BASE}/drafts/:id/reject`, requireDraftOwner, async (req, res, next) => {
   try {
     const parsed = RejectDraftSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -2193,7 +2283,7 @@ studioRouter.post(`${BASE}/drafts/:id/reject`, async (req, res, next) => {
   }
 });
 
-studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
+studioRouter.post(`${BASE}/drafts/:id/schedule`, requireDraftOwner, async (req, res, next) => {
   try {
     const parsed = ScheduleDraftSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -2254,7 +2344,10 @@ studioRouter.post(`${BASE}/drafts/:id/schedule`, async (req, res, next) => {
   }
 });
 
-// Auto-schedule: distribute drafts across upcoming days
+// Auto-schedule: distribute drafts across upcoming days at 9/12/15/18
+// LOCAL time in the workspace's `Client.timezone`. Falls back to a safe
+// default if the timezone is missing or invalid (logged so we can spot
+// it). Never produces a past `scheduledFor`.
 studioRouter.post(`${BASE}/workspaces/:id/auto-schedule`, requireClientOwner, async (req, res, next) => {
   try {
     const { draftIds } = req.body;
@@ -2263,35 +2356,84 @@ studioRouter.post(`${BASE}/workspaces/:id/auto-schedule`, requireClientOwner, as
     }
     const actorSub = getAuth0Sub(req);
 
-    // Optimal posting times (hour in UTC)
-    const OPTIMAL_HOURS = [9, 12, 15, 18];
-    const now = new Date();
+    const client = await prisma.client.findUnique({
+      where: { id: req.params.id },
+      select: { timezone: true },
+    });
+    const { timezone, fellBack } = resolveClientTimezone(client?.timezone);
+    if (fellBack) {
+      req.log?.warn(
+        { clientId: req.params.id, raw: client?.timezone, fallback: timezone },
+        "auto_schedule_timezone_fallback"
+      );
+    }
+
+    // Tenant isolation: filter draftIds down to those that actually
+    // belong to :id. requireClientOwner verified the workspace, but the
+    // body draftIds[] could include drafts from other workspaces.
+    // We deliberately do NOT distinguish "wrong workspace" from
+    // "doesn't exist" in the response — exposing that would let an
+    // attacker probe ownership by ID. The internal log line records
+    // the count so on-call can investigate without leaking to clients.
+    const ownedDrafts = await prisma.draft.findMany({
+      where: { id: { in: draftIds }, clientId: req.params.id },
+      select: { id: true },
+    });
+    const ownedIdSet = new Set(ownedDrafts.map((d) => d.id));
+    const ownedIds = draftIds.filter((id) => ownedIdSet.has(id));
+
+    const slots = computeAutoScheduleSlots({
+      count: ownedIds.length,
+      timeZone: timezone,
+    });
     const scheduled = [];
 
-    for (let i = 0; i < draftIds.length; i++) {
-      // Distribute across next 7 days
-      const dayOffset = Math.floor(i / 2) + 1; // 2 posts per day max, start tomorrow
-      const hourIdx = i % OPTIMAL_HOURS.length;
-
-      const scheduledFor = new Date(now);
-      scheduledFor.setDate(scheduledFor.getDate() + dayOffset);
-      scheduledFor.setHours(OPTIMAL_HOURS[hourIdx], 0, 0, 0);
-
+    for (let i = 0; i < ownedIds.length; i++) {
       try {
-        const draft = await service.scheduleDraft(draftIds[i], scheduledFor.toISOString(), actorSub);
+        const draft = await service.scheduleDraft(ownedIds[i], slots[i].toISOString(), actorSub);
         scheduled.push(service.formatDraft(draft));
       } catch {
-        // Skip drafts that can't be scheduled (wrong status, etc.)
+        // Drafts that exist in this workspace but can't be scheduled
+        // (e.g. wrong status, already published) — counted as state-
+        // rejected by the classifier below.
       }
     }
 
-    res.json({ scheduled, count: scheduled.length });
+    const breakdown = classifyAutoScheduleResult({
+      submittedIds: draftIds,
+      ownedIdSet,
+      scheduledCount: scheduled.length,
+    });
+
+    if (breakdown.rejectedCount > 0) {
+      req.log?.warn(
+        {
+          clientId: req.params.id,
+          submitted: draftIds.length,
+          scheduledCount: scheduled.length,
+          rejectedCount: breakdown.rejectedCount,
+          ownershipRejected: breakdown.ownershipRejected,
+          stateRejected: breakdown.stateRejected,
+        },
+        "auto_schedule_rejected_drafts"
+      );
+    }
+
+    res.json({
+      scheduled,
+      scheduledCount: scheduled.length,
+      rejectedCount: breakdown.rejectedCount,
+      rejectedReason: breakdown.rejectedReason,
+      timezone,
+      // Legacy field — kept so existing clients keep rendering.
+      count: scheduled.length,
+    });
   } catch (err) {
     next(err);
   }
 });
 
-studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
+studioRouter.post(`${BASE}/drafts/:id/publish`, requireDraftOwner, async (req, res, next) => {
   try {
     // Usage limit check
     const allowed = await checkUsageLimit(req.user.id, "posts");
@@ -2360,7 +2502,7 @@ studioRouter.post(`${BASE}/drafts/:id/publish`, async (req, res, next) => {
 
 // ── Inline AI Actions ───────────────────────────────────────────────────
 
-studioRouter.post(`${BASE}/drafts/:id/inline-action`, async (req, res, next) => {
+studioRouter.post(`${BASE}/drafts/:id/inline-action`, requireDraftOwner, async (req, res, next) => {
   try {
     const parsed = InlineActionSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -2424,7 +2566,7 @@ studioRouter.get(
   }
 );
 
-studioRouter.get(`${BASE}/assets/:assetId`, async (req, res, next) => {
+studioRouter.get(`${BASE}/assets/:assetId`, requireAssetOwner, async (req, res, next) => {
   try {
     const asset = await service.getAsset(req.params.assetId);
     if (!asset) return sendError(res, 404, "NOT_FOUND", "Asset not found");
@@ -2453,8 +2595,33 @@ studioRouter.post(
       }
 
       const actorSub = getAuth0Sub(req);
-      const contentType = req.headers["content-type"] || "";
-      const isVideo = contentType.startsWith("video/") || req.query.assetType === "video";
+
+      // MIME safety: sniff the actual bytes — never trust the request's
+      // Content-Type header (it's caller-controlled). We only accept the
+      // formats our publishing channels support.
+      const sniffedImage = sniffImageMime(buffer);
+      const sniffedVideo = sniffVideoMime(buffer);
+      if (!sniffedImage && !sniffedVideo) {
+        return sendError(
+          res,
+          415,
+          "UNSUPPORTED_MEDIA_TYPE",
+          "Unsupported file type. Allowed: JPEG, PNG, WebP, GIF, MP4, MOV, WebM."
+        );
+      }
+      const isVideo = Boolean(sniffedVideo);
+      const contentType = sniffedImage ?? sniffedVideo;
+
+      // Tenant isolation for cross-resource ids on the query string.
+      // requireClientOwner has already verified :id, so we only need
+      // to confirm any provided draftId/folderId live in that same
+      // workspace before letting the service touch them.
+      try {
+        await assertDraftInClient(req.query.draftId ?? null, req.params.id);
+        await assertFolderInClient(req.query.folderId ?? null, req.params.id);
+      } catch (e) {
+        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      }
 
       // Usage + storage limit checks (skip quota for onboarding uploads)
       const isOnboarding = req.query.onboarding === "true";
@@ -2511,6 +2678,14 @@ studioRouter.post(
       const clientId = req.params.id;
       const actorSub = getAuth0Sub(req);
 
+      // Cross-workspace folder check — folderId in body must live in
+      // the workspace whose ownership requireClientOwner just verified.
+      try {
+        await assertFolderInClient(folderId ?? null, clientId);
+      } catch (e) {
+        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      }
+
       // Fetch the image with timeout and size limits
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -2535,17 +2710,22 @@ studioRouter.post(
         return sendError(res, 400, "FETCH_FAILED", `Failed to fetch image (${resp.status})`);
       }
 
-      const contentType = resp.headers.get("content-type") || "";
-      // Accept image/* and also application/octet-stream (some CDNs don't set
-      // proper content-type for images). We verify it's a real image by extension.
-      const isImageCT = contentType.startsWith("image/") || contentType.startsWith("application/octet-stream");
-      if (!isImageCT) {
-        return sendError(res, 400, "NOT_IMAGE", "URL does not point to an image");
-      }
-
       const buffer = Buffer.from(await resp.arrayBuffer());
       if (buffer.length > 10 * 1024 * 1024) {
         return sendError(res, 400, "TOO_LARGE", "Image exceeds 10 MB limit");
+      }
+
+      // Verify it's actually an image by sniffing magic bytes — the
+      // Content-Type from a remote CDN can lie. We only accept the
+      // image formats our publishing channels support.
+      const sniffed = sniffImageMime(buffer);
+      if (!sniffed) {
+        return sendError(
+          res,
+          415,
+          "UNSUPPORTED_MEDIA_TYPE",
+          "URL did not return a supported image (JPEG, PNG, WebP, GIF)."
+        );
       }
 
       // Usage + storage limit checks (skip quota for onboarding imports)
@@ -2580,6 +2760,7 @@ studioRouter.post(
 
 studioRouter.delete(
   `${BASE}/assets/:assetId`,
+  requireAssetOwner,
   async (req, res, next) => {
     try {
       const asset = await service.deleteAsset(req.params.assetId);
@@ -2651,6 +2832,15 @@ studioRouter.patch(
       if (!name || typeof name !== "string" || !name.trim()) {
         return validationError(res, [{ path: ["name"], message: "Folder name is required" }]);
       }
+      // requireClientOwner only proves the workspace is owned. Confirm
+      // the folder actually lives inside that workspace, otherwise
+      // user A could rename user B's folder by smuggling B's folderId
+      // through their own workspace's :id.
+      try {
+        await assertFolderInClient(req.params.folderId, req.params.id);
+      } catch (e) {
+        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      }
       const folder = await service.renameFolder(req.params.folderId, name);
       res.json({
         id: folder.id,
@@ -2677,6 +2867,11 @@ studioRouter.delete(
   requireClientOwner,
   async (req, res, next) => {
     try {
+      try {
+        await assertFolderInClient(req.params.folderId, req.params.id);
+      } catch (e) {
+        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      }
       await service.deleteFolder(req.params.folderId);
       res.json({ ok: true });
     } catch (err) {
@@ -2692,9 +2887,21 @@ studioRouter.delete(
 
 studioRouter.patch(
   `${BASE}/assets/:assetId/folder`,
+  requireAssetOwner,
   async (req, res, next) => {
     try {
       const { folderId } = req.body;
+      // requireAssetOwner attached req.asset = { id, clientId }. If a
+      // target folderId is provided, it must live in the same workspace
+      // as the asset — otherwise a user could move an owned asset into
+      // some other workspace's folder.
+      if (folderId) {
+        try {
+          await assertFolderInClient(folderId, req.asset.clientId);
+        } catch (e) {
+          return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+        }
+      }
       const asset = await service.moveAssetToFolder(req.params.assetId, folderId ?? null);
       res.json(service.formatAsset(asset));
     } catch (err) {
@@ -2708,6 +2915,7 @@ studioRouter.patch(
 
 studioRouter.patch(
   `${BASE}/assets/:assetId/tags`,
+  requireAssetOwner,
   async (req, res, next) => {
     try {
       const { tags } = req.body;
@@ -2853,6 +3061,18 @@ studioRouter.post(
       const parsed = GenerateMediaSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
+      // Tenant isolation: clientId in body must be owned by the
+      // requester, and any draftId / folderId references must live
+      // inside the same workspace.
+      const ownerCheck = await assertClientOwnedByCurrentUser(parsed.data.clientId, req);
+      if (ownerCheck) return sendError(res, ownerCheck.status, ownerCheck.code, ownerCheck.message);
+      try {
+        await assertDraftInClient(parsed.data.draftId, parsed.data.clientId);
+        await assertFolderInClient(parsed.data.folderId, parsed.data.clientId);
+      } catch (e) {
+        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      }
+
       // Service health pre-flight
       if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily limited. Please try again in a few minutes.");
       { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
@@ -2954,14 +3174,25 @@ studioRouter.post(
       const parsed = GenerateVideoSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
+      // Tenant isolation — same shape as image generation.
+      const ownerCheck = await assertClientOwnedByCurrentUser(parsed.data.clientId, req);
+      if (ownerCheck) return sendError(res, ownerCheck.status, ownerCheck.code, ownerCheck.message);
+      try {
+        await assertDraftInClient(parsed.data.draftId, parsed.data.clientId);
+        await assertFolderInClient(parsed.data.folderId, parsed.data.clientId);
+      } catch (e) {
+        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      }
+
       // Service health pre-flight
       if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Video generation temporarily limited. Please try again in a few minutes.");
       const throttle = await getThrottlePolicy();
       if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
 
-      // Explicit tier gate — check if video generation is allowed on this plan
+      // Explicit tier gate — check if video generation is allowed on this plan.
+      // Use getEffectiveTier so a pre-checkout customer row never grants paid limits.
       const sub = await getSubscription(req.user.id);
-      const tier = sub?.tier ?? "FREE";
+      const tier = getEffectiveTier(sub);
       const tierLimits = getLimitsForTier(tier);
       if (tierLimits.videoGenerations === 0) return sendError(res, 402, "TIER_LIMIT", "Video generation is not available on your plan. Upgrade to a higher tier.");
 
@@ -3026,6 +3257,8 @@ studioRouter.post(
 
 studioRouter.post(
   `${BASE}/assets/:assetId/attach`,
+  requireAssetOwner,
+  requireAssetAndDraftSameWorkspace,
   async (req, res, next) => {
     try {
       const parsed = AttachAssetSchema.safeParse(req.body);
@@ -3043,6 +3276,7 @@ studioRouter.post(
 
 studioRouter.post(
   `${BASE}/assets/:assetId/detach`,
+  requireAssetOwner,
   async (req, res, next) => {
     try {
       const asset = await service.detachAssetFromDraft(req.params.assetId);
@@ -3057,6 +3291,8 @@ studioRouter.post(
 
 studioRouter.post(
   `${BASE}/assets/:assetId/link`,
+  requireAssetOwner,
+  requireAssetAndDraftSameWorkspace,
   async (req, res, next) => {
     try {
       const parsed = LinkAssetSchema.safeParse(req.body);
@@ -3073,6 +3309,8 @@ studioRouter.post(
 
 studioRouter.delete(
   `${BASE}/assets/:assetId/link/:draftId`,
+  requireAssetOwner,
+  requireAssetAndDraftSameWorkspace,
   async (req, res, next) => {
     try {
       // Check if the asset being unlinked has persona data
@@ -3099,6 +3337,7 @@ studioRouter.delete(
 
 studioRouter.post(
   `${BASE}/assets/:assetId/persona-feedback`,
+  requireAssetOwner,
   async (req, res, next) => {
     try {
       const parsed = PersonaFeedbackSchema.safeParse(req.body);
@@ -3131,6 +3370,7 @@ studioRouter.post(
 
 studioRouter.get(
   `${BASE}/assets/:assetId/usage`,
+  requireAssetOwner,
   async (req, res, next) => {
     try {
       const rows = await service.getAssetUsage(req.params.assetId);
@@ -3150,6 +3390,7 @@ studioRouter.get(
 
 studioRouter.post(
   `${BASE}/assets/:assetId/generate-post`,
+  requireAssetOwner,
   async (req, res, next) => {
     try {
       const parsed = GeneratePostFromAssetSchema.safeParse(req.body);
@@ -3194,6 +3435,7 @@ studioRouter.post(
 
 studioRouter.get(
   `${BASE}/drafts/:id/metrics`,
+  requireDraftOwner,
   async (req, res, next) => {
     try {
       const metrics = await service.getMetrics(req.params.id);
@@ -3224,6 +3466,7 @@ studioRouter.get(
 
 studioRouter.post(
   `${BASE}/drafts/:id/metrics/sync`,
+  requireDraftOwner,
   async (req, res, next) => {
     try {
       const result = await service.syncMetrics(req.params.id);
@@ -3318,6 +3561,13 @@ studioRouter.post(
       const { code, state } = parsed.data;
       const payload = await verifyState(state);
       const { clientId, channel } = payload;
+
+      // The state JWT carries clientId, but verify the completing
+      // user actually owns that workspace. Without this, anyone who
+      // intercepts the state token (e.g. via shared device, log
+      // leak) could finalize a connection in someone else's account.
+      const ownerCheck = await assertClientOwnedByCurrentUser(clientId, req);
+      if (ownerCheck) return sendError(res, ownerCheck.status, ownerCheck.code, ownerCheck.message);
 
       const oauth = getOAuthForChannel(channel);
       const tokenBundle = await oauth.exchangeCode({ code, state });
@@ -4402,6 +4652,13 @@ studioRouter.post(
         return sendError(res, 400, "TOO_MANY_IMAGES", "Maximum 12 images per upload");
       }
 
+      // Cross-workspace folder check.
+      try {
+        await assertFolderInClient(folderId ?? null, req.params.id);
+      } catch (e) {
+        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      }
+
       const { getImageStorageService } = await import("../../services/storage/imageStorage.js");
       const storage = getImageStorageService();
 
@@ -4413,19 +4670,37 @@ studioRouter.post(
       if (quotaErr) return sendError(res, 402, "IMAGE_LIMIT_EXCEEDED", "Monthly image limit reached. Upgrade your plan for more.", quotaErr);
 
       const uploaded = [];
+      let runningBytes = 0;
       for (const img of images) {
         if (!img || typeof img !== "object") continue;
         const { dataUrl, label, caption, isEnhanced, qualityScore, qualityLabel } = img;
         if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) continue;
 
-        // Parse data URL → buffer + mime
+        // Parse data URL → buffer (we trust nothing about the declared mime,
+        // we sniff the bytes below).
         const commaIdx = dataUrl.indexOf(",");
         if (commaIdx < 0) continue;
-        const meta = dataUrl.slice(5, commaIdx); // e.g. "image/png;base64"
-        const mimeType = meta.split(";")[0] || "image/png";
         const base64Data = dataUrl.slice(commaIdx + 1);
         const buffer = Buffer.from(base64Data, "base64");
         if (buffer.length === 0 || buffer.length > 15 * 1024 * 1024) continue; // 15MB cap
+
+        // MIME sniff — never trust the data: URL's declared mime
+        const mimeType = sniffImageMime(buffer);
+        if (!mimeType) continue;
+
+        // Storage gate per item — at 12×15MB this batch can be ~180MB and
+        // the loop-level upstream check was missing entirely before.
+        runningBytes += buffer.length;
+        const storageOk = await checkStorageLimit(userId, runningBytes, false);
+        if (!storageOk.allowed) {
+          return sendError(
+            res,
+            402,
+            "STORAGE_LIMIT",
+            storageOk.reason,
+            { current: storageOk.current, limit: storageOk.limit, uploadedSoFar: uploaded.length }
+          );
+        }
 
         // Validate + sanitize enhancement metadata (spinstr97)
         const safeIsEnhanced = isEnhanced === true;

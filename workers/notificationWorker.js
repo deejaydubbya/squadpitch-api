@@ -185,7 +185,25 @@ async function processSlackJob({ webhookUrl, eventType, payload }) {
   }
 }
 
-async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payload, userId, replayOfId }) {
+async function processWebhookJob({ webhookId, eventType, payload, userId, replayOfId }) {
+  // Look up the endpoint at execution time so the signing secret never
+  // lives in the BullMQ payload (Redis). Producers must enqueue jobs with
+  // only `{ webhookId, eventType, payload, userId, replayOfId? }`.
+  const hook = await prisma.outboundWebhook.findUnique({
+    where: { id: webhookId },
+    select: { id: true, targetUrl: true, secret: true, isActive: true, userId: true },
+  });
+  if (!hook) {
+    throw new Error(`Webhook ${webhookId} no longer exists`);
+  }
+  if (!hook.isActive) {
+    throw new Error(`Webhook ${webhookId} is inactive`);
+  }
+  const targetUrl = hook.targetUrl;
+  const secret = hook.secret;
+  // Defense in depth: prefer the userId resolved from the DB row.
+  const effectiveUserId = hook.userId ?? userId;
+
   // Create delivery log
   let logId;
   try {
@@ -209,7 +227,7 @@ async function processWebhookJob({ webhookId, targetUrl, secret, eventType, payl
       secret,
       eventType,
       payload,
-      userId,
+      userId: effectiveUserId,
     });
 
     const success = responseStatus >= 200 && responseStatus < 300;

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireInternalAccess, requireAdminRole } from "../../middleware/requireRole.js";
-import { sendError } from "../../lib/apiErrors.js";
+import { sendError, validationError } from "../../lib/apiErrors.js";
+import { writeAudit } from "../../lib/auditLog.js";
 import * as service from "./internal.service.js";
 import * as extService from "./externalServices.service.js";
 import * as betaService from "./betaOps.service.js";
@@ -8,6 +9,19 @@ import * as jobsService from "./jobs.service.js";
 import * as webhooksService from "./webhooks.service.js";
 import * as systemHealthService from "./systemHealth.service.js";
 import * as configService from "./config.service.js";
+import {
+  CreateExternalServiceSchema,
+  UpdateExternalServiceSchema,
+  ExternalServiceUsageSnapshotSchema,
+  CreateBetaTesterSchema,
+  UpdateBetaTesterSchema,
+  CreateBetaFeedbackSchema,
+  UpdateBetaFeedbackSchema,
+  CreateFeatureFlagSchema,
+  UpdateFeatureFlagSchema,
+  ToggleFeatureFlagSchema,
+  ToggleWebhookEndpointSchema,
+} from "./internal.schemas.js";
 
 export const internalRouter = Router();
 
@@ -53,13 +67,21 @@ internalRouter.get(`${BASE}/workspaces/:id`, async (req, res, next) => {
   }
 });
 
-internalRouter.delete(`${BASE}/workspaces`, requireInternalAccess, async (req, res, next) => {
-  try {
-    const result = await service.deleteAllWorkspaces();
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
+// DELETE /api/v1/internal/workspaces was previously a HARD-DELETE-EVERY-WORKSPACE
+// endpoint reachable by any user with the `developer` role. It has been
+// permanently retired. If you genuinely need to wipe workspaces in a non-prod
+// environment, write a CLI script under `scripts/` that connects directly to
+// the database — no HTTP surface should be able to do this.
+//
+// We keep the route registered (as 410 Gone) so any forgotten caller gets a
+// clear, loud signal instead of silently 404'ing with no breadcrumb.
+internalRouter.delete(`${BASE}/workspaces`, (_req, res) => {
+  return sendError(
+    res,
+    410,
+    "ENDPOINT_REMOVED",
+    "DELETE /api/v1/internal/workspaces has been removed. Use a CLI script for bulk workspace deletion."
+  );
 });
 
 // ── Content Debugger ─────────────────────────────────────────────────────
@@ -178,7 +200,15 @@ internalRouter.get(`${BASE}/services/:id`, async (req, res, next) => {
 // Admin-only: create, update, delete
 internalRouter.post(`${BASE}/services`, requireAdminRole, async (req, res, next) => {
   try {
-    const svc = await extService.createService(req.body);
+    const parsed = CreateExternalServiceSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const svc = await extService.createService(parsed.data);
+    await writeAudit(req, {
+      action: "service.create",
+      resourceType: "ExternalService",
+      resourceId: svc.id,
+      metadata: { key: svc.key, category: svc.category },
+    });
     res.status(201).json(svc);
   } catch (err) {
     next(err);
@@ -187,8 +217,16 @@ internalRouter.post(`${BASE}/services`, requireAdminRole, async (req, res, next)
 
 internalRouter.patch(`${BASE}/services/:id`, requireAdminRole, async (req, res, next) => {
   try {
-    const svc = await extService.updateService(req.params.id, req.body);
+    const parsed = UpdateExternalServiceSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const svc = await extService.updateService(req.params.id, parsed.data);
     if (!svc) return sendError(res, 404, "NOT_FOUND", "Service not found");
+    await writeAudit(req, {
+      action: "service.update",
+      resourceType: "ExternalService",
+      resourceId: svc.id,
+      metadata: { changedKeys: Object.keys(parsed.data) },
+    });
     res.json(svc);
   } catch (err) {
     next(err);
@@ -198,6 +236,11 @@ internalRouter.patch(`${BASE}/services/:id`, requireAdminRole, async (req, res, 
 internalRouter.delete(`${BASE}/services/:id`, requireAdminRole, async (req, res, next) => {
   try {
     await extService.deleteService(req.params.id);
+    await writeAudit(req, {
+      action: "service.delete",
+      resourceType: "ExternalService",
+      resourceId: req.params.id,
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -207,7 +250,9 @@ internalRouter.delete(`${BASE}/services/:id`, requireAdminRole, async (req, res,
 // Usage snapshot
 internalRouter.post(`${BASE}/services/:id/usage`, requireAdminRole, async (req, res, next) => {
   try {
-    const snapshot = await extService.addUsageSnapshot(req.params.id, req.body);
+    const parsed = ExternalServiceUsageSnapshotSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const snapshot = await extService.addUsageSnapshot(req.params.id, parsed.data);
     res.status(201).json(snapshot);
   } catch (err) {
     next(err);
@@ -276,7 +321,15 @@ internalRouter.get(`${BASE}/beta/testers/:id`, async (req, res, next) => {
 
 internalRouter.post(`${BASE}/beta/testers`, requireAdminRole, async (req, res, next) => {
   try {
-    const tester = await betaService.createTester(req.body);
+    const parsed = CreateBetaTesterSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const tester = await betaService.createTester(parsed.data);
+    await writeAudit(req, {
+      action: "tester.create",
+      resourceType: "BetaTester",
+      resourceId: tester.id,
+      metadata: { email: tester.email, cohort: tester.cohort },
+    });
     res.status(201).json(tester);
   } catch (err) {
     next(err);
@@ -285,7 +338,15 @@ internalRouter.post(`${BASE}/beta/testers`, requireAdminRole, async (req, res, n
 
 internalRouter.patch(`${BASE}/beta/testers/:id`, requireAdminRole, async (req, res, next) => {
   try {
-    const tester = await betaService.updateTester(req.params.id, req.body);
+    const parsed = UpdateBetaTesterSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const tester = await betaService.updateTester(req.params.id, parsed.data);
+    await writeAudit(req, {
+      action: "tester.update",
+      resourceType: "BetaTester",
+      resourceId: req.params.id,
+      metadata: { changedKeys: Object.keys(parsed.data) },
+    });
     res.json(tester);
   } catch (err) {
     next(err);
@@ -295,6 +356,11 @@ internalRouter.patch(`${BASE}/beta/testers/:id`, requireAdminRole, async (req, r
 internalRouter.delete(`${BASE}/beta/testers/:id`, requireAdminRole, async (req, res, next) => {
   try {
     await betaService.deleteTester(req.params.id);
+    await writeAudit(req, {
+      action: "tester.delete",
+      resourceType: "BetaTester",
+      resourceId: req.params.id,
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -334,9 +400,12 @@ internalRouter.get(`${BASE}/beta/feedback/:id`, async (req, res, next) => {
 // Feedback submission — open to any authenticated internal user
 internalRouter.post(`${BASE}/beta/feedback`, async (req, res, next) => {
   try {
+    const parsed = CreateBetaFeedbackSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
     const fb = await betaService.createFeedback({
-      ...req.body,
-      userId: req.body.userId || req.auth?.payload?.sub,
+      ...parsed.data,
+      // Fallback to the JWT sub if the body didn't supply userId.
+      userId: parsed.data.userId || req.auth?.payload?.sub,
     });
     res.status(201).json(fb);
   } catch (err) {
@@ -347,7 +416,15 @@ internalRouter.post(`${BASE}/beta/feedback`, async (req, res, next) => {
 // Triage / update feedback — admin only
 internalRouter.patch(`${BASE}/beta/feedback/:id`, requireAdminRole, async (req, res, next) => {
   try {
-    const fb = await betaService.updateFeedback(req.params.id, req.body);
+    const parsed = UpdateBetaFeedbackSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const fb = await betaService.updateFeedback(req.params.id, parsed.data);
+    await writeAudit(req, {
+      action: "feedback.update",
+      resourceType: "BetaFeedback",
+      resourceId: req.params.id,
+      metadata: { changedKeys: Object.keys(parsed.data), status: parsed.data.status ?? null },
+    });
     res.json(fb);
   } catch (err) {
     next(err);
@@ -357,6 +434,11 @@ internalRouter.patch(`${BASE}/beta/feedback/:id`, requireAdminRole, async (req, 
 internalRouter.delete(`${BASE}/beta/feedback/:id`, requireAdminRole, async (req, res, next) => {
   try {
     await betaService.deleteFeedback(req.params.id);
+    await writeAudit(req, {
+      action: "feedback.delete",
+      resourceType: "BetaFeedback",
+      resourceId: req.params.id,
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -455,11 +537,15 @@ internalRouter.get(`${BASE}/webhooks/endpoints/:id`, async (req, res, next) => {
 
 internalRouter.patch(`${BASE}/webhooks/endpoints/:id/toggle`, requireAdminRole, async (req, res, next) => {
   try {
-    const { isActive } = req.body;
-    if (typeof isActive !== "boolean") {
-      return sendError(res, 400, "INVALID_INPUT", "isActive must be a boolean");
-    }
-    const result = await webhooksService.toggleEndpoint(req.params.id, isActive);
+    const parsed = ToggleWebhookEndpointSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const result = await webhooksService.toggleEndpoint(req.params.id, parsed.data.isActive);
+    await writeAudit(req, {
+      action: "webhook.toggle",
+      resourceType: "OutboundWebhook",
+      resourceId: req.params.id,
+      metadata: { isActive: parsed.data.isActive },
+    });
     res.json(result);
   } catch (err) {
     next(err);
@@ -496,6 +582,12 @@ internalRouter.get(`${BASE}/webhooks/deliveries/:id`, async (req, res, next) => 
 internalRouter.post(`${BASE}/webhooks/deliveries/:id/replay`, requireAdminRole, async (req, res, next) => {
   try {
     const result = await webhooksService.replayDelivery(req.params.id);
+    await writeAudit(req, {
+      action: "webhook.replay",
+      resourceType: "WebhookDeliveryLog",
+      resourceId: req.params.id,
+      metadata: { eventType: result?.eventType ?? null },
+    });
     res.json(result);
   } catch (err) {
     next(err);
@@ -542,8 +634,16 @@ internalRouter.get(`${BASE}/config/flags/:id`, async (req, res, next) => {
 
 internalRouter.post(`${BASE}/config/flags`, requireAdminRole, async (req, res, next) => {
   try {
+    const parsed = CreateFeatureFlagSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
     const adminId = req.auth?.payload?.sub || null;
-    const flag = await configService.createFlag(req.body, adminId);
+    const flag = await configService.createFlag(parsed.data, adminId);
+    await writeAudit(req, {
+      action: "flag.create",
+      resourceType: "FeatureFlag",
+      resourceId: flag.id,
+      metadata: { key: flag.key, enabled: flag.enabled, scope: flag.scope },
+    });
     res.status(201).json(flag);
   } catch (err) {
     next(err);
@@ -552,8 +652,16 @@ internalRouter.post(`${BASE}/config/flags`, requireAdminRole, async (req, res, n
 
 internalRouter.patch(`${BASE}/config/flags/:id`, requireAdminRole, async (req, res, next) => {
   try {
+    const parsed = UpdateFeatureFlagSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
     const adminId = req.auth?.payload?.sub || null;
-    const flag = await configService.updateFlag(req.params.id, req.body, adminId);
+    const flag = await configService.updateFlag(req.params.id, parsed.data, adminId);
+    await writeAudit(req, {
+      action: "flag.update",
+      resourceType: "FeatureFlag",
+      resourceId: req.params.id,
+      metadata: { changedKeys: Object.keys(parsed.data) },
+    });
     res.json(flag);
   } catch (err) {
     next(err);
@@ -562,12 +670,16 @@ internalRouter.patch(`${BASE}/config/flags/:id`, requireAdminRole, async (req, r
 
 internalRouter.patch(`${BASE}/config/flags/:id/toggle`, requireAdminRole, async (req, res, next) => {
   try {
-    const { enabled } = req.body;
-    if (typeof enabled !== "boolean") {
-      return sendError(res, 400, "INVALID_INPUT", "enabled must be a boolean");
-    }
+    const parsed = ToggleFeatureFlagSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
     const adminId = req.auth?.payload?.sub || null;
-    const flag = await configService.toggleFlag(req.params.id, enabled, adminId);
+    const flag = await configService.toggleFlag(req.params.id, parsed.data.enabled, adminId);
+    await writeAudit(req, {
+      action: "flag.toggle",
+      resourceType: "FeatureFlag",
+      resourceId: req.params.id,
+      metadata: { enabled: parsed.data.enabled },
+    });
     res.json(flag);
   } catch (err) {
     next(err);
@@ -577,6 +689,11 @@ internalRouter.patch(`${BASE}/config/flags/:id/toggle`, requireAdminRole, async 
 internalRouter.delete(`${BASE}/config/flags/:id`, requireAdminRole, async (req, res, next) => {
   try {
     await configService.deleteFlag(req.params.id);
+    await writeAudit(req, {
+      action: "flag.delete",
+      resourceType: "FeatureFlag",
+      resourceId: req.params.id,
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);

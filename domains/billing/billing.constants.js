@@ -1,3 +1,28 @@
+// Squadpitch plan constants.
+//
+// `priceMonthly` (in cents) is the *intended* display price; the actual amount
+// charged is whatever the Stripe price (`STRIPE_<TIER>_PRICE_ID`) is set to.
+// These two must be kept in sync manually — there is intentionally NO
+// hardcoded Stripe price ID in code (see env vars below).
+//
+// User-facing labels:
+//   FREE    → "Free"
+//   STARTER → "Solo"     (do NOT show "Starter" to users)
+//   PRO     → "Pro"
+//   GROWTH  → "Team"     (do NOT show "Growth" to users)
+//   AGENCY  → "Agency"
+//
+// Required env vars before this code is useful in production:
+//   STRIPE_SECRET_KEY
+//   STRIPE_WEBHOOK_SECRET
+//   STRIPE_STARTER_PRICE_ID  → Stripe price for Solo  ($29/mo)
+//   STRIPE_PRO_PRICE_ID      → Stripe price for Pro   ($59/mo)
+//   STRIPE_GROWTH_PRICE_ID   → Stripe price for Team  ($149/mo)
+//   STRIPE_AGENCY_PRICE_ID   → Stripe price for Agency ($299/mo)
+//
+// `assertStripeEnvConfigured()` below logs a fatal warning at boot if any
+// required vars are missing.
+
 const GB = 1024 * 1024 * 1024;
 const MB = 1024 * 1024;
 
@@ -19,9 +44,9 @@ export const PLAN_TIERS = {
     },
   },
   STARTER: {
-    label: "Starter",
-    // TODO: Update STRIPE_STARTER_PRICE_ID env var to match $19/mo Stripe price
-    priceMonthly: 1900, // cents ($19/mo)
+    // Backend enum value STARTER is displayed to users as "Solo".
+    label: "Solo",
+    priceMonthly: 2900, // cents — $29/mo
     limits: {
       workspaces: 3,
       posts: 30,
@@ -37,8 +62,7 @@ export const PLAN_TIERS = {
   },
   PRO: {
     label: "Pro",
-    // TODO: Update STRIPE_PRO_PRICE_ID env var to match $39/mo Stripe price (was $49)
-    priceMonthly: 3900, // cents ($39/mo)
+    priceMonthly: 5900, // cents — $59/mo
     limits: {
       workspaces: 5,
       posts: 150,
@@ -53,9 +77,9 @@ export const PLAN_TIERS = {
     },
   },
   GROWTH: {
-    label: "Growth",
-    // TODO: Update STRIPE_GROWTH_PRICE_ID env var to match $79/mo Stripe price (was $99)
-    priceMonthly: 7900, // cents ($79/mo)
+    // Backend enum value GROWTH is displayed to users as "Team".
+    label: "Team",
+    priceMonthly: 14900, // cents — $149/mo
     limits: {
       workspaces: 10,
       posts: 500,
@@ -71,8 +95,7 @@ export const PLAN_TIERS = {
   },
   AGENCY: {
     label: "Agency",
-    // TODO: Update STRIPE_AGENCY_PRICE_ID env var to match $159/mo Stripe price (was $199)
-    priceMonthly: 15900, // cents ($159/mo)
+    priceMonthly: 29900, // cents — $299/mo
     limits: {
       workspaces: Infinity,
       posts: 1200,
@@ -91,6 +114,9 @@ export const PLAN_TIERS = {
 /** Ordered list of tiers from lowest to highest. */
 export const TIER_ORDER = ["FREE", "STARTER", "PRO", "GROWTH", "AGENCY"];
 
+/** All paid tiers (i.e. tiers that require an active Stripe subscription). */
+export const PAID_TIERS = ["STARTER", "PRO", "GROWTH", "AGENCY"];
+
 export function getLimitsForTier(tier) {
   return PLAN_TIERS[tier]?.limits ?? PLAN_TIERS.FREE.limits;
 }
@@ -99,4 +125,27 @@ export function getLimitsForTier(tier) {
 export function getTierRank(tier) {
   const idx = TIER_ORDER.indexOf(tier);
   return idx >= 0 ? idx : 0;
+}
+
+/**
+ * Boot-time assertion that every paid tier has a Stripe price ID configured.
+ * Logs (does not throw) so dev environments without Stripe still boot. In
+ * production, missing price IDs mean checkout will reject the requested tier
+ * — see `createCheckoutSession()`.
+ */
+export function assertStripeEnvConfigured(env) {
+  const missing = [];
+  if (!env.STRIPE_SECRET_KEY) missing.push("STRIPE_SECRET_KEY");
+  if (!env.STRIPE_WEBHOOK_SECRET) missing.push("STRIPE_WEBHOOK_SECRET");
+  if (!env.STRIPE_STARTER_PRICE_ID) missing.push("STRIPE_STARTER_PRICE_ID");
+  if (!env.STRIPE_PRO_PRICE_ID) missing.push("STRIPE_PRO_PRICE_ID");
+  if (!env.STRIPE_GROWTH_PRICE_ID) missing.push("STRIPE_GROWTH_PRICE_ID");
+  if (!env.STRIPE_AGENCY_PRICE_ID) missing.push("STRIPE_AGENCY_PRICE_ID");
+  if (missing.length > 0) {
+    console.warn(
+      `[BILLING] Missing Stripe env vars: ${missing.join(", ")}. ` +
+        "Checkout/upgrade for affected tiers will fail until configured."
+    );
+  }
+  return missing;
 }

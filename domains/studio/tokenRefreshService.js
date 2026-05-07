@@ -9,6 +9,7 @@ import { prisma } from "../../prisma.js";
 import { encryptToken } from "../../lib/tokenCrypto.js";
 import { getRefreshAdapter } from "./token-refresh/index.js";
 import { enqueueNotification } from "../notifications/notification.service.js";
+import { logEvent } from "../../lib/logger.js";
 
 const EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -41,17 +42,25 @@ export async function refreshConnectionToken(connection) {
     result = await adapter.refresh(connection);
   } catch (err) {
     // Transient failure — log but don't corrupt existing tokens
-    console.error(
-      `[TOKEN_REFRESH] Transient failure channel=${connection.channel} connectionId=${connection.id}: ${err.message}`
-    );
+    logEvent("token.refresh.failed", {
+      channel: connection.channel,
+      connectionId: connection.id,
+      clientId: connection.clientId,
+      reason: "transient",
+      error: err?.message ?? "unknown",
+    });
     throw err;
   }
 
   // Adapter says this platform can't refresh (e.g. Meta, LinkedIn)
   if (result.canRefresh === false) {
-    console.warn(
-      `[TOKEN_REFRESH] Cannot refresh channel=${connection.channel} connectionId=${connection.id}${result.error ? ` — ${result.error}` : ""}`
-    );
+    logEvent("token.refresh.failed", {
+      channel: connection.channel,
+      connectionId: connection.id,
+      clientId: connection.clientId,
+      reason: "cannot_refresh",
+      error: result.error ?? null,
+    });
     await markNeedsReconnect(connection, result.error);
     throw Object.assign(
       new Error(
@@ -80,9 +89,12 @@ export async function refreshConnectionToken(connection) {
     data: updateData,
   });
 
-  console.log(
-    `[TOKEN_REFRESH] Success channel=${connection.channel} connectionId=${connection.id}`
-  );
+  logEvent("token.refresh.succeeded", {
+    channel: connection.channel,
+    connectionId: connection.id,
+    clientId: connection.clientId,
+    expiresAt: result.expiresAt ? new Date(result.expiresAt).toISOString() : null,
+  });
 
   return {
     ...connection,
