@@ -9,6 +9,9 @@ import * as jobsService from "./jobs.service.js";
 import * as webhooksService from "./webhooks.service.js";
 import * as systemHealthService from "./systemHealth.service.js";
 import * as configService from "./config.service.js";
+import { syncMetricsForDraft } from "../studio/metricsSyncService.js";
+import { prisma } from "../../prisma.js";
+import { logEvent } from "../../lib/logger.js";
 import {
   CreateExternalServiceSchema,
   UpdateExternalServiceSchema,
@@ -722,3 +725,166 @@ internalRouter.get(`${BASE}/config/flags/evaluate/:key`, async (req, res, next) 
     next(err);
   }
 });
+
+// ── Manual social-metrics sync (admin/developer only) ────────────────────
+//
+// Lets admins/devs trigger the live metrics sync pipeline against a single
+// published draft to debug provider feedback before production. Bypasses
+// the 1h cooldown when `force: true` is set.
+//
+// Response is deliberately debug-safe — never includes access tokens,
+// refresh tokens, provider auth headers, or full raw provider payloads.
+// All structured failure reasons line up 1:1 with the public sync route's
+// reason taxonomy (see SOCIAL_METRICS_FEEDBACK_LOOP.md § 3).
+internalRouter.post(
+  `${BASE}/drafts/:draftId/metrics/sync`,
+  async (req, res, next) => {
+    const startedAt = Date.now();
+    const { draftId } = req.params;
+    const force = req.body?.force === true;
+
+    try {
+      const draft = await prisma.draft.findUnique({
+        where: { id: draftId },
+        select: {
+          id: true,
+          clientId: true,
+          channel: true,
+          status: true,
+          externalPostId: true,
+        },
+      });
+      if (!draft) {
+        return sendError(res, 404, "DRAFT_NOT_FOUND", "Draft not found");
+      }
+
+      // Pre-conditions surface as 422 (the draft exists but the operation
+      // can't proceed in its current state) — distinct from the
+      // service-level reason strings the sync may return for the same
+      // conditions, because the service is also called from background
+      // jobs that don't want to throw on these.
+      if (draft.status !== "PUBLISHED") {
+        return sendError(
+          res,
+          422,
+          "NOT_PUBLISHED",
+          `Draft is in status ${draft.status}; only PUBLISHED drafts can sync metrics.`
+        );
+      }
+      if (!draft.externalPostId) {
+        return res.status(200).json({
+          ok: false,
+          draftId: draft.id,
+          clientId: draft.clientId,
+          channel: draft.channel,
+          externalPostId: null,
+          status: "skipped",
+          reason: "no_external_id",
+          detail: "Draft has no provider post id — cannot sync.",
+          rawMetricId: null,
+          normalizedMetricId: null,
+          postMetricsUpdated: false,
+          lastSyncedAt: null,
+          forceUsed: force,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+
+      let result;
+      try {
+        result = await syncMetricsForDraft(draft.id, { force });
+      } catch (err) {
+        // Service re-throws unclassified errors — surface as a clean
+        // failure with safe detail (no stack, no token).
+        result = {
+          synced: false,
+          reason: "internal_error",
+          detail: err?.code ?? err?.message ?? "Unknown error",
+        };
+      }
+
+      const durationMs = Date.now() - startedAt;
+      const payload = result.synced
+        ? {
+            ok: true,
+            draftId: draft.id,
+            clientId: draft.clientId,
+            channel: draft.channel,
+            externalPostId: draft.externalPostId,
+            status: "synced",
+            reason: null,
+            detail: null,
+            rawMetricId: result.rawMetricId ?? null,
+            normalizedMetricId: result.normalizedMetricId ?? null,
+            postMetricsUpdated: true,
+            lastSyncedAt: result.fetchedAt ?? null,
+            forceUsed: force,
+            durationMs,
+          }
+        : {
+            ok: false,
+            draftId: draft.id,
+            clientId: draft.clientId,
+            channel: draft.channel,
+            externalPostId: draft.externalPostId,
+            // skipped = service intentionally short-circuited (cooldown,
+            // missing prereq); failed = adapter or pipeline error.
+            status: classifySkipOrFail(result.reason),
+            reason: result.reason ?? "unknown",
+            detail: sanitizeDetail(result.detail) ?? null,
+            rawMetricId: null,
+            normalizedMetricId: null,
+            postMetricsUpdated: false,
+            lastSyncedAt: null,
+            forceUsed: force,
+            durationMs,
+          };
+
+      logEvent("metrics.manual_sync", {
+        actorSub: req.auth?.payload?.sub ?? null,
+        actorRoles: req.roles ?? [],
+        draftId: draft.id,
+        clientId: draft.clientId,
+        channel: draft.channel,
+        force,
+        status: payload.status,
+        reason: payload.reason,
+        durationMs,
+      });
+
+      res.json(payload);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// "skipped" = service short-circuited before hitting the provider.
+// "failed"  = provider/adapter/pipeline error. Both surface to the UI
+// with the same row layout but distinguish what action the operator
+// should take next.
+function classifySkipOrFail(reason) {
+  const skip = new Set([
+    "draft_not_found",
+    "not_published",
+    "no_external_id",
+    "too_recent",
+    "no_connection",
+    "unsupported_channel",
+  ]);
+  return skip.has(reason) ? "skipped" : "failed";
+}
+
+// Defense-in-depth scrub for `detail` strings before they're emitted
+// over the wire. The service's contract is "no tokens in result" — but
+// since adapters concatenate provider error messages into detail, a
+// future regression could slip a Bearer header through. Strip any
+// substring that looks like a bearer-style auth token before serializing.
+function sanitizeDetail(s) {
+  if (typeof s !== "string" || s.length === 0) return s ?? null;
+  // Mask "Bearer <anything-not-whitespace>"
+  let out = s.replace(/Bearer\s+\S+/gi, "Bearer ***");
+  // Cap length to keep debug output reasonable.
+  if (out.length > 500) out = out.slice(0, 497) + "...";
+  return out;
+}

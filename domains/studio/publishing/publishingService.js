@@ -340,9 +340,17 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
 
     // Enqueue metrics sync with 5-minute delay
     import("../metricsSyncService.js")
-      .then(({ enqueuePostPublishSync }) =>
-        enqueuePostPublishSync(draftId)
-      )
+      .then(({ enqueuePostPublishSync, enqueueTiktokVideoIdResolution }) => {
+        enqueuePostPublishSync(draftId);
+        // TikTok stores publish_id (upload-session handle) as
+        // externalPostId. Kick off the resolver so it polls TikTok for
+        // the final video_id and overwrites externalPostId before the
+        // 5-minute metrics-sync delay finishes. See
+        // publishing/tiktokVideoIdResolver.js.
+        if (workingDraft.channel === "TIKTOK") {
+          enqueueTiktokVideoIdResolution(draftId);
+        }
+      })
       .catch(() => {});
 
     // Update data item + blueprint performance stats

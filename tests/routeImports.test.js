@@ -29,16 +29,30 @@ vi.mock("bullmq", () => ({
   Worker: class { on() {} close() {} },
 }));
 
-describe("API route module boot smoke", () => {
-  it("billing.routes loads without import errors", async () => {
-    const mod = await import("../domains/billing/billing.routes.js");
-    expect(mod.billingRouter).toBeTruthy();
-  });
+// studio.routes.js + billing.routes.js pull in the entire studio
+// service graph (publishing adapters, metrics adapters, auto-schedule,
+// listing ingestion, etc). Cold imports legitimately take 6–10s on
+// CI cold-cache. Per-test bump from the default 5s.
+const ROUTE_IMPORT_TIMEOUT_MS = 30_000;
 
-  it("studio.routes loads without import errors", async () => {
-    const mod = await import("../domains/studio/studio.routes.js");
-    expect(mod.studioRouter).toBeTruthy();
-  });
+describe("API route module boot smoke", () => {
+  it(
+    "billing.routes loads without import errors",
+    async () => {
+      const mod = await import("../domains/billing/billing.routes.js");
+      expect(mod.billingRouter).toBeTruthy();
+    },
+    ROUTE_IMPORT_TIMEOUT_MS,
+  );
+
+  it(
+    "studio.routes loads without import errors",
+    async () => {
+      const mod = await import("../domains/studio/studio.routes.js");
+      expect(mod.studioRouter).toBeTruthy();
+    },
+    ROUTE_IMPORT_TIMEOUT_MS,
+  );
 
   it("internal.routes loads without import errors", async () => {
     const mod = await import("../domains/internal/internal.routes.js");

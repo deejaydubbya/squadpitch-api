@@ -4,9 +4,20 @@ import { getClientTimezone } from '../../lib/timezone.js';
 
 // ── Platform-Specific Normalization ───────────────────────────────────
 
+// Each rule accepts BOTH the field name returned by our metrics adapter
+// and the alternate name the upstream API may use, so we never silently
+// lose engagement signal because the adapter and normalizer disagree on
+// nomenclature (e.g. LinkedIn returns `likes`/`shares`, but the older
+// normalizer expected `reactions`/`reposts` — produced 0 engagement).
+const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const PLATFORM_RULES = {
   INSTAGRAM: (d) => {
-    const engagements = (d.likes ?? 0) + (d.comments ?? 0) + (d.saves ?? 0);
+    // IG insights: likes, comments, saves, shares (shares added 2024).
+    const likes = num(d.likes ?? d.like_count);
+    const comments = num(d.comments ?? d.comments_count);
+    const saves = num(d.saves ?? d.saved);
+    const shares = num(d.shares);
+    const engagements = likes + comments + saves + shares;
     const base = d.impressions || d.reach || 0;
     return {
       impressions: d.impressions ?? null,
@@ -17,19 +28,31 @@ const PLATFORM_RULES = {
     };
   },
   TIKTOK: (d) => {
-    const engagements = (d.likes ?? 0) + (d.comments ?? 0) + (d.shares ?? 0);
-    const base = d.views || 0;
+    // TikTok video query: like_count, comment_count, share_count, view_count.
+    // Adapter pre-normalizes to likes/comments/shares/views.
+    const likes = num(d.likes ?? d.like_count);
+    const comments = num(d.comments ?? d.comment_count);
+    const shares = num(d.shares ?? d.share_count);
+    const views = num(d.views ?? d.view_count);
+    const engagements = likes + comments + shares;
     return {
-      impressions: d.views ?? null,
+      impressions: views > 0 ? views : null,
       reach: d.reach ?? null,
       engagements,
       clicks: d.clicks ?? null,
-      engagementRate: base > 0 ? engagements / base : null,
+      engagementRate: views > 0 ? engagements / views : null,
     };
   },
   LINKEDIN: (d) => {
-    const engagements = (d.reactions ?? 0) + (d.comments ?? 0) + (d.reposts ?? 0);
-    const base = d.impressions || 0;
+    // LinkedIn shareStatistics returns likeCount/shareCount/clickCount —
+    // the adapter remaps to likes/shares/clicks. Older normalizer
+    // expected `reactions`/`reposts` and dropped both signals; accept
+    // either name to be resilient if the adapter changes again.
+    const likes = num(d.likes ?? d.reactions);
+    const shares = num(d.shares ?? d.reposts);
+    const comments = num(d.comments);
+    const engagements = likes + comments + shares;
+    const base = num(d.impressions);
     return {
       impressions: d.impressions ?? null,
       reach: d.reach ?? null,
@@ -39,10 +62,19 @@ const PLATFORM_RULES = {
     };
   },
   X: (d) => {
-    const engagements = (d.likes ?? 0) + (d.retweets ?? 0) + (d.replies ?? 0);
-    const base = d.impressions || 0;
+    // X public_metrics: like_count, retweet_count, reply_count,
+    // bookmark_count, impression_count. Bookmarks are X's analogue of
+    // saves and a meaningful engagement signal (Twitter started counting
+    // them as part of the engagement rate in 2023).
+    const likes = num(d.likes ?? d.like_count);
+    const retweets = num(d.retweets ?? d.retweet_count);
+    const replies = num(d.replies ?? d.reply_count);
+    const bookmarks = num(d.bookmarks ?? d.bookmark_count);
+    const engagements = likes + retweets + replies + bookmarks;
+    const impressions = d.impressions ?? d.impression_count ?? null;
+    const base = num(impressions);
     return {
-      impressions: d.impressions ?? null,
+      impressions,
       reach: d.reach ?? null,
       engagements,
       clicks: d.clicks ?? null,
@@ -50,7 +82,13 @@ const PLATFORM_RULES = {
     };
   },
   FACEBOOK: (d) => {
-    const engagements = (d.reactions ?? 0) + (d.comments ?? 0) + (d.shares ?? 0);
+    // FB post_reactions_by_type_total + comments.summary + shares.count.
+    // Adapter sums reaction types into `reactions`. Accept `likes` too
+    // for callers that pre-summed.
+    const reactions = num(d.reactions ?? d.likes);
+    const comments = num(d.comments);
+    const shares = num(d.shares);
+    const engagements = reactions + comments + shares;
     const base = d.impressions || d.reach || 0;
     return {
       impressions: d.impressions ?? null,
@@ -61,14 +99,22 @@ const PLATFORM_RULES = {
     };
   },
   YOUTUBE: (d) => {
-    const engagements = (d.likes ?? 0) + (d.comments ?? 0) + (d.shares ?? 0);
-    const base = d.views || 0;
+    // YouTube video.statistics: viewCount, likeCount, commentCount,
+    // favoriteCount. Note: favoriteCount has been deprecated by Google
+    // since 2016 and always reports 0 — kept here so any future revival
+    // (or an experimental stats response) is captured. Shares are not
+    // exposed by the public API for non-owners.
+    const likes = num(d.likes ?? d.likeCount);
+    const comments = num(d.comments ?? d.commentCount);
+    const shares = num(d.shares);
+    const views = num(d.views ?? d.viewCount);
+    const engagements = likes + comments + shares;
     return {
-      impressions: d.views ?? null,
+      impressions: views > 0 ? views : null,
       reach: d.reach ?? null,
       engagements,
       clicks: d.clicks ?? null,
-      engagementRate: base > 0 ? engagements / base : null,
+      engagementRate: views > 0 ? engagements / views : null,
     };
   },
 };

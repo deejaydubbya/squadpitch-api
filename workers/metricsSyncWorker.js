@@ -11,8 +11,17 @@ import { getRedisConnection } from "../redis.js";
 import {
   syncMetricsForDraft,
   getEligibleDraftsForSync,
+  enqueueTiktokVideoIdResolution,
 } from "../domains/studio/metricsSyncService.js";
+import { resolveTiktokVideoId } from "../domains/studio/publishing/tiktokVideoIdResolver.js";
 import { getAnalyticsRecalcQueue } from "../lib/queues.js";
+
+// TikTok video_id resolution backoff. Most uploads complete within
+// 30–60 seconds; user-inbox flow can take a few minutes. Cap total
+// effort at ~10 minutes (1+2+4+8+16+32+64+128+256s ≈ 8m30s) before
+// declaring permanent and giving up.
+const TIKTOK_RESOLVE_MAX_ATTEMPTS = 8;
+const TIKTOK_RESOLVE_BASE_DELAY_MS = 30_000;
 
 const QUEUE_NAME = "sp-metrics-sync";
 const POLL_INTERVAL_MS = 5 * 60_000; // 5 minutes
@@ -101,6 +110,64 @@ async function processSingleSync(draftId) {
   }
 }
 
+// ── TikTok publish_id → video_id resolver ──────────────────────────
+//
+// One job per attempt. On still_processing or transient we re-enqueue
+// the next attempt with exponential backoff up to the max. On
+// already_resolved / newly_resolved / publish_failed / permanent we
+// stop. If we hit the max attempts, the metrics sync will continue to
+// return tiktok_video_id_missing (clear, non-silent failure).
+
+async function processTiktokResolve({ draftId, attempt = 1 }) {
+  let result;
+  try {
+    result = await resolveTiktokVideoId({ draftId });
+  } catch (err) {
+    console.error(
+      `[METRICS_SYNC] tiktok-resolve error draftId=${draftId} attempt=${attempt}: ${err.message}`
+    );
+    return;
+  }
+
+  if (result.resolved) {
+    console.log(
+      `[METRICS_SYNC] tiktok-resolve done draftId=${draftId} status=${result.status} videoId=${result.videoId}`
+    );
+    // We just got the real video_id — nudge the metrics sync to pick
+    // up actual counts on the next tick instead of waiting an hour for
+    // the cooldown-driven sweep.
+    return;
+  }
+
+  // Stop conditions: terminal or unrecoverable.
+  if (
+    result.status === "publish_failed" ||
+    result.status === "permanent" ||
+    result.status === "draft_not_found" ||
+    result.status === "not_tiktok" ||
+    result.status === "no_publish_id"
+  ) {
+    console.warn(
+      `[METRICS_SYNC] tiktok-resolve giving up draftId=${draftId} status=${result.status}`
+    );
+    return;
+  }
+
+  // still_processing / transient / no_connection / token_refresh_failed
+  // — try again with backoff.
+  if (attempt >= TIKTOK_RESOLVE_MAX_ATTEMPTS) {
+    console.warn(
+      `[METRICS_SYNC] tiktok-resolve max attempts reached draftId=${draftId}`
+    );
+    return;
+  }
+  const nextDelay = TIKTOK_RESOLVE_BASE_DELAY_MS * 2 ** (attempt - 1);
+  console.log(
+    `[METRICS_SYNC] tiktok-resolve retry draftId=${draftId} status=${result.status} nextAttempt=${attempt + 1} delayMs=${nextDelay}`
+  );
+  enqueueTiktokVideoIdResolution(draftId, { delayMs: nextDelay, attempt: attempt + 1 });
+}
+
 // ── Worker Entry Point ──────────────────────────────────────────────
 
 export function startMetricsSyncWorker() {
@@ -130,6 +197,11 @@ export function startMetricsSyncWorker() {
         await processBatchTick();
       } else if (job.name === "sync-single") {
         await processSingleSync(job.data.draftId);
+      } else if (job.name === "resolve-tiktok-video-id") {
+        await processTiktokResolve({
+          draftId: job.data.draftId,
+          attempt: job.data.attempt ?? 1,
+        });
       }
     },
     { connection, concurrency: 1 }
