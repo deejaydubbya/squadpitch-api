@@ -6,7 +6,14 @@
 
 import { env } from "../../../config/env.js";
 
-const TIKTOK_SCOPES = ["user.info.basic", "video.upload"];
+// Direct Post flow — the publish adapter calls
+// /v2/post/publish/content/init/ with post_info.privacy_level set on
+// the request, which is the Direct Post endpoint. That flow requires
+// `video.publish`. `video.upload` is for the separate Inbox/Upload
+// flow that sends a draft to the creator's TikTok inbox to finish
+// in-app — we do not use that flow today. Mismatched scopes cause
+// publish calls to be rejected by TikTok at app-review time.
+const TIKTOK_SCOPES = ["user.info.basic", "video.publish"];
 
 function assertConfigured() {
   if (
