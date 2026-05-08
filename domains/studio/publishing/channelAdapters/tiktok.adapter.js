@@ -46,43 +46,67 @@ export const tiktokAdapter = {
     });
     const token = connection.accessToken;
 
-    // Determine media type (video vs photo)
+    // TikTok exposes TWO publish endpoints — one per media type. Photo
+    // and video have different request shapes and the wrong combination
+    // produces "(invalid_params) Invalid media_type or post_mode":
+    //
+    //   VIDEO → POST /v2/post/publish/video/init/
+    //     body: { post_info, source_info, post_mode }
+    //     (no media_type field)
+    //
+    //   PHOTO → POST /v2/post/publish/content/init/
+    //     body: { post_info, source_info, post_mode, media_type: "PHOTO" }
+    //     source_info also needs photo_cover_index.
+    //
+    // Both paths use post_mode: "DIRECT_POST" — that's the Direct Post
+    // flow our `video.publish` scope authorizes. The `inbox/video/init/`
+    // endpoint is for the separate Upload-to-Inbox flow which we don't
+    // use today (would need video.upload).
     const isVideo = draft.mediaType === "video";
 
-    // post_mode is REQUIRED on the Direct Post path. TikTok's
-    // /v2/post/publish/content/init/ endpoint rejects requests
-    // without it as "Invalid media_type or post_mode". Photo flow
-    // additionally requires photo_cover_index (which slide is the
-    // cover) — we always use the first image since we publish a
-    // single photo today.
-    const postBody = {
-      post_mode: "DIRECT_POST",
-      media_type: isVideo ? "VIDEO" : "PHOTO",
-      post_info: {
-        title: caption.slice(0, 2200),
-        privacy_level: "PUBLIC_TO_EVERYONE",
-        disable_comment: false,
-      },
-      source_info: isVideo
-        ? { source: "PULL_FROM_URL", video_url: mediaUrl }
-        : {
+    const url = isVideo
+      ? "https://open.tiktokapis.com/v2/post/publish/video/init/"
+      : "https://open.tiktokapis.com/v2/post/publish/content/init/";
+
+    const postBody = isVideo
+      ? {
+          post_info: {
+            title: caption.slice(0, 2200),
+            privacy_level: "PUBLIC_TO_EVERYONE",
+            disable_comment: false,
+            disable_duet: false,
+            disable_stitch: false,
+          },
+          source_info: {
+            source: "PULL_FROM_URL",
+            video_url: mediaUrl,
+          },
+          post_mode: "DIRECT_POST",
+        }
+      : {
+          post_info: {
+            title: caption.slice(0, 2200),
+            privacy_level: "PUBLIC_TO_EVERYONE",
+            disable_comment: false,
+            auto_add_music: true,
+          },
+          source_info: {
             source: "PULL_FROM_URL",
             photo_cover_index: 0,
             photo_images: [mediaUrl],
           },
-    };
+          post_mode: "DIRECT_POST",
+          media_type: "PHOTO",
+        };
 
-    const res = await fetch(
-      "https://open.tiktokapis.com/v2/post/publish/content/init/",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json; charset=UTF-8",
-        },
-        body: JSON.stringify(postBody),
-      }
-    );
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=UTF-8",
+      },
+      body: JSON.stringify(postBody),
+    });
 
     const body = await res.json().catch(() => ({}));
 
