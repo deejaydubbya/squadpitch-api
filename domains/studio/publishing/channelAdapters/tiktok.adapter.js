@@ -32,6 +32,47 @@ function rewriteToVerifiedHost(mediaUrl) {
   return `${base}/media-proxy/${m[1]}`;
 }
 
+// Map of TikTok privacy values, ordered most-public → least-public.
+// We pick the first one that's actually allowed for this app/user combo.
+const PRIVACY_PREFERENCE = [
+  "PUBLIC_TO_EVERYONE",
+  "MUTUAL_FOLLOW_FRIENDS",
+  "FOLLOWER_OF_CREATOR",
+  "SELF_ONLY",
+];
+
+// Query /creator_info/query/ to find out which privacy levels TikTok
+// will accept for this token. Unaudited apps get ["SELF_ONLY"] only;
+// audited apps get the full list. We try public-first and degrade.
+//
+// On any error (network / unexpected shape) we fall back to SELF_ONLY
+// — that's the universal default and the only level that works pre-
+// audit. The post will be private, but it WILL post.
+async function resolvePrivacyLevel(token) {
+  try {
+    const res = await fetch(
+      "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json; charset=UTF-8",
+        },
+      }
+    );
+    if (!res.ok) return "SELF_ONLY";
+    const body = await res.json().catch(() => ({}));
+    const allowed = body?.data?.privacy_level_options;
+    if (!Array.isArray(allowed) || allowed.length === 0) return "SELF_ONLY";
+    for (const candidate of PRIVACY_PREFERENCE) {
+      if (allowed.includes(candidate)) return candidate;
+    }
+    return allowed[0];
+  } catch {
+    return "SELF_ONLY";
+  }
+}
+
 function buildCaption(draft) {
   const body = draft.body ?? "";
   const tags = Array.isArray(draft.hashtags) ? draft.hashtags : [];
@@ -65,6 +106,17 @@ export const tiktokAdapter = {
     const mediaUrl = rewriteToVerifiedHost(rawMediaUrl);
     const token = connection.accessToken;
 
+    // Resolve which privacy_level TikTok will accept for THIS app/user
+    // combo before posting. Unaudited apps get
+    //   privacy_level_options: ["SELF_ONLY"]
+    // Audited apps get the full list (PUBLIC_TO_EVERYONE,
+    // MUTUAL_FOLLOW_FRIENDS, FOLLOWER_OF_CREATOR, SELF_ONLY).
+    // Sending an option not in the allow-list returns
+    //   error.code: "unaudited_client_can_only_post_to_private_accounts"
+    // which is fatal. Querying creator_info first means the same code
+    // path works pre- and post-audit without manual flipping.
+    const privacyLevel = await resolvePrivacyLevel(token);
+
     // TikTok exposes TWO publish endpoints — one per media type. Photo
     // and video have different request shapes and the wrong combination
     // produces "(invalid_params) Invalid media_type or post_mode":
@@ -91,7 +143,7 @@ export const tiktokAdapter = {
       ? {
           post_info: {
             title: caption.slice(0, 2200),
-            privacy_level: "PUBLIC_TO_EVERYONE",
+            privacy_level: privacyLevel,
             disable_comment: false,
             disable_duet: false,
             disable_stitch: false,
@@ -105,7 +157,7 @@ export const tiktokAdapter = {
       : {
           post_info: {
             title: caption.slice(0, 2200),
-            privacy_level: "PUBLIC_TO_EVERYONE",
+            privacy_level: privacyLevel,
             disable_comment: false,
             auto_add_music: true,
           },
