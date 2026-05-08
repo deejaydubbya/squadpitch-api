@@ -293,9 +293,12 @@ describe("fetchFacebookMetrics — error classification", () => {
     ).rejects.toMatchObject({ transient: true, status: 500 });
   });
 
-  it("non-100 4xx on insights — degrades to engagement-only success", async () => {
+  it("non-permission 4xx on insights — degrades to engagement-only success", async () => {
+    // Use a generic/unrecognized code (not in the permission set 10/200/230/250
+    // and not the invalid-metric code 100) — that falls through to "other_4xx"
+    // in fetchInsights and the adapter degrades to engagement-only.
     fetchMock
-      .mockReturnValueOnce(err(400, { error: { code: 200, message: "permissions" } }))
+      .mockReturnValueOnce(err(400, { error: { code: 9999, message: "weird" } }))
       .mockReturnValueOnce(
         ok({
           reactions: { summary: { total_count: 1 } },
@@ -307,7 +310,6 @@ describe("fetchFacebookMetrics — error classification", () => {
       connection: { accessToken: SECRET },
       externalPostId: POST_ID_COMPOSITE,
     });
-    // Spec: insights-unavailable but engagement-available is partial success.
     expect(r).not.toBeNull();
     expect(r.raw.reactions).toBe(1);
     expect(r.raw._partial).toBe(true);
@@ -325,6 +327,27 @@ describe("fetchFacebookMetrics — error classification", () => {
       caught = e;
     }
     expect(caught.message).not.toContain(SECRET);
+  });
+
+  it("Meta error code 10 (insufficient permission) → AUTH_FAILED, not transient", async () => {
+    // Same bug pattern as Instagram: a missing scope was surfacing as
+    // provider_transient and the worker would retry it forever.
+    fetchMock.mockReturnValueOnce(
+      err(400, {
+        error: { code: 10, message: "(#10) Application does not have permission" },
+      })
+    );
+    let caught;
+    try {
+      await fetchFacebookMetrics({
+        connection: { accessToken: SECRET },
+        externalPostId: POST_ID_COMPOSITE,
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught.code).toBe("AUTH_FAILED");
+    expect(caught.transient).toBeUndefined();
   });
 });
 

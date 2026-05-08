@@ -72,7 +72,15 @@ function isInvalidMetricError(body, status) {
   return status === 400 && body?.error?.code === 100;
 }
 
-function classifyHttpError(res) {
+// Meta permission-error codes — token authenticated but scopes don't
+// allow the call. See instagram.metrics.js for the full table.
+const META_PERMISSION_CODES = new Set([10, 200, 230, 250]);
+function isMetaPermissionError(body) {
+  const code = body?.error?.code;
+  return typeof code === "number" && META_PERMISSION_CODES.has(code);
+}
+
+function classifyHttpError(res, body) {
   if (res.status === 401 || res.status === 403) {
     return Object.assign(new Error("Facebook auth failed"), { code: "AUTH_FAILED" });
   }
@@ -81,6 +89,14 @@ function classifyHttpError(res) {
       transient: true,
       status: res.status,
     });
+  }
+  if (!res.ok && body && isMetaPermissionError(body)) {
+    return Object.assign(
+      new Error(
+        `Facebook permission denied (${body.error.code}): ${body.error.message ?? ""}`.trim()
+      ),
+      { code: "AUTH_FAILED" }
+    );
   }
   return null;
 }
@@ -112,17 +128,16 @@ async function fetchInsights({ externalPostId, token }) {
   // Try full set first.
   let res = await fetch(buildInsightsUrl(externalPostId, FULL_METRIC_SET, token));
   if (res.status === 404) return { available: false, reason: "post_not_found" };
-  const httpErr = classifyHttpError(res);
-  if (httpErr) throw httpErr;
-
   let body = await res.json().catch(() => ({}));
+  const httpErr = classifyHttpError(res, body);
+  if (httpErr) throw httpErr;
 
   // Meta error code 100 → retry with the documented baseline pair.
   if (!res.ok && isInvalidMetricError(body, res.status)) {
     res = await fetch(buildInsightsUrl(externalPostId, MINIMAL_METRIC_SET, token));
-    const httpErr2 = classifyHttpError(res);
-    if (httpErr2) throw httpErr2;
     body = await res.json().catch(() => ({}));
+    const httpErr2 = classifyHttpError(res, body);
+    if (httpErr2) throw httpErr2;
     if (!res.ok) {
       // Even minimal set is rejected → insights simply unavailable on
       // this post object. Engagement may still be available; keep going.
@@ -169,9 +184,9 @@ async function fetchPostObjectEngagement({ externalPostId, token }) {
   // Try with reactions first.
   let res = await fetch(buildPostObjectUrl(externalPostId, ENGAGEMENT_FIELDS, token));
   if (res.status === 404) return { available: false, reason: "post_not_found" };
-  let httpErr = classifyHttpError(res);
-  if (httpErr) throw httpErr;
   let body = await res.json().catch(() => ({}));
+  let httpErr = classifyHttpError(res, body);
+  if (httpErr) throw httpErr;
 
   let fallback = false;
   let reactionsCount = body?.reactions?.summary?.total_count;
@@ -179,9 +194,9 @@ async function fetchPostObjectEngagement({ externalPostId, token }) {
     // Either the field was rejected (older app perms tier) or missing
     // entirely. Retry with likes.
     res = await fetch(buildPostObjectUrl(externalPostId, ENGAGEMENT_FIELDS_FALLBACK, token));
-    httpErr = classifyHttpError(res);
-    if (httpErr) throw httpErr;
     body = await res.json().catch(() => ({}));
+    httpErr = classifyHttpError(res, body);
+    if (httpErr) throw httpErr;
     fallback = true;
     if (!res.ok) {
       return { available: false, reason: "http_" + res.status };

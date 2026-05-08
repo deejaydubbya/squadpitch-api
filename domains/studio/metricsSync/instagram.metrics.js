@@ -1,10 +1,43 @@
 // Instagram metrics adapter.
 //
 // Uses IG Graph API to fetch post insights + basic fields.
-// GET /{media-id}/insights?metric=impressions,reach
+// GET /{media-id}/insights?metric=impressions,reach,saved,shares
 // GET /{media-id}?fields=like_count,comments_count,timestamp
+//
+// Meta error codes worth classifying explicitly:
+//   10  — "Application does not have permission for this action"
+//          (token lacks instagram_manage_insights for /insights endpoint)
+//   200 — "Permissions error"
+//   230 — "Permission denied"
+//   250 — "Requires extended permissions"
+// All four mean "the token authenticated successfully but the granted
+// scopes don't allow this call". We surface them as AUTH_FAILED so
+// the service maps them to provider_permission_denied — distinct from
+// the transient/retry path used for 5xx + 429.
 
 import { META_GRAPH_BASE } from "../meta.constants.js";
+
+const META_PERMISSION_CODES = new Set([10, 200, 230, 250]);
+
+function isMetaPermissionError(body) {
+  const code = body?.error?.code;
+  return typeof code === "number" && META_PERMISSION_CODES.has(code);
+}
+
+function classifyMetaResponse(res, body) {
+  if (res.status === 404) return { kind: "not_found" };
+  if (res.status === 401 || res.status === 403) return { kind: "auth_failed" };
+  if (res.status === 429 || res.status >= 500) {
+    return { kind: "transient", status: res.status };
+  }
+  if (!res.ok && isMetaPermissionError(body)) {
+    return { kind: "permission_denied", code: body?.error?.code, message: body?.error?.message };
+  }
+  if (!res.ok) {
+    return { kind: "other_4xx", status: res.status, message: body?.error?.message };
+  }
+  return { kind: "ok" };
+}
 
 export async function fetchInstagramMetrics({ connection, externalPostId }) {
   const token = connection.accessToken;
@@ -16,17 +49,30 @@ export async function fetchInstagramMetrics({ connection, externalPostId }) {
     `&access_token=${encodeURIComponent(token)}`;
 
   const insightsRes = await fetch(insightsUrl);
-  if (insightsRes.status === 404) return null;
-  if (insightsRes.status === 401 || insightsRes.status === 403) {
+  const insightsBody = await insightsRes.json().catch(() => ({}));
+  const insightsClass = classifyMetaResponse(insightsRes, insightsBody);
+
+  if (insightsClass.kind === "not_found") return null;
+  if (insightsClass.kind === "auth_failed") {
     throw Object.assign(new Error("Instagram auth failed"), { code: "AUTH_FAILED" });
   }
-  if (insightsRes.status === 429 || insightsRes.status >= 500) {
-    throw Object.assign(new Error(`Instagram API ${insightsRes.status}`), { transient: true });
+  if (insightsClass.kind === "permission_denied") {
+    // Most common cause: token missing instagram_manage_insights.
+    throw Object.assign(
+      new Error(
+        `Instagram permission denied (${insightsClass.code}): ${insightsClass.message ?? ""}`.trim()
+      ),
+      { code: "AUTH_FAILED" }
+    );
   }
-
-  const insightsBody = await insightsRes.json().catch(() => ({}));
-  if (!insightsRes.ok) {
-    throw Object.assign(new Error(insightsBody?.error?.message ?? "Instagram insights failed"), {
+  if (insightsClass.kind === "transient") {
+    throw Object.assign(new Error(`Instagram API ${insightsClass.status}`), {
+      transient: true,
+      status: insightsClass.status,
+    });
+  }
+  if (insightsClass.kind === "other_4xx") {
+    throw Object.assign(new Error(insightsClass.message ?? "Instagram insights failed"), {
       transient: true,
     });
   }
