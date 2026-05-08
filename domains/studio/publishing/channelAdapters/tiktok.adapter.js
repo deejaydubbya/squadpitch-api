@@ -14,6 +14,24 @@ class TikTokPublishError extends Error {
   }
 }
 
+// TikTok's PULL_FROM_URL flow only accepts hosts that are verified in
+// the TikTok developer portal. squadpitch.com is verified;
+// res.cloudinary.com is not (and can't be, since it isn't our domain).
+// The web app exposes a scoped /media-proxy/ route that streams from
+// our Cloudinary cloud while serving from squadpitch.com — see
+// squadpitch-web/src/app/media-proxy/[...path]/route.ts. We rewrite
+// any Cloudinary URL to point at the proxy before handing it to TikTok.
+//
+//   https://res.cloudinary.com/<cloud>/<path...>
+//     →  https://squadpitch.com/media-proxy/<path...>
+function rewriteToVerifiedHost(mediaUrl) {
+  if (!mediaUrl || typeof mediaUrl !== "string") return mediaUrl;
+  const m = mediaUrl.match(/^https?:\/\/res\.cloudinary\.com\/[^/]+\/(.+)$/);
+  if (!m) return mediaUrl;
+  const base = (process.env.PUBLIC_SITE_URL || "https://squadpitch.com").replace(/\/+$/, "");
+  return `${base}/media-proxy/${m[1]}`;
+}
+
 function buildCaption(draft) {
   const body = draft.body ?? "";
   const tags = Array.isArray(draft.hashtags) ? draft.hashtags : [];
@@ -40,10 +58,11 @@ export const tiktokAdapter = {
   },
 
   async publishPost({ draft, connection, client }) {
-    const { mediaUrl, caption } = await this.validatePublishTarget({
+    const { mediaUrl: rawMediaUrl, caption } = await this.validatePublishTarget({
       draft,
       client,
     });
+    const mediaUrl = rewriteToVerifiedHost(rawMediaUrl);
     const token = connection.accessToken;
 
     // TikTok exposes TWO publish endpoints — one per media type. Photo
