@@ -48,7 +48,16 @@ export const tiktokAdapter = {
 
     // Determine media type (video vs photo)
     const isVideo = draft.mediaType === "video";
+
+    // post_mode is REQUIRED on the Direct Post path. TikTok's
+    // /v2/post/publish/content/init/ endpoint rejects requests
+    // without it as "Invalid media_type or post_mode". Photo flow
+    // additionally requires photo_cover_index (which slide is the
+    // cover) — we always use the first image since we publish a
+    // single photo today.
     const postBody = {
+      post_mode: "DIRECT_POST",
+      media_type: isVideo ? "VIDEO" : "PHOTO",
       post_info: {
         title: caption.slice(0, 2200),
         privacy_level: "PUBLIC_TO_EVERYONE",
@@ -56,8 +65,11 @@ export const tiktokAdapter = {
       },
       source_info: isVideo
         ? { source: "PULL_FROM_URL", video_url: mediaUrl }
-        : { source: "PULL_FROM_URL", photo_images: [mediaUrl] },
-      media_type: isVideo ? "VIDEO" : "PHOTO",
+        : {
+            source: "PULL_FROM_URL",
+            photo_cover_index: 0,
+            photo_images: [mediaUrl],
+          },
     };
 
     const res = await fetch(

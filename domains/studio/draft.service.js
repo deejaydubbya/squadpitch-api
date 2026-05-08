@@ -60,9 +60,20 @@ export async function updateDraft(draftId, patch) {
   if (!existing) {
     throw Object.assign(new Error("Draft not found"), { status: 404 });
   }
-  if (!["DRAFT", "PENDING_REVIEW"].includes(existing.status)) {
+  // Editability rule: a draft is editable as long as it has not
+  // actually been published anywhere. This covers the common
+  // "Approved → publish failed → fix media → retry" flow that the
+  // strict status-whitelist used to block. Once a post has reached a
+  // social platform (externalPostId set, or publishedAt stamped) we
+  // refuse the edit — at that point the right action is to delete and
+  // re-create.
+  const alreadyPublished =
+    existing.externalPostId != null || existing.publishedAt != null;
+  if (alreadyPublished) {
     throw Object.assign(
-      new Error(`Cannot edit a draft with status ${existing.status}`),
+      new Error(
+        `Cannot edit a draft that has already been published (status ${existing.status}).`
+      ),
       { status: 409 }
     );
   }
