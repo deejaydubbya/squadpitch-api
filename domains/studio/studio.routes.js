@@ -2434,13 +2434,18 @@ studioRouter.post(`${BASE}/workspaces/:id/auto-schedule`, requireClientOwner, as
 });
 
 studioRouter.post(`${BASE}/drafts/:id/publish`, requireDraftOwner, async (req, res, next) => {
+  // Hoisted so the catch block at the bottom of the handler can log
+  // channel/clientId. Without this, a publish failure throws before
+  // the inner const is hit, and the catch's reference becomes a
+  // ReferenceError that masks the real provider error with a 500.
+  let draftRecord = null;
   try {
     // Usage limit check
     const allowed = await checkUsageLimit(req.user.id, "posts");
     if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly publish limit. Upgrade your plan for more.");
 
     // Pre-validate: ensure the draft's channel has an active connection
-    const draftRecord = await prisma.draft.findUnique({
+    draftRecord = await prisma.draft.findUnique({
       where: { id: req.params.id },
       select: { channel: true, clientId: true, mediaUrl: true, mediaType: true },
     });
