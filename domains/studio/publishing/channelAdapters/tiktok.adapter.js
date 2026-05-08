@@ -41,14 +41,21 @@ const PRIVACY_PREFERENCE = [
   "SELF_ONLY",
 ];
 
-// Query /creator_info/query/ to find out which privacy levels TikTok
-// will accept for this token. Unaudited apps get ["SELF_ONLY"] only;
-// audited apps get the full list. We try public-first and degrade.
+// TikTok enforces audit status as a SEPARATE permission layer from
+// what creator_info reports. creator_info tells us what the creator's
+// account allows (e.g. a public-account creator can post publicly).
+// But until OUR APP passes TikTok's content-publishing audit, every
+// publish call with privacy_level != "SELF_ONLY" fails with:
+//   error.code: "unaudited_client_can_only_post_to_private_accounts"
+// regardless of what creator_info advertised.
 //
-// On any error (network / unexpected shape) we fall back to SELF_ONLY
-// — that's the universal default and the only level that works pre-
-// audit. The post will be private, but it WILL post.
+// Until the audit passes, we force SELF_ONLY. After audit, set the
+// env var TIKTOK_APP_AUDITED=true to use creator_info as the source
+// of truth and pick the most-public level the creator allows.
 async function resolvePrivacyLevel(token) {
+  if (process.env.TIKTOK_APP_AUDITED !== "true") {
+    return "SELF_ONLY";
+  }
   try {
     const res = await fetch(
       "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
