@@ -1,15 +1,14 @@
-// fetchFacebookMetrics() tests.
+// fetchFacebookMetrics() — partial-success behavior.
 //
-// Covers:
-//   - happy path with the full metric set
-//   - reaction-types object summing
-//   - Meta error code 100 → fallback to minimal set + partial=true
-//   - minimal set also rejected → null (provider_no_metrics)
-//   - 401/403 → AUTH_FAILED
-//   - 429 → transient
-//   - 500 → transient
+// The adapter fetches insights and post-object engagement
+// independently. Either alone is success; only "both empty" returns
+// null (→ provider_no_metrics).
 //
-// We never call real Meta — the global `fetch` is stubbed per test.
+// Test calls fetch() in this order:
+//   1. /{postId}/insights?metric=full_set
+//   2. /{postId}/insights?metric=minimal_set                (only on code 100)
+//   3. /{postId}?fields=reactions.limit(0).summary(true)…
+//   4. /{postId}?fields=likes.limit(0).summary(true)…       (only on reactions miss)
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -22,7 +21,8 @@ const { fetchFacebookMetrics } = await import(
 );
 
 const SECRET = "supersecret-bearer-xyz123";
-const POST_ID = "12345_67890";
+const POST_ID_COMPOSITE = "12345_67890";
+const POST_ID_SIMPLE = "67890";
 
 let fetchMock;
 const originalFetch = global.fetch;
@@ -31,266 +31,343 @@ beforeEach(() => {
   fetchMock = vi.fn();
   global.fetch = fetchMock;
 });
-
 afterEach(() => {
   global.fetch = originalFetch;
 });
 
-function ok(body) {
-  return Promise.resolve({ ok: true, status: 200, json: async () => body });
-}
-function err(status, body = {}) {
-  return Promise.resolve({ ok: false, status, json: async () => body });
-}
+const ok = (body) => Promise.resolve({ ok: true, status: 200, json: async () => body });
+const err = (status, body = {}) =>
+  Promise.resolve({ ok: false, status, json: async () => body });
 
-describe("fetchFacebookMetrics — happy path", () => {
-  it("requests the safe metric set and returns the normalized raw shape", async () => {
+const insightsFull = (impressions, reach, reactions, clicks) => ({
+  data: [
+    { name: "post_impressions", values: [{ value: impressions }] },
+    { name: "post_impressions_unique", values: [{ value: reach }] },
+    { name: "post_reactions_by_type_total", values: [{ value: reactions }] },
+    { name: "post_clicks", values: [{ value: clicks }] },
+  ],
+});
+
+const reactionsObject = (n) => ({
+  reactions: { data: [], summary: { total_count: n } },
+  comments: { data: [], summary: { total_count: 0 } },
+  shares: { count: 0 },
+});
+
+describe("fetchFacebookMetrics — full success", () => {
+  it("returns full insights + engagement (no _partial flag)", async () => {
     fetchMock
-      // 1st: insights call
       .mockReturnValueOnce(
-        ok({
-          data: [
-            { name: "post_impressions", values: [{ value: 1234 }] },
-            { name: "post_impressions_unique", values: [{ value: 1100 }] },
-            {
-              name: "post_reactions_by_type_total",
-              values: [{ value: { like: 50, love: 5, haha: 2 } }],
-            },
-            { name: "post_clicks", values: [{ value: 99 }] },
-          ],
-        })
+        ok(insightsFull(1000, 800, { like: 40, love: 5, haha: 5 }, 12))
       )
-      // 2nd: post object call (comments + shares)
       .mockReturnValueOnce(
         ok({
-          comments: { summary: { total_count: 12 } },
+          reactions: { summary: { total_count: 50 } },
+          comments: { summary: { total_count: 7 } },
           shares: { count: 3 },
+          permalink_url: "https://facebook.com/foo",
         })
       );
 
     const r = await fetchFacebookMetrics({
       connection: { accessToken: SECRET },
-      externalPostId: POST_ID,
+      externalPostId: POST_ID_COMPOSITE,
     });
 
     expect(r.raw).toEqual({
-      impressions: 1234,
-      reach: 1100,
-      reactions: 57,
-      comments: 12,
+      impressions: 1000,
+      reach: 800,
+      clicks: 12,
+      // engagement reactions take priority over insights-summed reactions
+      reactions: 50,
+      comments: 7,
       shares: 3,
-      clicks: 99,
     });
-    expect(r.fetchedAt).toBeInstanceOf(Date);
+    expect(r.raw._partial).toBeUndefined();
+    expect(r.raw._partialReasons).toBeUndefined();
 
-    // The insights URL must contain post_impressions_unique (NOT post_reach).
-    // (Meta's API expects the access_token in the querystring — that's
-    // by design and not something we can avoid.)
-    const insightsUrl = fetchMock.mock.calls[0][0];
-    expect(insightsUrl).toContain("post_impressions");
-    expect(insightsUrl).toContain("post_impressions_unique");
-    expect(insightsUrl).not.toContain("post_reach");
-  });
-
-  it("sums all reaction types (object-shaped post_reactions_by_type_total)", async () => {
-    fetchMock
-      .mockReturnValueOnce(
-        ok({
-          data: [
-            { name: "post_impressions", values: [{ value: 100 }] },
-            { name: "post_impressions_unique", values: [{ value: 80 }] },
-            {
-              name: "post_reactions_by_type_total",
-              values: [
-                {
-                  value: {
-                    like: 10,
-                    love: 4,
-                    wow: 2,
-                    haha: 1,
-                    sad: 0,
-                    angry: 1,
-                    care: 3,
-                  },
-                },
-              ],
-            },
-            { name: "post_clicks", values: [{ value: 0 }] },
-          ],
-        })
-      )
-      .mockReturnValueOnce(ok({ comments: { summary: { total_count: 0 } }, shares: null }));
-
-    const r = await fetchFacebookMetrics({
-      connection: { accessToken: SECRET },
-      externalPostId: POST_ID,
-    });
-    expect(r.raw.reactions).toBe(21);
-    expect(r.raw.shares).toBe(0); // shares missing → 0
-  });
-
-  it("handles a numeric (not object) reactions value defensively", async () => {
-    fetchMock
-      .mockReturnValueOnce(
-        ok({
-          data: [
-            { name: "post_impressions", values: [{ value: 50 }] },
-            { name: "post_impressions_unique", values: [{ value: 50 }] },
-            { name: "post_reactions_by_type_total", values: [{ value: 7 }] },
-            { name: "post_clicks", values: [{ value: 1 }] },
-          ],
-        })
-      )
-      .mockReturnValueOnce(ok({ comments: { summary: { total_count: 0 } } }));
-    const r = await fetchFacebookMetrics({
-      connection: { accessToken: SECRET },
-      externalPostId: POST_ID,
-    });
-    expect(r.raw.reactions).toBe(7);
+    // Insights URL must request the right metrics (not post_reach).
+    expect(fetchMock.mock.calls[0][0]).toContain("post_impressions_unique");
+    expect(fetchMock.mock.calls[0][0]).not.toContain("post_reach");
+    // Post-object URL requests reactions+comments+shares+permalink_url.
+    const postUrl = fetchMock.mock.calls[1][0];
+    expect(postUrl).toMatch(/reactions/);
+    expect(postUrl).toMatch(/comments/);
+    expect(postUrl).toMatch(/shares/);
+    expect(postUrl).toMatch(/permalink_url/);
   });
 });
 
-describe("fetchFacebookMetrics — invalid-metric fallback (Meta error 100)", () => {
-  it("retries with the minimal metric set and returns partial metrics", async () => {
+describe("fetchFacebookMetrics — partial: insights empty but engagement available", () => {
+  it("returns engagement counts with _partial flag (fresh-post lag scenario)", async () => {
+    // Insights endpoint returns 200 OK but data: [] — no metrics yet.
     fetchMock
-      // 1st: full set rejected with code 100
-      .mockReturnValueOnce(
-        err(400, {
-          error: {
-            code: 100,
-            message: "(#100) The value must be a valid insights metric",
-          },
-        })
-      )
-      // 2nd: minimal set succeeds (no reactions / clicks because they
-      // weren't requested — those will land as 0)
+      .mockReturnValueOnce(ok({ data: [] }))
       .mockReturnValueOnce(
         ok({
-          data: [
-            { name: "post_impressions", values: [{ value: 500 }] },
-            { name: "post_impressions_unique", values: [{ value: 400 }] },
-          ],
-        })
-      )
-      // 3rd: post object
-      .mockReturnValueOnce(
-        ok({
-          comments: { summary: { total_count: 5 } },
+          reactions: { summary: { total_count: 12 } },
+          comments: { summary: { total_count: 2 } },
           shares: { count: 1 },
         })
       );
 
     const r = await fetchFacebookMetrics({
       connection: { accessToken: SECRET },
-      externalPostId: POST_ID,
+      externalPostId: POST_ID_COMPOSITE,
     });
 
     expect(r).not.toBeNull();
-    expect(r.raw).toMatchObject({
-      impressions: 500,
-      reach: 400,
-      reactions: 0, // not requested in minimal set
-      clicks: 0,
-      comments: 5,
-      shares: 1,
-      _partial: true,
+    expect(r.raw.impressions).toBe(0);
+    expect(r.raw.reach).toBe(0);
+    expect(r.raw.clicks).toBe(0);
+    expect(r.raw.reactions).toBe(12);
+    expect(r.raw.comments).toBe(2);
+    expect(r.raw.shares).toBe(1);
+    expect(r.raw._partial).toBe(true);
+    expect(r.raw._partialReasons).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^facebook_insights_unavailable:/)])
+    );
+  });
+});
+
+describe("fetchFacebookMetrics — partial: invalid metric but engagement available", () => {
+  it("returns engagement after Meta error 100 from BOTH full + minimal sets", async () => {
+    fetchMock
+      // 1st: full set 400 + code 100
+      .mockReturnValueOnce(err(400, { error: { code: 100, message: "invalid metric" } }))
+      // 2nd: minimal set ALSO 400 + code 100
+      .mockReturnValueOnce(err(400, { error: { code: 100, message: "still invalid" } }))
+      // 3rd: post object engagement available
+      .mockReturnValueOnce(
+        ok({
+          reactions: { summary: { total_count: 9 } },
+          comments: { summary: { total_count: 4 } },
+          shares: { count: 2 },
+        })
+      );
+
+    const r = await fetchFacebookMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: POST_ID_COMPOSITE,
     });
-    expect(typeof r.raw._partialReason).toBe("string");
-    // Three fetch calls total: full insights (failed), minimal insights, post object.
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(r).not.toBeNull();
+    expect(r.raw.reactions).toBe(9);
+    expect(r.raw._partial).toBe(true);
+    expect(r.raw._partialReasons[0]).toContain("invalid_metric");
+  });
+});
+
+describe("fetchFacebookMetrics — reactions unavailable, likes summary works", () => {
+  it("falls back to likes.summary.total_count", async () => {
+    fetchMock
+      .mockReturnValueOnce(ok(insightsFull(500, 400, 0, 5)))
+      // First post-object call — reactions field rejected (e.g. 400 / missing)
+      .mockReturnValueOnce(
+        err(400, { error: { code: 100, message: "Unsupported field reactions" } })
+      )
+      // Retry with likes
+      .mockReturnValueOnce(
+        ok({
+          likes: { summary: { total_count: 33 } },
+          comments: { summary: { total_count: 1 } },
+          shares: { count: 0 },
+        })
+      );
+
+    const r = await fetchFacebookMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: POST_ID_COMPOSITE,
+    });
+    expect(r).not.toBeNull();
+    expect(r.raw.reactions).toBe(33);
+    expect(r.raw._partial).toBe(true);
+    expect(r.raw._partialReasons).toContain("reactions_fallback_to_likes");
   });
 
-  it("if the minimal set ALSO returns code 100, returns null (no_metrics) — does NOT throw transient", async () => {
+  it("also falls back when reactions field is simply missing from the response (200 OK, no field)", async () => {
     fetchMock
+      .mockReturnValueOnce(ok(insightsFull(500, 400, 0, 5)))
+      // 200 OK but no `reactions` key — older app permissions tier
       .mockReturnValueOnce(
-        err(400, { error: { code: 100, message: "invalid metric" } })
+        ok({
+          comments: { summary: { total_count: 0 } },
+          shares: { count: 0 },
+        })
       )
       .mockReturnValueOnce(
-        err(400, { error: { code: 100, message: "still invalid" } })
+        ok({
+          likes: { summary: { total_count: 7 } },
+          comments: { summary: { total_count: 0 } },
+          shares: { count: 0 },
+        })
       );
     const r = await fetchFacebookMetrics({
       connection: { accessToken: SECRET },
-      externalPostId: POST_ID,
+      externalPostId: POST_ID_COMPOSITE,
+    });
+    expect(r.raw.reactions).toBe(7);
+    expect(r.raw._partialReasons).toContain("reactions_fallback_to_likes");
+  });
+});
+
+describe("fetchFacebookMetrics — both insights and engagement empty", () => {
+  it("returns null (→ provider_no_metrics)", async () => {
+    fetchMock
+      // Insights empty
+      .mockReturnValueOnce(ok({ data: [] }))
+      // First post object: response has no engagement fields at all
+      .mockReturnValueOnce(ok({}))
+      // Likes fallback also returns nothing useful
+      .mockReturnValueOnce(ok({}));
+    const r = await fetchFacebookMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: POST_ID_COMPOSITE,
+    });
+    expect(r).toBeNull();
+  });
+
+  it("404 from insights returns null without making the post-object call", async () => {
+    fetchMock.mockReturnValueOnce(err(404, { error: { code: 803 } }));
+    const r = await fetchFacebookMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: POST_ID_COMPOSITE,
+    });
+    expect(r).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("404 from post-object returns null too", async () => {
+    fetchMock
+      .mockReturnValueOnce(ok({ data: [] }))
+      .mockReturnValueOnce(err(404, {}));
+    const r = await fetchFacebookMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: POST_ID_COMPOSITE,
     });
     expect(r).toBeNull();
   });
 });
 
 describe("fetchFacebookMetrics — error classification", () => {
-  it("404 → null (post not found)", async () => {
-    fetchMock.mockReturnValueOnce(err(404, { error: { code: 803 } }));
-    const r = await fetchFacebookMetrics({
-      connection: { accessToken: SECRET },
-      externalPostId: POST_ID,
-    });
-    expect(r).toBeNull();
-  });
-
-  it("401 → AUTH_FAILED (no token leaked)", async () => {
-    fetchMock.mockReturnValueOnce(err(401, { error: { message: "auth fail" } }));
+  it("401 → AUTH_FAILED, no fallback attempted", async () => {
+    fetchMock.mockReturnValueOnce(err(401, {}));
     await expect(
       fetchFacebookMetrics({
         connection: { accessToken: SECRET },
-        externalPostId: POST_ID,
+        externalPostId: POST_ID_COMPOSITE,
+      })
+    ).rejects.toMatchObject({ code: "AUTH_FAILED" });
+    // Critical: we don't try the post-object call when auth fails on insights.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("403 on post-object after successful insights → AUTH_FAILED", async () => {
+    fetchMock
+      .mockReturnValueOnce(ok(insightsFull(100, 80, 0, 0)))
+      .mockReturnValueOnce(err(403, {}));
+    await expect(
+      fetchFacebookMetrics({
+        connection: { accessToken: SECRET },
+        externalPostId: POST_ID_COMPOSITE,
       })
     ).rejects.toMatchObject({ code: "AUTH_FAILED" });
   });
 
-  it("403 → AUTH_FAILED", async () => {
-    fetchMock.mockReturnValueOnce(err(403, {}));
-    await expect(
-      fetchFacebookMetrics({
-        connection: { accessToken: SECRET },
-        externalPostId: POST_ID,
-      })
-    ).rejects.toMatchObject({ code: "AUTH_FAILED" });
-  });
-
-  it("429 → transient with status set", async () => {
+  it("429 → transient", async () => {
     fetchMock.mockReturnValueOnce(err(429, {}));
     await expect(
       fetchFacebookMetrics({
         connection: { accessToken: SECRET },
-        externalPostId: POST_ID,
+        externalPostId: POST_ID_COMPOSITE,
       })
     ).rejects.toMatchObject({ transient: true, status: 429 });
   });
 
-  it("500 → transient", async () => {
+  it("500 on insights → transient (no engagement attempt)", async () => {
     fetchMock.mockReturnValueOnce(err(500, {}));
     await expect(
       fetchFacebookMetrics({
         connection: { accessToken: SECRET },
-        externalPostId: POST_ID,
+        externalPostId: POST_ID_COMPOSITE,
       })
     ).rejects.toMatchObject({ transient: true, status: 500 });
   });
 
+  it("non-100 4xx on insights — degrades to engagement-only success", async () => {
+    fetchMock
+      .mockReturnValueOnce(err(400, { error: { code: 200, message: "permissions" } }))
+      .mockReturnValueOnce(
+        ok({
+          reactions: { summary: { total_count: 1 } },
+          comments: { summary: { total_count: 0 } },
+          shares: { count: 0 },
+        })
+      );
+    const r = await fetchFacebookMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: POST_ID_COMPOSITE,
+    });
+    // Spec: insights-unavailable but engagement-available is partial success.
+    expect(r).not.toBeNull();
+    expect(r.raw.reactions).toBe(1);
+    expect(r.raw._partial).toBe(true);
+  });
+
   it("Token never appears in thrown error messages", async () => {
-    fetchMock.mockReturnValueOnce(
-      err(401, { error: { message: "auth fail" } })
-    );
+    fetchMock.mockReturnValueOnce(err(401, {}));
     let caught;
     try {
       await fetchFacebookMetrics({
         connection: { accessToken: SECRET },
-        externalPostId: POST_ID,
+        externalPostId: POST_ID_COMPOSITE,
       });
     } catch (e) {
       caught = e;
     }
     expect(caught.message).not.toContain(SECRET);
   });
+});
 
-  it("non-100 4xx throws transient (so the worker sees a generic upstream error, not a silent skip)", async () => {
-    fetchMock.mockReturnValueOnce(
-      err(400, { error: { code: 200, message: "permissions issue" } })
-    );
-    await expect(
-      fetchFacebookMetrics({
-        connection: { accessToken: SECRET },
-        externalPostId: POST_ID,
-      })
-    ).rejects.toMatchObject({ transient: true });
+describe("fetchFacebookMetrics — externalPostId shape logging", () => {
+  it("logs composite shape for page_post composite ids", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    fetchMock
+      .mockReturnValueOnce(ok({ data: [] }))
+      .mockReturnValueOnce(
+        ok({
+          reactions: { summary: { total_count: 0 } },
+          comments: { summary: { total_count: 0 } },
+          shares: { count: 0 },
+        })
+      );
+    await fetchFacebookMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: POST_ID_COMPOSITE,
+    });
+    const logged = logSpy.mock.calls.map((args) => args.join(" ")).join("\n");
+    expect(logged).toContain("composite_page_post");
+    // Make sure the token is NEVER in the logs.
+    expect(logged).not.toContain(SECRET);
+    logSpy.mockRestore();
+  });
+
+  it("logs simple shape for non-composite ids", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    fetchMock
+      .mockReturnValueOnce(ok({ data: [] }))
+      .mockReturnValueOnce(
+        ok({
+          reactions: { summary: { total_count: 0 } },
+          comments: { summary: { total_count: 0 } },
+          shares: { count: 0 },
+        })
+      );
+    await fetchFacebookMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: POST_ID_SIMPLE,
+    });
+    const logged = logSpy.mock.calls.map((args) => args.join(" ")).join("\n");
+    expect(logged).toContain("shape=simple");
+    logSpy.mockRestore();
   });
 });

@@ -1,21 +1,31 @@
-// Facebook metrics adapter.
+// Facebook metrics adapter — partial-success.
 //
-// Insights:  GET /{post-id}/insights?metric=…
-// Object:    GET /{post-id}?fields=comments.summary(true),shares
+// Strategy
+// ────────
+// Two independent data sources, fetched in sequence:
+//   1. /{post-id}/insights?metric=…              → impressions / reach / clicks
+//   2. /{post-id}?fields=reactions,comments,shares,permalink_url
+//                                                → engagement summaries
 //
-// IMPORTANT: not every metric is valid for every Page/post type/API
-// version. `post_reach` was a valid metric on older versions but
-// /v17+ stopped accepting it on most page-post objects, returning:
-//   (#100) The value must be a valid insights metric
-// We use `post_impressions_unique` for reach instead — it's the
-// documented stable post-level "unique users who saw this" metric and
-// is what Meta itself recommends as the reach signal for posts.
+// Either source alone counts as a successful sync. We only return
+// null (→ provider_no_metrics) when BOTH are empty / unavailable.
+// Insights commonly lag publishing by 15–60 min, so a fresh post
+// often has engagement counts before insights numbers exist —
+// previously this case surfaced as `provider_no_metrics`, which was
+// wrong because real engagement was visible.
 //
-// If Meta still rejects the safe set (e.g., niche page types where
-// reactions_by_type_total isn't supported), we degrade to a minimal
-// pair (post_impressions + post_impressions_unique) and return partial
-// metrics with a `partial` warning. Comments and shares come from the
-// post object regardless and are unaffected.
+// Auth + rate-limit + 5xx errors on EITHER request still bubble up
+// with the standard typed shapes (AUTH_FAILED / transient) so the
+// service-level classifier behaves the same.
+//
+// External-post-id shape
+// ──────────────────────
+// Facebook publishing stores either the photo id (photo posts) or
+// the page-id_post-id composite (text + link posts) — see
+// publishing/channelAdapters/facebook.adapter.js. Both work against
+// /{post-id}/insights AND /{post-id}?fields=… in current Graph
+// versions. We log the shape (composite vs simple) for observability
+// without exposing the token.
 
 import { META_GRAPH_BASE } from "../meta.constants.js";
 
@@ -25,8 +35,22 @@ const FULL_METRIC_SET = [
   "post_reactions_by_type_total",
   "post_clicks",
 ];
-
 const MINIMAL_METRIC_SET = ["post_impressions", "post_impressions_unique"];
+
+const ENGAGEMENT_FIELDS = [
+  "reactions.limit(0).summary(true)",
+  "comments.limit(0).summary(true)",
+  "shares",
+  "permalink_url",
+];
+// If reactions field is rejected by an older app permissions tier,
+// retry the post-object call swapping reactions for likes.
+const ENGAGEMENT_FIELDS_FALLBACK = [
+  "likes.limit(0).summary(true)",
+  "comments.limit(0).summary(true)",
+  "shares",
+  "permalink_url",
+];
 
 function buildInsightsUrl(externalPostId, metrics, token) {
   return (
@@ -36,30 +60,29 @@ function buildInsightsUrl(externalPostId, metrics, token) {
   );
 }
 
-// Meta's #100 error message wording varies slightly across API versions
-// (`The value must be a valid insights metric`, `is not a valid metric`,
-// etc.). The error code is the stable signal.
+function buildPostObjectUrl(externalPostId, fields, token) {
+  return (
+    `${META_GRAPH_BASE}/${externalPostId}` +
+    `?fields=${encodeURIComponent(fields.join(","))}` +
+    `&access_token=${encodeURIComponent(token)}`
+  );
+}
+
 function isInvalidMetricError(body, status) {
-  if (status !== 400) return false;
-  const code = body?.error?.code;
-  // Meta error code 100 is "Invalid parameter". The combination of 400
-  // status + code 100 on the insights endpoint is reliably this case.
-  return code === 100;
+  return status === 400 && body?.error?.code === 100;
 }
 
-async function fetchInsights({ url }) {
-  const res = await fetch(url);
-  const body = await res.json().catch(() => ({}));
-  return { res, body };
-}
-
-function parseInsightsBody(body) {
-  // Insights response: { data: [{ name, values: [{ value }] }, …] }
-  const insightMap = {};
-  for (const entry of body?.data ?? []) {
-    insightMap[entry.name] = entry.values?.[0]?.value ?? 0;
+function classifyHttpError(res) {
+  if (res.status === 401 || res.status === 403) {
+    return Object.assign(new Error("Facebook auth failed"), { code: "AUTH_FAILED" });
   }
-  return insightMap;
+  if (res.status === 429 || res.status >= 500) {
+    return Object.assign(new Error(`Facebook API ${res.status}`), {
+      transient: true,
+      status: res.status,
+    });
+  }
+  return null;
 }
 
 function sumReactions(reactions) {
@@ -69,79 +92,194 @@ function sumReactions(reactions) {
   return Number(reactions) || 0;
 }
 
-export async function fetchFacebookMetrics({ connection, externalPostId }) {
-  const token = connection.accessToken;
+function logIdShape(externalPostId) {
+  const composite = typeof externalPostId === "string" && externalPostId.includes("_");
+  console.log(
+    `[FB_METRICS] externalPostId shape=${composite ? "composite_page_post" : "simple"} length=${
+      typeof externalPostId === "string" ? externalPostId.length : 0
+    }`
+  );
+}
 
-  // Try the full metric set first.
-  let { res, body } = await fetchInsights({
-    url: buildInsightsUrl(externalPostId, FULL_METRIC_SET, token),
-  });
+// ── Insights call ────────────────────────────────────────────────────
+//
+// Returns one of:
+//   { available: true, data: { impressions, reach, clicks, reactions } }
+//   { available: false, reason: "post_not_found" }     → caller should null-out
+//   { available: false, reason: "invalid_metric" | "empty" }
+// Throws on auth / transient errors so the caller can re-throw.
+async function fetchInsights({ externalPostId, token }) {
+  // Try full set first.
+  let res = await fetch(buildInsightsUrl(externalPostId, FULL_METRIC_SET, token));
+  if (res.status === 404) return { available: false, reason: "post_not_found" };
+  const httpErr = classifyHttpError(res);
+  if (httpErr) throw httpErr;
 
-  if (res.status === 404) return null;
-  if (res.status === 401 || res.status === 403) {
-    throw Object.assign(new Error("Facebook auth failed"), { code: "AUTH_FAILED" });
-  }
-  if (res.status === 429 || res.status >= 500) {
-    throw Object.assign(new Error(`Facebook API ${res.status}`), { transient: true, status: res.status });
-  }
+  let body = await res.json().catch(() => ({}));
 
-  // Meta-specific invalid-metric path: retry with the minimal safe set.
-  // This is NOT transient — same metric will fail forever — so we don't
-  // re-throw with `transient: true`. Instead we degrade and return what
-  // we can.
-  let partial = false;
-  let partialReason = null;
+  // Meta error code 100 → retry with the documented baseline pair.
   if (!res.ok && isInvalidMetricError(body, res.status)) {
-    partial = true;
-    partialReason = body?.error?.message ?? "Meta rejected one or more metrics";
-    const minimal = await fetchInsights({
-      url: buildInsightsUrl(externalPostId, MINIMAL_METRIC_SET, token),
-    });
-    res = minimal.res;
-    body = minimal.body;
-    // The minimal set is the documented baseline — if it ALSO 400s
-    // with code 100, the post object simply doesn't expose insights
-    // (e.g. an unsupported page type). Treat that as no_metrics.
+    res = await fetch(buildInsightsUrl(externalPostId, MINIMAL_METRIC_SET, token));
+    const httpErr2 = classifyHttpError(res);
+    if (httpErr2) throw httpErr2;
+    body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      if (isInvalidMetricError(body, res.status)) {
-        return null;
-      }
-      throw Object.assign(new Error(body?.error?.message ?? "Facebook insights failed"), {
-        transient: true,
-        status: res.status,
-      });
+      // Even minimal set is rejected → insights simply unavailable on
+      // this post object. Engagement may still be available; keep going.
+      return { available: false, reason: "invalid_metric" };
     }
   } else if (!res.ok) {
-    throw Object.assign(new Error(body?.error?.message ?? "Facebook insights failed"), {
-      transient: true,
-      status: res.status,
-    });
+    // Some other 4xx — treat as insights-unavailable rather than fatal.
+    // The post-object call will be the source of truth.
+    return {
+      available: false,
+      reason: "http_" + res.status,
+    };
   }
 
-  const insightMap = parseInsightsBody(body);
-  const totalReactions = sumReactions(insightMap.post_reactions_by_type_total);
+  // Empty data array means no insights yet. Common for fresh posts.
+  const entries = body?.data ?? [];
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { available: false, reason: "empty" };
+  }
 
-  // Comments + shares come from the post object — separate request that
-  // doesn't go through the insights endpoint, so it's not affected by
-  // the metric-validity dance above.
-  const postUrl =
-    `${META_GRAPH_BASE}/${externalPostId}` +
-    `?fields=comments.summary(true),shares` +
-    `&access_token=${encodeURIComponent(token)}`;
-  const postRes = await fetch(postUrl);
-  const postBody = await postRes.json().catch(() => ({}));
+  const map = {};
+  for (const entry of entries) {
+    map[entry.name] = entry.values?.[0]?.value ?? 0;
+  }
+
+  return {
+    available: true,
+    data: {
+      impressions: Number(map.post_impressions) || 0,
+      reach: Number(map.post_impressions_unique) || 0,
+      clicks: Number(map.post_clicks) || 0,
+      reactionsFromInsights: sumReactions(map.post_reactions_by_type_total),
+    },
+  };
+}
+
+// ── Post-object engagement call ──────────────────────────────────────
+//
+// Returns one of:
+//   { available: true, data: { reactions, comments, shares, permalinkUrl, fallback } }
+//   { available: false, reason: "post_not_found" | "empty" | "http_<status>" }
+// Throws on auth / transient errors.
+async function fetchPostObjectEngagement({ externalPostId, token }) {
+  // Try with reactions first.
+  let res = await fetch(buildPostObjectUrl(externalPostId, ENGAGEMENT_FIELDS, token));
+  if (res.status === 404) return { available: false, reason: "post_not_found" };
+  let httpErr = classifyHttpError(res);
+  if (httpErr) throw httpErr;
+  let body = await res.json().catch(() => ({}));
+
+  let fallback = false;
+  let reactionsCount = body?.reactions?.summary?.total_count;
+  if (!res.ok || reactionsCount == null) {
+    // Either the field was rejected (older app perms tier) or missing
+    // entirely. Retry with likes.
+    res = await fetch(buildPostObjectUrl(externalPostId, ENGAGEMENT_FIELDS_FALLBACK, token));
+    httpErr = classifyHttpError(res);
+    if (httpErr) throw httpErr;
+    body = await res.json().catch(() => ({}));
+    fallback = true;
+    if (!res.ok) {
+      return { available: false, reason: "http_" + res.status };
+    }
+    reactionsCount = body?.likes?.summary?.total_count;
+  }
+
+  const comments = body?.comments?.summary?.total_count;
+  const shares = body?.shares?.count;
+  const permalinkUrl = body?.permalink_url ?? null;
+
+  // "available" means we got at least ONE engagement number. A response
+  // with literally nothing isn't useful — fall through to no_metrics.
+  const hasAny =
+    (typeof reactionsCount === "number" && reactionsCount >= 0) ||
+    (typeof comments === "number" && comments >= 0) ||
+    (typeof shares === "number" && shares >= 0);
+
+  if (!hasAny) {
+    return { available: false, reason: "empty" };
+  }
+
+  return {
+    available: true,
+    data: {
+      reactions: Number(reactionsCount) || 0,
+      comments: Number(comments) || 0,
+      shares: Number(shares) || 0,
+      permalinkUrl,
+      fallback: fallback ? "likes" : null,
+    },
+  };
+}
+
+// ── Main ─────────────────────────────────────────────────────────────
+
+export async function fetchFacebookMetrics({ connection, externalPostId }) {
+  const token = connection.accessToken;
+  logIdShape(externalPostId);
+
+  // Step 1 — insights (impressions / reach / clicks).
+  let insights;
+  try {
+    insights = await fetchInsights({ externalPostId, token });
+  } catch (err) {
+    // Auth / transient — fail fast (the post-object call will fail the same way).
+    throw err;
+  }
+  if (insights.reason === "post_not_found") return null;
+
+  // Step 2 — post-object engagement (reactions/likes/comments/shares).
+  let engagement;
+  try {
+    engagement = await fetchPostObjectEngagement({ externalPostId, token });
+  } catch (err) {
+    throw err;
+  }
+  if (engagement.reason === "post_not_found") return null;
+
+  const insightsAvailable = insights.available === true;
+  const engagementAvailable = engagement.available === true;
+
+  if (!insightsAvailable && !engagementAvailable) {
+    // Truly nothing — service-level classifier will surface this as
+    // provider_no_metrics.
+    return null;
+  }
+
+  // Reactions priority:
+  //   1. post-object reactions/likes summary (most accurate; current count)
+  //   2. fall back to insights' summed reactions object (lag-prone but better than 0)
+  const reactions = engagementAvailable
+    ? engagement.data.reactions
+    : insights.data?.reactionsFromInsights ?? 0;
+
+  const partialReasons = [];
+  if (!insightsAvailable) {
+    partialReasons.push(`facebook_insights_unavailable:${insights.reason}`);
+  }
+  if (engagementAvailable && engagement.data.fallback === "likes") {
+    partialReasons.push("reactions_fallback_to_likes");
+  }
+  if (insightsAvailable && !engagementAvailable) {
+    partialReasons.push(`engagement_unavailable:${engagement.reason}`);
+  }
 
   return {
     raw: {
-      impressions: Number(insightMap.post_impressions) || 0,
-      reach: Number(insightMap.post_impressions_unique) || 0,
-      reactions: totalReactions,
-      comments: postBody?.comments?.summary?.total_count ?? 0,
-      shares: postBody?.shares?.count ?? 0,
-      clicks: Number(insightMap.post_clicks) || 0,
-      // Surface partial-fetch state to the service layer for logging.
-      // Never propagated upstream as a token-bearing string.
-      ...(partial ? { _partial: true, _partialReason: partialReason } : {}),
+      impressions: insights.data?.impressions ?? 0,
+      reach: insights.data?.reach ?? 0,
+      clicks: insights.data?.clicks ?? 0,
+      reactions,
+      comments: engagement.data?.comments ?? 0,
+      shares: engagement.data?.shares ?? 0,
+      ...(partialReasons.length > 0 && {
+        _partial: true,
+        _partialReasons: partialReasons,
+      }),
     },
     fetchedAt: new Date(),
   };
