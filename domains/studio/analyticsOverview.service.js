@@ -256,19 +256,33 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
 function buildPlatformBreakdown(drafts) {
   const byChannel = {};
   for (const d of drafts) {
-    if (!byChannel[d.channel]) byChannel[d.channel] = { posts: [], rates: [], scores: [], reaches: [] };
+    if (!byChannel[d.channel])
+      byChannel[d.channel] = {
+        posts: [],
+        rates: [],
+        scores: [],
+        reaches: [],
+        impressions: [],
+        engagements: [],
+      };
     byChannel[d.channel].posts.push(d);
     if (d.normalizedMetric?.engagementRate != null) byChannel[d.channel].rates.push(d.normalizedMetric.engagementRate);
     if (d.postInsight?.compositeScore != null) byChannel[d.channel].scores.push(d.postInsight.compositeScore);
     if (d.normalizedMetric?.reach != null) byChannel[d.channel].reaches.push(d.normalizedMetric.reach);
+    if (d.normalizedMetric?.impressions != null) byChannel[d.channel].impressions.push(d.normalizedMetric.impressions);
+    if (d.normalizedMetric?.engagements != null) byChannel[d.channel].engagements.push(d.normalizedMetric.engagements);
   }
+
+  const sum = (arr) => (arr.length > 0 ? arr.reduce((a, b) => a + b, 0) : null);
 
   return Object.entries(byChannel).map(([channel, data]) => ({
     channel,
     postCount: data.posts.length,
     avgEngagementRate: data.rates.length > 0 ? data.rates.reduce((a, b) => a + b, 0) / data.rates.length : null,
     avgScore: data.scores.length > 0 ? Math.round((data.scores.reduce((a, b) => a + b, 0) / data.scores.length) * 10) / 10 : null,
-    totalReach: data.reaches.length > 0 ? data.reaches.reduce((a, b) => a + b, 0) : null,
+    totalReach: sum(data.reaches),
+    totalImpressions: sum(data.impressions),
+    totalEngagements: sum(data.engagements),
   }));
 }
 
