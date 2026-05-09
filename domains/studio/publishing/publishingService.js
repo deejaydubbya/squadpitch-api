@@ -22,6 +22,7 @@ import { getAdapterForChannel } from "./channelAdapters/index.js";
 import { enqueueNotification } from "../../notifications/notification.service.js";
 import { ensureValidAccessToken } from "../tokenRefreshService.js";
 import { withPublishTimeout } from "./publishTimeout.js";
+import { simulateMetaDemoPublish, isMetaDemoPublish } from "./metaDemoPublish.js";
 
 // ── Adapter error classification ────────────────────────────────────────
 //
@@ -278,6 +279,32 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
         connectionStatus: connection.status,
       }
     );
+  }
+
+  // ── Meta App Review demo publish path ─────────────────────────────
+  // When META_APP_REVIEW_DEMO=true and the channel is FB/IG, skip the
+  // real adapter call (the demo-workspace tokens are sentinels — see
+  // metaDemoPublish.js). The rest of the publish pipeline runs normally:
+  // draft transitions to PUBLISHED with a Meta-shaped externalPostUrl
+  // so the planner card and "View on Facebook/Instagram" CTAs render
+  // exactly as they would for a real publish.
+  if (isMetaDemoPublish(workingDraft.channel)) {
+    const { externalPostId, externalPostUrl } = simulateMetaDemoPublish({
+      draft: workingDraft,
+    });
+    const updated = await transitionDraft(draftId, "PUBLISHED", actorSub, {
+      publishedAt: new Date(),
+      publishSource: source,
+      externalPostId,
+      externalPostUrl,
+      publishError: null,
+      publishAttempts: { increment: 1 },
+      lastPublishAttemptAt: new Date(),
+    });
+    updateConnectionStatus(workingDraft.clientId, workingDraft.channel, {
+      lastValidatedAt: new Date(),
+    }).catch(() => {});
+    return formatDraft(updated);
   }
 
   const adapter = getAdapterForChannel(workingDraft.channel);
