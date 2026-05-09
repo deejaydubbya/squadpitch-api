@@ -4,21 +4,28 @@
 // Token:    POST https://api.pinterest.com/v5/oauth/token  (Basic auth)
 // User:     GET  https://api.pinterest.com/v5/user_account
 //
-// Scope policy: Pinterest gates by exact-match scope. We request the
-// minimum needed for the implemented feature set:
+// Scope policy:
 //   user_accounts:read   identify the connected Pinterest user
 //   boards:read          let the user pick a board
 //   pins:read            confirm Pin status post-publish
 //   pins:write           publish Pins
-// boards:write is intentionally NOT requested — Squadpitch does not
-// create boards from inside the app today. Add it to the scope set
-// here if/when board creation becomes a feature.
+//   boards:write         REQUIRED at runtime even though the docs
+//                        suggest pins:write is enough. Pinterest's
+//                        live /v5/pins enforcement (visible in trial
+//                        / sandbox apps) rejects POSTs without
+//                        boards:write with code 3:
+//                          "Your token does not have sufficient
+//                           permissions ... Missing: ['boards:write']"
+//                        Squadpitch does NOT create boards in the
+//                        UI today — boards:write is purely for the
+//                        Pin-create call against an existing board.
 
 import { env } from "../../../config/env.js";
 
 const PINTEREST_SCOPES = [
   "user_accounts:read",
   "boards:read",
+  "boards:write",
   "pins:read",
   "pins:write",
 ];

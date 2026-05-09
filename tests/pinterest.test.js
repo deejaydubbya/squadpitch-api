@@ -42,11 +42,13 @@ describe("pinterest.oauth — buildAuthUrl", () => {
     // Pinterest expects scopes COMMA-separated in the auth URL,
     // which URLSearchParams encodes as %2C.
     expect(url).toContain("client_id=pin-client-id");
+    // boards:write is required at runtime by Pinterest's /v5/pins
+    // even though the docs imply pins:write is enough — sandbox /
+    // trial apps reject Pin creation without it (code 3, message
+    // "Missing: ['boards:write']"). See pinterest.oauth.js header.
     expect(url).toContain(
-      "scope=user_accounts%3Aread%2Cboards%3Aread%2Cpins%3Aread%2Cpins%3Awrite"
+      "scope=user_accounts%3Aread%2Cboards%3Aread%2Cboards%3Awrite%2Cpins%3Aread%2Cpins%3Awrite"
     );
-    // boards:write is intentionally NOT requested (no board creation today).
-    expect(url).not.toContain("boards%3Awrite");
     expect(url).toContain("redirect_uri=https%3A%2F%2Fapp.squadpitch.com");
   });
 
