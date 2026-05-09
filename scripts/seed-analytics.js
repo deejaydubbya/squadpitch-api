@@ -21,9 +21,11 @@ function fakeExternalId(channel, i) {
   const prefixes = {
     INSTAGRAM: "ig",
     LINKEDIN: "li",
+    LINKEDIN_ORGANIZATION_PAGE: "liorg",
     TIKTOK: "tt",
     FACEBOOK: "fb",
     YOUTUBE: "yt",
+    PINTEREST: "pin",
   };
   return `${prefixes[channel]}_seed_${String(i).padStart(3, "0")}`;
 }
@@ -194,22 +196,28 @@ const POST_TEMPLATES = [
 
 // ── Draft generation config ──────────────────────────────────────────────────
 
-// Channel distribution: INSTAGRAM 20, LINKEDIN 15, TIKTOK 10, FACEBOOK 10, YOUTUBE 5
+// Channel distribution: INSTAGRAM 16, LINKEDIN 12, LINKEDIN_ORG 5,
+// TIKTOK 8, FACEBOOK 8, YOUTUBE 4, PINTEREST 7  (total 60)
 const CHANNEL_POOL = [
-  ...Array(20).fill("INSTAGRAM"),
-  ...Array(15).fill("LINKEDIN"),
-  ...Array(10).fill("TIKTOK"),
-  ...Array(10).fill("FACEBOOK"),
-  ...Array(5).fill("YOUTUBE"),
+  ...Array(16).fill("INSTAGRAM"),
+  ...Array(12).fill("LINKEDIN"),
+  ...Array(5).fill("LINKEDIN_ORGANIZATION_PAGE"),
+  ...Array(8).fill("TIKTOK"),
+  ...Array(8).fill("FACEBOOK"),
+  ...Array(4).fill("YOUTUBE"),
+  ...Array(7).fill("PINTEREST"),
 ];
 
 // Media type distribution per channel
 const MEDIA_TYPE_WEIGHTS = {
   INSTAGRAM: ["image", "image", "image", "carousel", "carousel", "video"],
   LINKEDIN: ["text", "text", "image", "image", "video"],
+  LINKEDIN_ORGANIZATION_PAGE: ["text", "image", "image", "image"],
   TIKTOK: ["video", "video", "video", "video"],
   FACEBOOK: ["image", "image", "text", "video", "carousel"],
   YOUTUBE: ["video", "video", "video"],
+  // Pinterest = image-only Pins for now (matches the live publishing adapter).
+  PINTEREST: ["image", "image", "image", "image"],
 };
 
 // Posting hours — morning posts should dominate for timing signal
@@ -235,9 +243,18 @@ function getPostingHour(dayIndex) {
 const PLATFORM_BASELINES = {
   INSTAGRAM: { impressionsMin: 800, impressionsMax: 12000, engagementRateBase: 3.2 },
   LINKEDIN: { impressionsMin: 500, impressionsMax: 8000, engagementRateBase: 4.0 },
+  // Org pages generally see slightly higher reach but lower per-impression
+  // engagement than personal profiles.
+  LINKEDIN_ORGANIZATION_PAGE: {
+    impressionsMin: 700,
+    impressionsMax: 10000,
+    engagementRateBase: 3.4,
+  },
   TIKTOK: { impressionsMin: 1500, impressionsMax: 30000, engagementRateBase: 5.0 },
   FACEBOOK: { impressionsMin: 400, impressionsMax: 6000, engagementRateBase: 2.5 },
   YOUTUBE: { impressionsMin: 300, impressionsMax: 15000, engagementRateBase: 3.0 },
+  // Pinterest tends to have strong reach + outsize saves vs other engagements.
+  PINTEREST: { impressionsMin: 600, impressionsMax: 18000, engagementRateBase: 2.2 },
 };
 
 // Score tier targets: ~10 exceptional (85+), ~30 average (40-70), ~5 below 30, rest strong
@@ -442,20 +459,45 @@ function generatePublishDates(count) {
 
 // ── Main seed function ───────────────────────────────────────────────────────
 
-async function seedAnalytics() {
-  console.log("🔍 Looking up Prestige Properties Group...");
+function parseArgs(argv) {
+  const out = {};
+  for (const a of argv.slice(2)) {
+    const m = a.match(/^--([^=]+)(?:=(.*))?$/);
+    if (m) out[m[1]] = m[2] ?? true;
+  }
+  return out;
+}
 
-  const client = await prisma.client.findUnique({
-    where: { slug: "prestige-properties" },
-  });
+async function seedAnalytics() {
+  // CLI args:
+  //   --client-id=<cuid>   target a specific workspace by id (preferred)
+  //   --slug=<slug>        target a workspace by Client.slug
+  // Defaults to the prestige-properties demo workspace for backwards
+  // compat with the original seed flow.
+  const args = parseArgs(process.argv);
+  const cliClientId =
+    typeof args["client-id"] === "string" ? args["client-id"] : null;
+  const cliSlug = typeof args.slug === "string" ? args.slug : null;
+
+  let client;
+  if (cliClientId) {
+    console.log(`🔍 Looking up workspace by id: ${cliClientId}`);
+    client = await prisma.client.findUnique({ where: { id: cliClientId } });
+  } else {
+    const slug = cliSlug ?? "prestige-properties";
+    console.log(`🔍 Looking up workspace by slug: ${slug}`);
+    client = await prisma.client.findUnique({ where: { slug } });
+  }
 
   if (!client) {
-    console.error("❌ Client 'prestige-properties' not found. Run seed-realtor.js first.");
+    console.error(
+      `❌ Workspace not found. Pass --client-id=<cuid> or --slug=<slug> (or run seed-realtor.js first).`
+    );
     process.exit(1);
   }
 
   const clientId = client.id;
-  console.log(`✅ Found client: ${client.name} (${clientId})`);
+  console.log(`✅ Found workspace: ${client.name} (${clientId})`);
 
   // ── Clean existing analytics data ──────────────────────────────────────────
   console.log("\n🧹 Cleaning existing analytics data...");
@@ -468,16 +510,17 @@ async function seedAnalytics() {
   const deletedSnapshots = await prisma.analyticsSnapshot.deleteMany({ where: { clientId } });
   const deletedWorkspace = await prisma.workspaceAnalytics.deleteMany({ where: { clientId } });
 
-  // Delete old seeded PUBLISHED drafts (keep the originals from seed-realtor)
-  const deletedDrafts = await prisma.draft.deleteMany({
-    where: {
-      clientId,
-      status: "PUBLISHED",
-      externalPostId: { startsWith: "ig_seed_" },
-    },
-  });
-  // Also catch other prefixes
-  for (const prefix of ["li_seed_", "tt_seed_", "fb_seed_", "yt_seed_"]) {
+  // Delete old seeded PUBLISHED drafts only (skips real published posts —
+  // we identify seeded ones by their channel-prefixed externalPostId).
+  for (const prefix of [
+    "ig_seed_",
+    "li_seed_",
+    "liorg_seed_",
+    "tt_seed_",
+    "fb_seed_",
+    "yt_seed_",
+    "pin_seed_",
+  ]) {
     await prisma.draft.deleteMany({
       where: {
         clientId,
@@ -664,7 +707,7 @@ async function seedAnalytics() {
         draftId: draft.id,
         channel,
         externalPostId: draft.externalPostId,
-        dataJson: generateRawMetricJson(channel, metrics),
+        rawDataJson: generateRawMetricJson(channel, metrics),
         fetchedAt: new Date(),
       },
     });
