@@ -112,6 +112,78 @@ export async function listBoards({ connectionId }) {
 }
 
 /**
+ * Create a Pinterest board on the connected account. Used by the
+ * board picker's sandbox-only "Create test board" affordance — the
+ * sandbox host doesn't expose a board-creation UI, so apps in Trial
+ * mode have no other way to seed a destination board.
+ *
+ * Pinterest API v5: POST /v5/boards
+ *   Body: { name: string, description?: string, privacy?: "PUBLIC"|"SECRET" }
+ *   Response: { id, name, description, privacy, ... }
+ */
+export async function createBoard({ connectionId, name, description }) {
+  const trimmed = (name ?? "").trim();
+  if (!trimmed) {
+    throw new PinterestBoardsError("Board name is required", {
+      status: 400,
+      code: "MISSING_BOARD_NAME",
+    });
+  }
+
+  const conn = await prisma.channelConnection.findUnique({
+    where: { id: connectionId },
+    select: { id: true, channel: true, accessToken: true, status: true },
+  });
+  if (!conn || conn.channel !== "PINTEREST") {
+    throw new PinterestBoardsError(
+      "Pinterest connection not found",
+      { status: 404, code: "NOT_FOUND" }
+    );
+  }
+  if (conn.status !== "CONNECTED") {
+    throw new PinterestBoardsError(
+      "Pinterest connection is not active. Please reconnect.",
+      { status: 400, code: "CONNECTION_NOT_ACTIVE" }
+    );
+  }
+
+  const token = decryptToken(conn.accessToken);
+  const res = await fetch(pinterestApiUrl("/v5/boards"), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name: trimmed.slice(0, 180),
+      description: (description ?? "").slice(0, 500) || undefined,
+      privacy: "PUBLIC",
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+
+  if (res.status === 401 || res.status === 403) {
+    throw new PinterestBoardsError(
+      "Pinterest needs to be reconnected with board access.",
+      { status: 403, code: "PROVIDER_PERMISSION_DENIED", body }
+    );
+  }
+  if (!res.ok || !body?.id) {
+    throw new PinterestBoardsError(
+      body?.message ?? `Pinterest board creation failed (${res.status})`,
+      { status: res.status, body }
+    );
+  }
+
+  return {
+    id: String(body.id),
+    name: body.name ?? trimmed,
+    description: body.description ?? null,
+    privacy: body.privacy ?? null,
+  };
+}
+
+/**
  * Persist the selected board id on the Pinterest connection. The
  * publishing adapter reads this directly to know where to send Pins.
  *

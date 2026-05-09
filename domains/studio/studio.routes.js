@@ -3813,6 +3813,45 @@ studioRouter.get(
 );
 
 studioRouter.post(
+  `${BASE}/workspaces/:id/connections/PINTEREST/boards`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { name, description } = req.body ?? {};
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return validationError(res, [
+          { path: ["name"], message: "name is required" },
+        ]);
+      }
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "PINTEREST",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(res, 404, "NO_CONNECTION", "No Pinterest connection.");
+      }
+      const { createBoard } = await import("./pinterestBoards.service.js");
+      const board = await createBoard({
+        connectionId: conn.id,
+        name,
+        description: description ?? null,
+      });
+      res.status(201).json({ board });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
   `${BASE}/workspaces/:id/connections/PINTEREST/boards/select`,
   requireClientOwner,
   async (req, res, next) => {

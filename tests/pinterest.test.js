@@ -250,6 +250,62 @@ describe("pinterestBoards.service.listBoards", () => {
   });
 });
 
+describe("pinterestBoards.service.createBoard", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doMock("../config/env.js", () => ({ env: { ...ENV } }));
+  });
+
+  it("POSTs to /v5/boards with the trimmed name and returns the new board", async () => {
+    prismaMock.channelConnection.findUnique.mockResolvedValueOnce({
+      id: "c1",
+      channel: "PINTEREST",
+      accessToken: "stored",
+      status: "CONNECTED",
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        id: "9876543210",
+        name: "Listings",
+        privacy: "PUBLIC",
+      }),
+    });
+    global.fetch = fetchMock;
+
+    const { createBoard } = await import(
+      "../domains/studio/pinterestBoards.service.js"
+    );
+    const board = await createBoard({
+      connectionId: "c1",
+      name: "  Listings  ",
+    });
+
+    expect(board).toEqual({
+      id: "9876543210",
+      name: "Listings",
+      description: null,
+      privacy: "PUBLIC",
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.pinterest.com/v5/boards");
+    expect(init.method).toBe("POST");
+    const sentBody = JSON.parse(init.body);
+    expect(sentBody.name).toBe("Listings");
+    expect(sentBody.privacy).toBe("PUBLIC");
+  });
+
+  it("rejects empty board names with MISSING_BOARD_NAME", async () => {
+    const { createBoard } = await import(
+      "../domains/studio/pinterestBoards.service.js"
+    );
+    await expect(
+      createBoard({ connectionId: "c1", name: "   " })
+    ).rejects.toMatchObject({ code: "MISSING_BOARD_NAME" });
+  });
+});
+
 describe("pinterest.adapter — publishPost", () => {
   beforeEach(() => {
     vi.resetModules();
