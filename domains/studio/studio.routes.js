@@ -3664,6 +3664,106 @@ studioRouter.delete(
   }
 );
 
+// ── LinkedIn Organization Page picker ────────────────────────────────
+//
+// Two-step UI flow that runs after a successful org OAuth:
+//   1. GET  …/connections/LINKEDIN_ORGANIZATION_PAGE/orgs
+//      → returns the orgs the connecting member can administer.
+//      The UI renders a picker.
+//   2. POST …/connections/LINKEDIN_ORGANIZATION_PAGE/orgs/select
+//      → persists the chosen org URN on the existing connection row
+//      so subsequent publishes know which Page to author as.
+//
+// requireClientOwner verifies the workspace; we then look up the
+// LINKEDIN_ORGANIZATION_PAGE connection for that workspace ourselves
+// — the channel name is fixed, so no extra ownership check is needed.
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/connections/LINKEDIN_ORGANIZATION_PAGE/orgs`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "LINKEDIN_ORGANIZATION_PAGE",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "Connect a LinkedIn Organization Page first, then choose which Page to publish to."
+        );
+      }
+      const { listManageableOrganizations } = await import(
+        "./linkedinOrgPages.service.js"
+      );
+      const orgs = await listManageableOrganizations({ connectionId: conn.id });
+      if (orgs.length === 0) {
+        return res.json({
+          orgs: [],
+          message:
+            "No LinkedIn Organization Pages were found for this account. Make sure your LinkedIn account is an admin or content admin of the Page.",
+        });
+      }
+      res.json({ orgs });
+    } catch (err) {
+      // The service throws typed errors with .status and .code; relay
+      // those instead of letting the catch-all hand back a 500.
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/LINKEDIN_ORGANIZATION_PAGE/orgs/select`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { organizationId, organizationName } = req.body ?? {};
+      if (!organizationId || typeof organizationId !== "string") {
+        return validationError(res, [
+          { path: ["organizationId"], message: "organizationId is required" },
+        ]);
+      }
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "LINKEDIN_ORGANIZATION_PAGE",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(res, 404, "NO_CONNECTION", "No LinkedIn Organization Page connection.");
+      }
+      const { saveSelectedOrganization } = await import(
+        "./linkedinOrgPages.service.js"
+      );
+      const updated = await saveSelectedOrganization({
+        connectionId: conn.id,
+        organizationId,
+        organizationName,
+      });
+      res.json({ connection: updated });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  }
+);
+
 // ── Tech Stack ────────────────────────────────────────────────────────
 
 /**

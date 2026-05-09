@@ -22,11 +22,20 @@ enum ClientStatus {
   ARCHIVED
 }
 
+// LINKEDIN                    = LinkedIn Personal Profile (existing flow,
+//                              unchanged). Uses the Sign In + Share
+//                              products on the original LinkedIn app.
+// LINKEDIN_ORGANIZATION_PAGE  = posts to a Company / Organization Page
+//                              the connecting member administers. Uses
+//                              a separate LinkedIn developer app with
+//                              the Community Management API product.
+//                              See docs/LINKEDIN_SETUP.md.
 enum Channel {
   INSTAGRAM
   TIKTOK
   X
   LINKEDIN
+  LINKEDIN_ORGANIZATION_PAGE
   FACEBOOK
   YOUTUBE
 }

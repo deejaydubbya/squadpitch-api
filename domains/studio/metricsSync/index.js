@@ -17,6 +17,11 @@ const ADAPTERS = {
   YOUTUBE: fetchYoutubeMetrics,
   X: fetchXMetrics,
   LINKEDIN: fetchLinkedinMetrics,
+  // Org-page posts hit the same /rest/organizationalEntityShareStatistics
+  // endpoint as personal-profile shares — same payload shape and same
+  // post-URN parsing — so the personal adapter handles both. Token
+  // scope (r_organization_social) gates whether org reads succeed.
+  LINKEDIN_ORGANIZATION_PAGE: fetchLinkedinMetrics,
 };
 
 export function getMetricsAdapterForChannel(channel) {

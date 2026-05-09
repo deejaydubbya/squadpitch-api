@@ -53,10 +53,23 @@ export const env = {
   TIKTOK_CLIENT_SECRET: process.env.TIKTOK_CLIENT_SECRET,
   TIKTOK_REDIRECT_URI: process.env.TIKTOK_REDIRECT_URI,
 
-  // LinkedIn
+  // LinkedIn — Personal Profile (Sign In + Share products)
   LINKEDIN_CLIENT_ID: process.env.LINKEDIN_CLIENT_ID,
   LINKEDIN_CLIENT_SECRET: process.env.LINKEDIN_CLIENT_SECRET,
   LINKEDIN_REDIRECT_URI: process.env.LINKEDIN_REDIRECT_URI,
+
+  // LinkedIn — Organization Page (Community Management API product)
+  // Distinct LinkedIn developer app — keeps personal-profile scopes
+  // separate from organization-admin scopes per LinkedIn requirements.
+  LINKEDIN_ORG_CLIENT_ID: process.env.LINKEDIN_ORG_CLIENT_ID,
+  LINKEDIN_ORG_CLIENT_SECRET: process.env.LINKEDIN_ORG_CLIENT_SECRET,
+  LINKEDIN_ORG_REDIRECT_URI: process.env.LINKEDIN_ORG_REDIRECT_URI,
+  // Comma-separated. Defaults match LinkedIn's documented Community
+  // Management API scopes; override if your app's audit landed
+  // different ones.
+  LINKEDIN_ORG_SCOPES:
+    process.env.LINKEDIN_ORG_SCOPES ??
+    "r_organization_admin,w_organization_social,r_organization_social",
 
   // X (Twitter)
   X_CLIENT_ID: process.env.X_CLIENT_ID,
@@ -162,7 +175,13 @@ export function bootEnvWarnings() {
     console.warn("[BOOT] TikTok OAuth credentials missing");
   }
   if (!env.LINKEDIN_CLIENT_ID || !env.LINKEDIN_CLIENT_SECRET || !env.LINKEDIN_REDIRECT_URI) {
-    console.warn("[BOOT] LinkedIn OAuth credentials missing");
+    console.warn("[BOOT] LinkedIn (Personal Profile) OAuth credentials missing");
+  }
+  if (!env.LINKEDIN_ORG_CLIENT_ID || !env.LINKEDIN_ORG_CLIENT_SECRET || !env.LINKEDIN_ORG_REDIRECT_URI) {
+    console.warn(
+      "[BOOT] LinkedIn (Organization Page) OAuth credentials missing — " +
+        "Organization Page connect flow will be unavailable until configured"
+    );
   }
   if (!env.X_CLIENT_ID || !env.X_CLIENT_SECRET || !env.X_REDIRECT_URI) {
     console.warn("[BOOT] X OAuth credentials missing");

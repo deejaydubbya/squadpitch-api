@@ -16,6 +16,7 @@ export const ChannelEnum = z.enum([
   "TIKTOK",
   "X",
   "LINKEDIN",
+  "LINKEDIN_ORGANIZATION_PAGE",
   "FACEBOOK",
   "YOUTUBE",
 ]);
