@@ -19,9 +19,16 @@
 // existing media pipeline currently exposes — implement once we've
 // got that media work staged.
 
-const PINS_URL = "https://api.pinterest.com/v5/pins";
+import { pinterestApiUrl } from "../../oauth/pinterestApi.js";
+
 const PIN_TITLE_MAX = 100;
 const PIN_DESCRIPTION_MAX = 500;
+
+// Pinterest's documented error code for "Trial app cannot create Pins
+// in production — use sandbox instead". HTTP 403 + this code means the
+// connection is fine; the operator just needs to flip
+// PINTEREST_USE_SANDBOX=true (or graduate the app to Standard access).
+const TRIAL_PRODUCTION_BLOCKED_CODE = 29;
 
 class PinterestPublishError extends Error {
   constructor(message, { status, code, pinterestError } = {}) {
@@ -113,7 +120,7 @@ export const pinterestAdapter = {
     const link = client?.websiteUrl ?? null;
     if (link) body.link = link;
 
-    const res = await fetch(PINS_URL, {
+    const res = await fetch(pinterestApiUrl("/v5/pins"), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -123,6 +130,26 @@ export const pinterestAdapter = {
     });
 
     const respBody = await res.json().catch(() => ({}));
+
+    // Pinterest gates Trial-access apps from creating Pins on the
+    // production host. Catch this specific case BEFORE the generic
+    // 401/403 → AUTH_FAILED branch so the operator gets actionable
+    // guidance instead of a misleading "needs to be reconnected".
+    if (
+      res.status === 403 &&
+      Number(respBody?.code) === TRIAL_PRODUCTION_BLOCKED_CODE
+    ) {
+      throw new PinterestPublishError(
+        "Your Pinterest app is in Trial access mode and can't publish to production. " +
+          "Set PINTEREST_USE_SANDBOX=true to publish via Pinterest's sandbox API, " +
+          "or submit your Pinterest app for Standard access review.",
+        {
+          status: 403,
+          code: "PINTEREST_TRIAL_PRODUCTION_BLOCKED",
+          pinterestError: respBody,
+        }
+      );
+    }
 
     if (res.status === 401 || res.status === 403) {
       throw new PinterestPublishError(

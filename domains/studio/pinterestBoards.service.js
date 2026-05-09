@@ -18,8 +18,8 @@
 
 import { prisma } from "../../prisma.js";
 import { decryptToken } from "../../lib/tokenCrypto.js";
+import { pinterestApiUrl } from "./oauth/pinterestApi.js";
 
-const BOARDS_URL = "https://api.pinterest.com/v5/boards";
 const PAGE_SIZE = 100; // max allowed; we collect all pages
 
 class PinterestBoardsError extends Error {
@@ -66,7 +66,7 @@ export async function listBoards({ connectionId }) {
   let bookmark = null;
   // Cap iterations so a malformed cursor never spins forever.
   for (let page = 0; page < 20; page++) {
-    const url = new URL(BOARDS_URL);
+    const url = new URL(pinterestApiUrl("/v5/boards"));
     url.searchParams.set("page_size", String(PAGE_SIZE));
     if (bookmark) url.searchParams.set("bookmark", bookmark);
 

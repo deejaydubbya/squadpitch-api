@@ -379,4 +379,62 @@ describe("pinterest.adapter — publishPost", () => {
       })
     ).rejects.toMatchObject({ transient: true });
   });
+
+  it("maps Trial-access code 29 to PINTEREST_TRIAL_PRODUCTION_BLOCKED (not AUTH_FAILED)", async () => {
+    // Pinterest code 29 = "Apps with Trial access may not create Pins
+    // in production". Should NOT be AUTH_FAILED — that would tell the
+    // operator to reconnect, which won't help. Surface a specific code
+    // so the UI can guide them to enable sandbox mode instead.
+    const { pinterestAdapter } = await import(
+      "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"
+    );
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({
+        code: 29,
+        message:
+          "Apps with Trial access may not create Pins in production https://api.pinterest.com - use API Sandbox https://api-sandbox.pinterest.com instead.",
+      }),
+    });
+    await expect(
+      pinterestAdapter.publishPost({
+        draft: { body: "x", mediaUrl: "https://img/y.jpg" },
+        connection: { accessToken: "t", externalAccountId: "1234567890" },
+      })
+    ).rejects.toMatchObject({ code: "PINTEREST_TRIAL_PRODUCTION_BLOCKED" });
+  });
+});
+
+describe("pinterestApi.pinterestApiUrl", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("uses production host by default", async () => {
+    vi.doMock("../config/env.js", () => ({
+      env: { ...ENV, PINTEREST_USE_SANDBOX: false },
+    }));
+    const { pinterestApiUrl } = await import(
+      "../domains/studio/oauth/pinterestApi.js"
+    );
+    expect(pinterestApiUrl("/v5/pins")).toBe("https://api.pinterest.com/v5/pins");
+    vi.doUnmock("../config/env.js");
+  });
+
+  it("uses sandbox host when PINTEREST_USE_SANDBOX=true", async () => {
+    vi.doMock("../config/env.js", () => ({
+      env: { ...ENV, PINTEREST_USE_SANDBOX: true },
+    }));
+    const { pinterestApiUrl } = await import(
+      "../domains/studio/oauth/pinterestApi.js"
+    );
+    expect(pinterestApiUrl("/v5/pins")).toBe(
+      "https://api-sandbox.pinterest.com/v5/pins"
+    );
+    expect(pinterestApiUrl("/v5/boards")).toBe(
+      "https://api-sandbox.pinterest.com/v5/boards"
+    );
+    vi.doUnmock("../config/env.js");
+  });
 });

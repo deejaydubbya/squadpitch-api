@@ -75,6 +75,16 @@ export const env = {
   PINTEREST_CLIENT_ID: process.env.PINTEREST_CLIENT_ID,
   PINTEREST_CLIENT_SECRET: process.env.PINTEREST_CLIENT_SECRET,
   PINTEREST_REDIRECT_URI: process.env.PINTEREST_REDIRECT_URI,
+  // Pinterest gates Trial-access apps from creating Pins on production
+  // (api.pinterest.com) — error code 29:
+  //   "Apps with Trial access may not create Pins in production ... use
+  //    API Sandbox https://api-sandbox.pinterest.com instead."
+  // Set PINTEREST_USE_SANDBOX=true to point all v5 API calls (token
+  // exchange, user account, boards listing, Pin creation) at the
+  // sandbox host so a Trial app can complete the publish flow end to
+  // end. Leave unset / "false" once the app is granted Standard access.
+  PINTEREST_USE_SANDBOX:
+    String(process.env.PINTEREST_USE_SANDBOX ?? "").toLowerCase() === "true",
 
   // X (Twitter)
   X_CLIENT_ID: process.env.X_CLIENT_ID,

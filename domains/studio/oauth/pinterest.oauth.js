@@ -21,6 +21,7 @@
 //                        Pin-create call against an existing board.
 
 import { env } from "../../../config/env.js";
+import { pinterestApiUrl } from "./pinterestApi.js";
 
 const PINTEREST_SCOPES = [
   "user_accounts:read",
@@ -29,9 +30,6 @@ const PINTEREST_SCOPES = [
   "pins:read",
   "pins:write",
 ];
-
-const TOKEN_URL = "https://api.pinterest.com/v5/oauth/token";
-const USER_URL = "https://api.pinterest.com/v5/user_account";
 
 function assertConfigured() {
   if (
@@ -88,7 +86,7 @@ export async function exchangeCode({ code }) {
     `${env.PINTEREST_CLIENT_ID}:${env.PINTEREST_CLIENT_SECRET}`
   ).toString("base64");
 
-  const tokenRes = await fetch(TOKEN_URL, {
+  const tokenRes = await fetch(pinterestApiUrl("/v5/oauth/token"), {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -125,7 +123,7 @@ export async function exchangeCode({ code }) {
   let externalAccountId = null;
   let displayName = null;
   try {
-    const userRes = await fetch(USER_URL, {
+    const userRes = await fetch(pinterestApiUrl("/v5/user_account"), {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const userBody = await userRes.json().catch(() => ({}));
