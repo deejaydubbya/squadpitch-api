@@ -63,9 +63,15 @@ export const pinterestAdapter = {
   channel: "PINTEREST",
 
   async validatePublishTarget({ draft, connection }) {
-    if (!connection?.externalAccountId) {
+    // Pinterest board ids are numeric strings (`^\d+$`). Right after
+    // OAuth the connection's externalAccountId is the *username* — the
+    // user still needs to pick a board via the picker UI before we can
+    // publish. Reject early with a friendly message instead of letting
+    // Pinterest's API return its raw regex-mismatch error.
+    const accountId = connection?.externalAccountId;
+    if (!accountId || !/^\d+$/.test(String(accountId))) {
       throw new PinterestPublishError(
-        "Pinterest connection has no board selected. Pick a board in Settings → Channels before publishing.",
+        "Pinterest needs a board picked before publishing. Open Settings → Channels and choose a board.",
         { status: 400, code: "BOARD_NOT_SELECTED" }
       );
     }

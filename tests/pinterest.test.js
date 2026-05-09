@@ -267,6 +267,23 @@ describe("pinterest.adapter — publishPost", () => {
     ).rejects.toMatchObject({ code: "BOARD_NOT_SELECTED" });
   });
 
+  it("rejects with BOARD_NOT_SELECTED when externalAccountId is the username (no board picked yet)", async () => {
+    // After OAuth, externalAccountId is a Pinterest username like
+    // "dwardlow0312". Pinterest board ids are numeric (`^\d+$`). We
+    // must catch this *before* sending the request, otherwise
+    // Pinterest replies with the cryptic
+    //   "Invalid request: 'dwardlow0312' does not match '^\\d+$'"
+    const { pinterestAdapter } = await import(
+      "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"
+    );
+    await expect(
+      pinterestAdapter.publishPost({
+        draft: { body: "x", mediaUrl: "https://img/y.jpg" },
+        connection: { accessToken: "t", externalAccountId: "dwardlow0312" },
+      })
+    ).rejects.toMatchObject({ code: "BOARD_NOT_SELECTED" });
+  });
+
   it("refuses to publish without media", async () => {
     const { pinterestAdapter } = await import(
       "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"
@@ -274,7 +291,7 @@ describe("pinterest.adapter — publishPost", () => {
     await expect(
       pinterestAdapter.publishPost({
         draft: { body: "x", mediaUrl: null },
-        connection: { accessToken: "t", externalAccountId: "b1" },
+        connection: { accessToken: "t", externalAccountId: "1234567890" },
       })
     ).rejects.toMatchObject({ code: "PUBLISH_FAILED_NO_MEDIA" });
   });
@@ -286,7 +303,7 @@ describe("pinterest.adapter — publishPost", () => {
     await expect(
       pinterestAdapter.publishPost({
         draft: { body: "x", mediaUrl: "https://v/y.mp4", mediaType: "video" },
-        connection: { accessToken: "t", externalAccountId: "b1" },
+        connection: { accessToken: "t", externalAccountId: "1234567890" },
       })
     ).rejects.toMatchObject({ code: "VIDEO_NOT_SUPPORTED" });
   });
@@ -309,7 +326,7 @@ describe("pinterest.adapter — publishPost", () => {
         mediaUrl: "https://squadpitch.com/media-proxy/image/upload/v123/foo.jpg",
         mediaType: "image",
       },
-      connection: { accessToken: "tok", externalAccountId: "b1" },
+      connection: { accessToken: "tok", externalAccountId: "1234567890" },
       client: { websiteUrl: "https://danielwardlow.com" },
     });
 
@@ -317,7 +334,7 @@ describe("pinterest.adapter — publishPost", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.pinterest.com/v5/pins");
     const body = JSON.parse(init.body);
-    expect(body.board_id).toBe("b1");
+    expect(body.board_id).toBe("1234567890");
     expect(body.media_source).toEqual({
       source_type: "image_url",
       url: "https://squadpitch.com/media-proxy/image/upload/v123/foo.jpg",
@@ -341,7 +358,7 @@ describe("pinterest.adapter — publishPost", () => {
     await expect(
       pinterestAdapter.publishPost({
         draft: { body: "x", mediaUrl: "https://img/y.jpg" },
-        connection: { accessToken: "t", externalAccountId: "b1" },
+        connection: { accessToken: "t", externalAccountId: "1234567890" },
       })
     ).rejects.toMatchObject({ code: "AUTH_FAILED" });
   });
@@ -358,7 +375,7 @@ describe("pinterest.adapter — publishPost", () => {
     await expect(
       pinterestAdapter.publishPost({
         draft: { body: "x", mediaUrl: "https://img/y.jpg" },
-        connection: { accessToken: "t", externalAccountId: "b1" },
+        connection: { accessToken: "t", externalAccountId: "1234567890" },
       })
     ).rejects.toMatchObject({ transient: true });
   });
