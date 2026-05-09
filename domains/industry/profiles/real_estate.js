@@ -26,7 +26,11 @@ export default {
     starterChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"],
     channelRecommendations: {
       primary: ["INSTAGRAM", "FACEBOOK", "YOUTUBE"],
-      secondary: ["TIKTOK", "LINKEDIN"],
+      // LINKEDIN_ORGANIZATION_PAGE = a brokerage / team Page rather
+      // than the agent's personal profile. Same "Good fit" tier as
+      // the personal LinkedIn — agents commonly publish to one or
+      // the other depending on whether they own a Page.
+      secondary: ["TIKTOK", "LINKEDIN", "LINKEDIN_ORGANIZATION_PAGE"],
       optional: ["PINTEREST", "REDDIT", "THREADS", "X"],
     },
     starterAngles: [
