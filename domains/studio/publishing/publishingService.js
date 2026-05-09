@@ -288,7 +288,14 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
   // draft transitions to PUBLISHED with a Meta-shaped externalPostUrl
   // so the planner card and "View on Facebook/Instagram" CTAs render
   // exactly as they would for a real publish.
+  //
+  // We also wait ~1.5s before flipping the draft so the planner card's
+  // "Publishing to Facebook Page…" / "Publishing to Instagram…" spinner
+  // is visible long enough to be captured in a screen recording. Real
+  // Meta publishes typically take 1-3s for graph-API round trips
+  // anyway, so this also keeps the demo's pacing realistic.
   if (isMetaDemoPublish(workingDraft.channel)) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     const { externalPostId, externalPostUrl } = simulateMetaDemoPublish({
       draft: workingDraft,
     });
