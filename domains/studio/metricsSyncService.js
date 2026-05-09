@@ -278,6 +278,82 @@ export async function syncMetricsForDraft(draftId, { force = false } = {}) {
   };
 }
 
+// ── Client-Scoped Batch Sync ─────────────────────────────────────────
+//
+// Loops every PUBLISHED draft in a workspace whose channel is in the
+// supplied provider filter and that has an externalPostId, calling
+// syncMetricsForDraft for each. Per-post failures don't abort the
+// batch — they're collected into `errors` and counted by category.
+//
+// Used by POST /api/v1/workspaces/:id/metrics/sync-meta — the
+// admin/dev-gated manual sync that satisfies Meta App Review's
+// "required API call" detection. Bypasses the 1h cooldown via
+// force=true so an App Review reviewer can verify Graph API calls
+// land within minutes of a reconnect.
+
+export async function syncMetricsForClient(
+  clientId,
+  { providers = ["FACEBOOK", "INSTAGRAM"], force = true } = {}
+) {
+  const drafts = await prisma.draft.findMany({
+    where: {
+      clientId,
+      status: "PUBLISHED",
+      externalPostId: { not: null },
+      channel: { in: providers },
+    },
+    select: { id: true, channel: true },
+  });
+
+  // Stable failure reasons from the orchestrator that mean "the API
+  // call hit Meta and was rejected" — those are the ones App Review
+  // and on-call need to see. Other non-success reasons (no_connection,
+  // not_published, etc.) are skips, not failures.
+  const FAILURE_REASONS = new Set([
+    "provider_permission_denied",
+    "provider_rate_limited",
+    "provider_transient",
+    "token_refresh_failed",
+    "unexpected_error",
+  ]);
+
+  let synced = 0;
+  let skipped = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const draft of drafts) {
+    let result;
+    try {
+      result = await syncMetricsForDraft(draft.id, { force });
+    } catch (err) {
+      result = {
+        synced: false,
+        reason: "unexpected_error",
+        detail: err?.message ?? null,
+      };
+    }
+
+    if (result.synced) {
+      synced += 1;
+      continue;
+    }
+
+    const isFailure = FAILURE_REASONS.has(result.reason);
+    if (isFailure) failed += 1;
+    else skipped += 1;
+
+    errors.push({
+      draftId: draft.id,
+      channel: draft.channel,
+      reason: result.reason,
+      detail: result.detail ?? null,
+    });
+  }
+
+  return { totalCandidates: drafts.length, synced, skipped, failed, errors };
+}
+
 // ── Eligible Drafts Query ────────────────────────────────────────────
 
 export async function getEligibleDraftsForSync({ batchSize = 20 } = {}) {

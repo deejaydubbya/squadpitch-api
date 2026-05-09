@@ -99,7 +99,12 @@ export {
   formatMetrics,
 } from "./postMetrics.service.js";
 
-export { getMetricsSyncStatus } from "./metricsSyncService.js";
+export {
+  getMetricsSyncStatus,
+  syncMetricsForClient,
+} from "./metricsSyncService.js";
+
+export { runMetaAppReviewChecks } from "./metaAppReviewChecks.service.js";
 
 export {
   generateSeries,

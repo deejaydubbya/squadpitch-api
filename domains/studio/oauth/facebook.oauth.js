@@ -26,6 +26,7 @@ export const FACEBOOK_SCOPES = [
   "pages_manage_posts",
   "pages_read_engagement",
   "pages_show_list",
+  "read_insights",
 ];
 
 function assertConfigured() {

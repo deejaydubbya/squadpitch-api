@@ -24,6 +24,7 @@ const GRAPH_BASE = META_GRAPH_BASE;
 export const INSTAGRAM_SCOPES = [
   "instagram_basic",
   "instagram_content_publish",
+  "instagram_manage_insights",
   "pages_show_list",
   "pages_read_engagement",
   "business_management",
