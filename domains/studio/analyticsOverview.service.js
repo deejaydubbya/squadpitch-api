@@ -345,6 +345,7 @@ export async function getPostDetail(clientId, postId) {
       mediaType: true,
       mediaUrl: true,
       externalPostUrl: true,
+      externalPostId: true,
       hooks: true,
       hashtags: true,
       cta: true,
@@ -362,6 +363,7 @@ export async function getPostDetail(clientId, postId) {
         select: {
           impressions: true, reach: true, engagement: true, clicks: true,
           saves: true, shares: true, comments: true, likes: true, engagementRate: true,
+          lastSyncedAt: true,
         },
       },
     },
@@ -416,6 +418,7 @@ export async function getPostDetail(clientId, postId) {
     mediaType: draft.mediaType,
     mediaUrl: draft.mediaUrl,
     externalPostUrl: draft.externalPostUrl,
+    externalPostId: draft.externalPostId,
     metrics: draft.metrics
       ? {
           impressions: draft.metrics.impressions,
@@ -427,6 +430,7 @@ export async function getPostDetail(clientId, postId) {
           comments: draft.metrics.comments,
           likes: draft.metrics.likes,
           engagementRate: draft.metrics.engagementRate,
+          lastSyncedAt: draft.metrics.lastSyncedAt?.toISOString() ?? null,
         }
       : null,
     insight: draft.postInsight

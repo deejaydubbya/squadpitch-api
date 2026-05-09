@@ -1,4 +1,48 @@
 import { prisma } from "../prisma.js";
+import { encryptToken } from "../lib/tokenCrypto.js";
+
+// ── Meta App Review demo identity ─────────────────────────────────────
+//
+// When `--meta-demo` is passed, we additionally upsert FACEBOOK and
+// INSTAGRAM ChannelConnection rows on the target workspace and rewrite
+// the seeded FB/IG drafts' externalPostId / externalPostUrl to look
+// like real Meta resources. The intent is to give Meta App Reviewers
+// a clear visual proof point that Squadpitch displays platform metrics
+// from a connected Facebook Page + Instagram professional account.
+const META_DEMO = {
+  facebookPageId: "100000000000001",
+  facebookPageName: "Squadpitch Test Page",
+  facebookPageHandle: "SquadpitchTest",
+  instagramAccountId: "17841444444444444",
+  instagramHandle: "squadpitchtest",
+};
+
+function metaFacebookExternalPostId(i) {
+  // FB post ids look like `<pageId>_<postId>`. Use a deterministic but
+  // distinct suffix so re-runs idempotently overwrite.
+  return `${META_DEMO.facebookPageId}_${10000000000000000n + BigInt(i)}`;
+}
+
+function metaFacebookExternalPostUrl(externalId) {
+  // Format: facebook.com/<pageHandle>/posts/<postId>
+  const postId = externalId.split("_")[1];
+  return `https://www.facebook.com/${META_DEMO.facebookPageHandle}/posts/${postId}`;
+}
+
+function metaInstagramExternalPostId(i) {
+  // 17-digit numeric like real IG media ids.
+  return String(17000000000000000n + BigInt(i));
+}
+
+function metaInstagramExternalPostUrl(i) {
+  // IG short-codes are 11 chars of base64ish.
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+  let code = "C";
+  for (let n = 0; n < 10; n++) {
+    code += alphabet[(i * 7 + n * 13) % alphabet.length];
+  }
+  return `https://www.instagram.com/p/${code}/`;
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -478,6 +522,7 @@ async function seedAnalytics() {
   const cliClientId =
     typeof args["client-id"] === "string" ? args["client-id"] : null;
   const cliSlug = typeof args.slug === "string" ? args.slug : null;
+  const metaDemo = args["meta-demo"] === true;
 
   let client;
   if (cliClientId) {
@@ -529,10 +574,62 @@ async function seedAnalytics() {
       },
     });
   }
+  // Meta-demo drafts use Meta-shaped externalPostIds (no channel
+  // prefix), so wipe by `publishSource: "seed"` for FB/IG specifically.
+  await prisma.draft.deleteMany({
+    where: {
+      clientId,
+      status: "PUBLISHED",
+      publishSource: "seed",
+      channel: { in: ["FACEBOOK", "INSTAGRAM"] },
+    },
+  });
 
   console.log(
     `   Deleted: ${deletedInsights.count} insights, ${deletedNormalized.count} normalized, ${deletedRaw.count} raw, ${deletedMetrics.count} metrics, ${deletedSnapshots.count} snapshots, ${deletedWorkspace.count} workspace`
   );
+
+  // ── Meta App Review: upsert demo Facebook/Instagram connections ────────────
+  if (metaDemo) {
+    console.log("\n🔗 Upserting demo Meta connections (Facebook Page + Instagram)...");
+    const tokenExpiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000); // 60 days
+    const lastValidatedAt = new Date();
+    // Encrypt sentinel tokens — they're never used to call Meta, but
+    // Connection writes go through tokenCrypto and the column expects
+    // the encrypted GCM payload format.
+    const fakeToken = encryptToken("META_APP_REVIEW_DEMO_DUMMY_TOKEN");
+
+    for (const [channel, displayName, externalAccountId] of [
+      ["FACEBOOK", META_DEMO.facebookPageName, META_DEMO.facebookPageId],
+      ["INSTAGRAM", `@${META_DEMO.instagramHandle}`, META_DEMO.instagramAccountId],
+    ]) {
+      await prisma.channelConnection.upsert({
+        where: { clientId_channel: { clientId, channel } },
+        create: {
+          clientId,
+          channel,
+          status: "CONNECTED",
+          externalAccountId,
+          displayName,
+          accessToken: fakeToken,
+          scopes: channel === "FACEBOOK"
+            ? ["pages_read_engagement", "pages_show_list", "read_insights"]
+            : ["instagram_basic", "instagram_business_basic", "instagram_manage_insights"],
+          tokenExpiresAt,
+          lastValidatedAt,
+          createdBy: "seed-meta-demo",
+        },
+        update: {
+          status: "CONNECTED",
+          externalAccountId,
+          displayName,
+          lastValidatedAt,
+          tokenExpiresAt,
+        },
+      });
+      console.log(`   ✓ ${channel}: ${displayName} (id=${externalAccountId})`);
+    }
+  }
 
   // ── Create published drafts ────────────────────────────────────────────────
   console.log("\n📝 Creating published drafts...");
@@ -561,6 +658,19 @@ async function seedAnalytics() {
     const publishedAt = daysAgo(daysAgoVal);
     publishedAt.setHours(hour, randomBetween(0, 59), 0, 0);
 
+    // Meta App Review demo: rewrite FB/IG ids+urls to look like real
+    // Meta resources so the analytics modal can show realistic post
+    // IDs and permalinks.
+    let externalPostId = fakeExternalId(channel, i);
+    let externalPostUrl = null;
+    if (metaDemo && channel === "FACEBOOK") {
+      externalPostId = metaFacebookExternalPostId(i);
+      externalPostUrl = metaFacebookExternalPostUrl(externalPostId);
+    } else if (metaDemo && channel === "INSTAGRAM") {
+      externalPostId = metaInstagramExternalPostId(i);
+      externalPostUrl = metaInstagramExternalPostUrl(i);
+    }
+
     const draft = await prisma.draft.create({
       data: {
         clientId,
@@ -578,7 +688,8 @@ async function seedAnalytics() {
           mediaType === "text"
             ? null
             : `https://placeholder.test/seed/${channel.toLowerCase()}_${i}.${mediaType === "video" ? "mp4" : "jpg"}`,
-        externalPostId: fakeExternalId(channel, i),
+        externalPostId,
+        externalPostUrl,
         publishedAt,
         publishSource: "seed",
         createdBy: "seed",
