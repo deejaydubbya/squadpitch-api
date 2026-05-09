@@ -9,6 +9,7 @@ import * as facebook from "./facebook.oauth.js";
 import * as tiktok from "./tiktok.oauth.js";
 import * as linkedin from "./linkedin.oauth.js";
 import * as linkedinOrg from "./linkedinOrg.oauth.js";
+import * as pinterest from "./pinterest.oauth.js";
 import * as x from "./x.oauth.js";
 import * as youtube from "./youtube.oauth.js";
 
@@ -18,6 +19,7 @@ const OAUTH_MODULES = {
   TIKTOK: tiktok,
   LINKEDIN: linkedin,
   LINKEDIN_ORGANIZATION_PAGE: linkedinOrg,
+  PINTEREST: pinterest,
   X: x,
   YOUTUBE: youtube,
 };

@@ -71,6 +71,11 @@ export const env = {
     process.env.LINKEDIN_ORG_SCOPES ??
     "r_organization_admin,w_organization_social,r_organization_social",
 
+  // Pinterest (API v5)
+  PINTEREST_CLIENT_ID: process.env.PINTEREST_CLIENT_ID,
+  PINTEREST_CLIENT_SECRET: process.env.PINTEREST_CLIENT_SECRET,
+  PINTEREST_REDIRECT_URI: process.env.PINTEREST_REDIRECT_URI,
+
   // X (Twitter)
   X_CLIENT_ID: process.env.X_CLIENT_ID,
   X_CLIENT_SECRET: process.env.X_CLIENT_SECRET,
@@ -181,6 +186,11 @@ export function bootEnvWarnings() {
     console.warn(
       "[BOOT] LinkedIn (Organization Page) OAuth credentials missing — " +
         "Organization Page connect flow will be unavailable until configured"
+    );
+  }
+  if (!env.PINTEREST_CLIENT_ID || !env.PINTEREST_CLIENT_SECRET || !env.PINTEREST_REDIRECT_URI) {
+    console.warn(
+      "[BOOT] Pinterest OAuth credentials missing — Pinterest connect flow will be unavailable until configured"
     );
   }
   if (!env.X_CLIENT_ID || !env.X_CLIENT_SECRET || !env.X_REDIRECT_URI) {

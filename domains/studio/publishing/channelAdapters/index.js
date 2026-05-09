@@ -9,6 +9,7 @@ import { facebookAdapter } from "./facebook.adapter.js";
 import { tiktokAdapter } from "./tiktok.adapter.js";
 import { linkedinAdapter } from "./linkedin.adapter.js";
 import { linkedinOrgAdapter } from "./linkedinOrg.adapter.js";
+import { pinterestAdapter } from "./pinterest.adapter.js";
 import { xAdapter } from "./x.adapter.js";
 import { youtubeAdapter } from "./youtube.adapter.js";
 
@@ -18,6 +19,7 @@ const ADAPTERS = {
   TIKTOK: tiktokAdapter,
   LINKEDIN: linkedinAdapter,
   LINKEDIN_ORGANIZATION_PAGE: linkedinOrgAdapter,
+  PINTEREST: pinterestAdapter,
   X: xAdapter,
   YOUTUBE: youtubeAdapter,
 };

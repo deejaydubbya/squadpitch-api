@@ -3764,6 +3764,93 @@ studioRouter.post(
   }
 );
 
+// ── Pinterest board picker ───────────────────────────────────────────
+//
+// Mirrors the LinkedIn Organization Page picker pattern: after a
+// successful Pinterest OAuth callback the connection has the user's
+// Pinterest @username on it but no destination board. This pair of
+// endpoints drives the picker UI.
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/connections/PINTEREST/boards`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "PINTEREST",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "Connect Pinterest first, then choose which board to publish to."
+        );
+      }
+      const { listBoards } = await import("./pinterestBoards.service.js");
+      const boards = await listBoards({ connectionId: conn.id });
+      if (boards.length === 0) {
+        return res.json({
+          boards: [],
+          message:
+            "No Pinterest boards were found. Create a board in Pinterest, then reconnect or refresh.",
+        });
+      }
+      res.json({ boards });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/PINTEREST/boards/select`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { boardId, boardName } = req.body ?? {};
+      if (!boardId || typeof boardId !== "string") {
+        return validationError(res, [
+          { path: ["boardId"], message: "boardId is required" },
+        ]);
+      }
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "PINTEREST",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(res, 404, "NO_CONNECTION", "No Pinterest connection.");
+      }
+      const { saveSelectedBoard } = await import("./pinterestBoards.service.js");
+      const updated = await saveSelectedBoard({
+        connectionId: conn.id,
+        boardId,
+        boardName,
+      });
+      res.json({ connection: updated });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  }
+);
+
 // ── Tech Stack ────────────────────────────────────────────────────────
 
 /**

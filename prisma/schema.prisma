@@ -38,6 +38,7 @@ enum Channel {
   LINKEDIN_ORGANIZATION_PAGE
   FACEBOOK
   YOUTUBE
+  PINTEREST
 }
 
 enum MediaMode {

@@ -9,6 +9,7 @@ import { fetchTiktokMetrics } from "./tiktok.metrics.js";
 import { fetchYoutubeMetrics } from "./youtube.metrics.js";
 import { fetchXMetrics } from "./x.metrics.js";
 import { fetchLinkedinMetrics } from "./linkedin.metrics.js";
+import { fetchPinterestMetrics } from "./pinterest.metrics.js";
 
 const ADAPTERS = {
   INSTAGRAM: fetchInstagramMetrics,
@@ -22,6 +23,8 @@ const ADAPTERS = {
   // post-URN parsing — so the personal adapter handles both. Token
   // scope (r_organization_social) gates whether org reads succeed.
   LINKEDIN_ORGANIZATION_PAGE: fetchLinkedinMetrics,
+  // Pinterest stub — returns null until analytics scopes are added.
+  PINTEREST: fetchPinterestMetrics,
 };
 
 export function getMetricsAdapterForChannel(channel) {
