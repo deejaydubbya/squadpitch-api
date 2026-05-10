@@ -7,6 +7,7 @@
 
 import { buildContentContext } from "../../industry/contentContextBuilder.js";
 import { buildPatternPromptBlock } from "../viralPatterns.js";
+import { getMaxCharsForChannel } from "../channelLimits.js";
 
 /**
  * Structured media recommendation produced alongside every generated post.
@@ -625,10 +626,19 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templ
   const channelCfg = Array.isArray(channelSettings)
     ? channelSettings.find((c) => c.channel === channel)
     : null;
+
+  // Always inject the channel's max-chars instruction so the model
+  // never silently produces a Tweet that's 600 chars long. User-saved
+  // override beats the platform default; falls back to the default
+  // when no override exists.
+  const effectiveMaxChars = getMaxCharsForChannel(channel, channelCfg);
+  if (effectiveMaxChars) {
+    lines.push(
+      `Max characters: ${effectiveMaxChars} (this limit includes the body text AND all hashtags combined — do not exceed it)`
+    );
+  }
+
   if (channelCfg) {
-    if (channelCfg.maxChars) {
-      lines.push(`Max characters: ${channelCfg.maxChars} (this limit includes the body text AND all hashtags combined — do not exceed it)`);
-    }
     lines.push(
       `Emoji allowed: ${channelCfg.allowEmoji === false ? "no" : "yes"}`
     );
