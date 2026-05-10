@@ -107,6 +107,11 @@ export {
 export { runMetaAppReviewChecks } from "./metaAppReviewChecks.service.js";
 
 export {
+  listRepliesForDraft as listThreadsRepliesForDraft,
+  setReplyHidden as setThreadsReplyHidden,
+} from "./threadsReplies.service.js";
+
+export {
   generateSeries,
   SERIES_TEMPLATES,
 } from "./seriesBuilder.service.js";

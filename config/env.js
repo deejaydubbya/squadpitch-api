@@ -96,6 +96,25 @@ export const env = {
   YOUTUBE_CLIENT_SECRET: process.env.YOUTUBE_CLIENT_SECRET,
   YOUTUBE_REDIRECT_URI: process.env.YOUTUBE_REDIRECT_URI,
 
+  // Threads (Meta — separate Threads-only app, NOT the existing
+  // Facebook/Instagram app). Threads has its own developer app on
+  // developers.facebook.com with its own client_id/secret and uses the
+  // graph.threads.net host (not graph.facebook.com).
+  // See docs/THREADS_SETUP.md for app config + Fly secrets commands.
+  THREADS_APP_ID: process.env.THREADS_APP_ID,
+  THREADS_APP_SECRET: process.env.THREADS_APP_SECRET,
+  THREADS_REDIRECT_URI: process.env.THREADS_REDIRECT_URI,
+  // Meta-required public webhook callbacks.
+  THREADS_UNINSTALL_CALLBACK_URL: process.env.THREADS_UNINSTALL_CALLBACK_URL,
+  THREADS_DELETE_CALLBACK_URL: process.env.THREADS_DELETE_CALLBACK_URL,
+  THREADS_API_VERSION: process.env.THREADS_API_VERSION ?? "v1.0",
+  // Operational kill-switch. When false, OAuth start/exchange and
+  // publish dispatch reject with THREADS_DISABLED. Lets us hold the
+  // channel back while App Review is pending without rolling back
+  // code. Defaults true in production once configured.
+  THREADS_ENABLED:
+    String(process.env.THREADS_ENABLED ?? "true").toLowerCase() === "true",
+
   // Notifications
   POSTMARK_SERVER_TOKEN: process.env.POSTMARK_SERVER_TOKEN,
   NOTIFICATION_FROM_EMAIL: process.env.NOTIFICATION_FROM_EMAIL ?? "notifications@squadpitch.com",
@@ -208,6 +227,16 @@ export function bootEnvWarnings() {
   }
   if (!env.YOUTUBE_CLIENT_ID || !env.YOUTUBE_CLIENT_SECRET || !env.YOUTUBE_REDIRECT_URI) {
     console.warn("[BOOT] YouTube OAuth credentials missing");
+  }
+  if (env.THREADS_ENABLED && (!env.THREADS_APP_ID || !env.THREADS_APP_SECRET || !env.THREADS_REDIRECT_URI)) {
+    console.warn(
+      "[BOOT] Threads OAuth credentials missing — Threads connect flow will fail until configured (THREADS_APP_ID / THREADS_APP_SECRET / THREADS_REDIRECT_URI)"
+    );
+  }
+  if (env.THREADS_ENABLED && (!env.THREADS_UNINSTALL_CALLBACK_URL || !env.THREADS_DELETE_CALLBACK_URL)) {
+    console.warn(
+      "[BOOT] Threads webhook callback URLs missing (THREADS_UNINSTALL_CALLBACK_URL / THREADS_DELETE_CALLBACK_URL); Meta requires both"
+    );
   }
   if (!env.STRIPE_SECRET_KEY) {
     console.warn("[BOOT] STRIPE_SECRET_KEY missing; billing features disabled");

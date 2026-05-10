@@ -20,6 +20,7 @@ export const ChannelEnum = z.enum([
   "FACEBOOK",
   "YOUTUBE",
   "PINTEREST",
+  "THREADS",
 ]);
 
 export const MediaModeEnum = z.enum([

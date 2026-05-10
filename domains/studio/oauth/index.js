@@ -12,6 +12,7 @@ import * as linkedinOrg from "./linkedinOrg.oauth.js";
 import * as pinterest from "./pinterest.oauth.js";
 import * as x from "./x.oauth.js";
 import * as youtube from "./youtube.oauth.js";
+import * as threads from "./threads.oauth.js";
 
 const OAUTH_MODULES = {
   INSTAGRAM: instagram,
@@ -22,6 +23,7 @@ const OAUTH_MODULES = {
   PINTEREST: pinterest,
   X: x,
   YOUTUBE: youtube,
+  THREADS: threads,
 };
 
 /**

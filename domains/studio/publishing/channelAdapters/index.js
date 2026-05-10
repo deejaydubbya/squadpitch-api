@@ -12,6 +12,7 @@ import { linkedinOrgAdapter } from "./linkedinOrg.adapter.js";
 import { pinterestAdapter } from "./pinterest.adapter.js";
 import { xAdapter } from "./x.adapter.js";
 import { youtubeAdapter } from "./youtube.adapter.js";
+import { threadsAdapter } from "./threads.adapter.js";
 
 const ADAPTERS = {
   INSTAGRAM: instagramAdapter,
@@ -22,6 +23,7 @@ const ADAPTERS = {
   PINTEREST: pinterestAdapter,
   X: xAdapter,
   YOUTUBE: youtubeAdapter,
+  THREADS: threadsAdapter,
 };
 
 export function getAdapterForChannel(channel) {

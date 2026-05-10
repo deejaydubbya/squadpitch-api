@@ -15,6 +15,7 @@ import { studioRouter } from "./domains/studio/studio.routes.js";
 import { conversionPublicRouter } from "./domains/studio/conversion.routes.js";
 import { billingRouter } from "./domains/billing/billing.routes.js";
 import { notificationRouter, notificationPublicRouter } from "./domains/notifications/notification.routes.js";
+import { metaThreadsWebhookRouter } from "./domains/integrations/metaThreadsWebhook.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
 import { webhookRouter } from "./domains/notifications/webhook.routes.js";
 import { integrationRouter } from "./domains/integrations/integration.routes.js";
@@ -138,6 +139,10 @@ app.get("/health", async (_req, res) => {
 // Public notification routes (no auth) — VAPID key
 app.use(notificationPublicRouter);
 app.use(conversionPublicRouter);
+// Meta Threads webhook callbacks (no Bearer auth — verified via
+// signed_request HMAC inside the router). Must mount before the
+// /api auth middleware below.
+app.use(metaThreadsWebhookRouter);
 
 // Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
 app.use("/api", (req, res, next) => {

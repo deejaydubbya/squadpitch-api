@@ -3574,6 +3574,63 @@ studioRouter.post(
   }
 );
 
+// ── Threads replies ────────────────────────────────────────────────────
+//
+// Demonstrates threads_read_replies and threads_manage_replies. The
+// list route fetches replies on a published Threads post; the
+// visibility route hides/unhides a single reply (explicit user
+// action only — no automation).
+studioRouter.get(
+  `${BASE}/drafts/:id/threads/replies`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const draft = await prisma.draft.findUnique({
+        where: { id: req.params.id },
+        select: { clientId: true },
+      });
+      if (!draft) return sendError(res, 404, "DRAFT_NOT_FOUND", "Draft not found");
+      const result = await service.listThreadsRepliesForDraft({
+        draftId: req.params.id,
+        clientId: draft.clientId,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/drafts/:id/threads/replies/:replyId/visibility`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const hide = req.body?.hide;
+      if (typeof hide !== "boolean") {
+        return validationError(res, [
+          { code: "invalid_type", path: ["hide"], message: "hide must be a boolean" },
+        ]);
+      }
+      const draft = await prisma.draft.findUnique({
+        where: { id: req.params.id },
+        select: { clientId: true },
+      });
+      if (!draft) return sendError(res, 404, "DRAFT_NOT_FOUND", "Draft not found");
+      const result = await service.setThreadsReplyHidden({
+        draftId: req.params.id,
+        clientId: draft.clientId,
+        replyId: req.params.replyId,
+        hide,
+        actorSub: getAuth0Sub(req),
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ── Connection validation ──────────────────────────────────────────────
 
 studioRouter.post(

@@ -10,6 +10,7 @@ import { fetchYoutubeMetrics } from "./youtube.metrics.js";
 import { fetchXMetrics } from "./x.metrics.js";
 import { fetchLinkedinMetrics } from "./linkedin.metrics.js";
 import { fetchPinterestMetrics } from "./pinterest.metrics.js";
+import { fetchThreadsMetrics } from "./threads.metrics.js";
 
 const ADAPTERS = {
   INSTAGRAM: fetchInstagramMetrics,
@@ -25,6 +26,7 @@ const ADAPTERS = {
   LINKEDIN_ORGANIZATION_PAGE: fetchLinkedinMetrics,
   // Pinterest stub — returns null until analytics scopes are added.
   PINTEREST: fetchPinterestMetrics,
+  THREADS: fetchThreadsMetrics,
 };
 
 export function getMetricsAdapterForChannel(channel) {

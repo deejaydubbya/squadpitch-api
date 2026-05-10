@@ -6,6 +6,7 @@ import { xRefresh } from "./x.refresh.js";
 import { tiktokRefresh } from "./tiktok.refresh.js";
 import { metaRefresh } from "./meta.refresh.js";
 import { linkedinRefresh } from "./linkedin.refresh.js";
+import { threadsRefresh } from "./threads.refresh.js";
 
 const ADAPTERS = {
   YOUTUBE: youtubeRefresh,
@@ -14,6 +15,7 @@ const ADAPTERS = {
   INSTAGRAM: metaRefresh,
   FACEBOOK: metaRefresh,
   LINKEDIN: linkedinRefresh,
+  THREADS: threadsRefresh,
 };
 
 export function getRefreshAdapter(channel) {

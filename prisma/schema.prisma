@@ -39,6 +39,7 @@ enum Channel {
   FACEBOOK
   YOUTUBE
   PINTEREST
+  THREADS
 }
 
 enum MediaMode {
