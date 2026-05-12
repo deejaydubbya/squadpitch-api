@@ -69,6 +69,10 @@ export const UpdateClientSchema = z.object({
   logoUrl: z.string().url().nullable().optional(),
   status: ClientStatusEnum.optional(),
   industryKey: z.string().max(40).nullable().optional(),
+  // IANA timezone (e.g. "America/New_York"). The Scheduling Defaults
+  // settings page writes here so the assistant can interpret
+  // preferredPostingTime ("HH:mm") against the right zone.
+  timezone: z.string().min(1).max(64).optional(),
 });
 
 // ── Brand profile ───────────────────────────────────────────────────────
@@ -622,7 +626,41 @@ const PreferredToneEnum = z.enum([
   "inspirational",
   "urgent",
   "luxury",
+  "friendly",
+  "educational",
 ]);
+
+// Plan 07 enums. Stored as plain TEXT in Postgres so the option
+// set can grow without a migration; validated here so the API
+// rejects unknown values at the boundary.
+const DefaultContentModeEnum = z.enum(["campaign", "single_post"]);
+
+const DefaultSourceEnum = z.enum(["property", "data_item", "idea"]);
+
+const ContentGoalEnum = z.enum(["growth", "engagement", "sales"]);
+
+const DefaultCtaPreferenceEnum = z.enum([
+  "dm_me",
+  "schedule_consult",
+  "visit_website",
+  "call_now",
+  "custom",
+]);
+
+const PostingDayEnum = z.enum([
+  "mon",
+  "tue",
+  "wed",
+  "thu",
+  "fri",
+  "sat",
+  "sun",
+]);
+
+// "HH:mm" 24-hour format. Interpreted in Client.timezone.
+const PostingTimeString = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected HH:mm");
 
 const PreferredCtaStyleEnum = z.enum([
   "direct",
@@ -663,6 +701,15 @@ export const ContentPreferencesUpdateSchema = z.object({
   defaultContentBucket: ContentBucketString.nullable().optional(),
   alwaysRequireReview: z.boolean().optional(),
   autoGenerateMedia: z.boolean().optional(),
+  // Plan 07 fields
+  defaultContentMode: DefaultContentModeEnum.nullable().optional(),
+  defaultSource: DefaultSourceEnum.nullable().optional(),
+  preferredContentGoals: z.array(ContentGoalEnum).max(3).optional(),
+  defaultCtaPreference: DefaultCtaPreferenceEnum.nullable().optional(),
+  defaultCtaCustom: z.string().max(140).nullable().optional(),
+  defaultCampaignLength: z.union([z.literal(3), z.literal(5), z.literal(7)]).nullable().optional(),
+  preferredPostingDays: z.array(PostingDayEnum).max(7).optional(),
+  preferredPostingTime: PostingTimeString.nullable().optional(),
 });
 
 // ── Autopilot ─────────────────────────────────────────────────────────

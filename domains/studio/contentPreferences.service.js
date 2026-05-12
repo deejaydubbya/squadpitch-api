@@ -26,6 +26,15 @@ const EMPTY_PREFERENCES = {
   defaultContentBucket: null,
   alwaysRequireReview: true,
   autoGenerateMedia: false,
+  // Plan 07
+  defaultContentMode: null,
+  defaultSource: null,
+  preferredContentGoals: [],
+  defaultCtaPreference: null,
+  defaultCtaCustom: null,
+  defaultCampaignLength: null,
+  preferredPostingDays: [],
+  preferredPostingTime: null,
 };
 
 function shape(row, clientId) {
@@ -48,6 +57,15 @@ function shape(row, clientId) {
     defaultContentBucket: row.defaultContentBucket ?? null,
     alwaysRequireReview: row.alwaysRequireReview,
     autoGenerateMedia: row.autoGenerateMedia,
+    // Plan 07
+    defaultContentMode: row.defaultContentMode ?? null,
+    defaultSource: row.defaultSource ?? null,
+    preferredContentGoals: row.preferredContentGoals ?? [],
+    defaultCtaPreference: row.defaultCtaPreference ?? null,
+    defaultCtaCustom: row.defaultCtaCustom ?? null,
+    defaultCampaignLength: row.defaultCampaignLength ?? null,
+    preferredPostingDays: row.preferredPostingDays ?? [],
+    preferredPostingTime: row.preferredPostingTime ?? null,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -80,6 +98,15 @@ export async function updateContentPreferences(clientId, patch) {
     "defaultContentBucket",
     "alwaysRequireReview",
     "autoGenerateMedia",
+    // Plan 07
+    "defaultContentMode",
+    "defaultSource",
+    "preferredContentGoals",
+    "defaultCtaPreference",
+    "defaultCtaCustom",
+    "defaultCampaignLength",
+    "preferredPostingDays",
+    "preferredPostingTime",
   ]) {
     if (Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== undefined) {
       data[key] = patch[key];

@@ -269,6 +269,18 @@ model ContentPreferences {
   defaultContentBucket     String?
   alwaysRequireReview      Boolean   @default(true)
   autoGenerateMedia        Boolean   @default(false)
+  // Plan 07 — additional assistant defaults.
+  // All nullable / array-default so existing rows stay valid
+  // without backfill. String-typed enums (not Prisma enums) so
+  // adding option values stays a code-only change.
+  defaultContentMode       String?   // 'campaign' | 'single_post'
+  defaultSource            String?   // 'property' | 'data_item' | 'idea'
+  preferredContentGoals    String[]  @default([])  // 'growth' | 'engagement' | 'sales'
+  defaultCtaPreference     String?   // 'dm_me' | 'schedule_consult' | 'visit_website' | 'call_now' | 'custom'
+  defaultCtaCustom         String?
+  defaultCampaignLength    Int?      // 3 | 5 | 7
+  preferredPostingDays     String[]  @default([])  // 'mon' | 'tue' | ... | 'sun'
+  preferredPostingTime     String?   // "HH:mm" — interpreted in Client.timezone
   updatedAt                DateTime  @updatedAt
   client                   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
 

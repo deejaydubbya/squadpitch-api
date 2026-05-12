@@ -316,6 +316,7 @@ export function formatClient(client) {
     status: client.status,
     logoUrl: client.logoUrl,
     industryKey: client.industryKey ?? null,
+    timezone: client.timezone ?? 'UTC',
     createdBy: client.createdBy,
     createdAt: client.createdAt,
     updatedAt: client.updatedAt,
