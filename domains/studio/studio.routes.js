@@ -5210,7 +5210,25 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { campaign, propertyData, campaignType, dataItemId, schedulePreset, addToPlanner, mediaAssetIds, startDate, slots } = req.body;
+      const {
+        campaign,
+        propertyData,
+        campaignType,
+        dataItemId,
+        schedulePreset,
+        addToPlanner,
+        mediaAssetIds,
+        startDate,
+        slots,
+        // Source attribution — added so the route can build a
+        // source-aware campaign name and persist source metadata
+        // for Planner. Legacy callers without these fields still
+        // get the prior property-style name.
+        sourceType: rawSourceType,
+        sourceTitle,
+        sourceDataItemType,
+        campaignIdea,
+      } = req.body;
       if (!campaign || !Array.isArray(campaign.posts) || campaign.posts.length === 0) {
         return validationError(res, [{ path: ["campaign"], message: "Campaign with posts array is required" }]);
       }
@@ -5226,16 +5244,52 @@ studioRouter.post(
         });
         validAssetIds = assets.map((a) => a.id);
       }
-      const address = propertyData?.address || "Listing Campaign";
+
+      // Build a source-aware campaign name.
+      //
+      //   property   → "508 King George Court — just listed"
+      //   data_item  → "Spring buyer guide — promotion offer"
+      //   idea       → "Promote our spring offer — lead generation"
+      //                  (idea snippet ≤60 chars), or fall back to
+      //                  "Custom — lead generation" when no idea text.
+      const sourceType = ["property", "data_item", "idea"].includes(rawSourceType)
+        ? rawSourceType
+        : "property";
+      const campaignTypeLabel = (campaignType || (sourceType === "property" ? "just_listed" : "general"))
+        .replace(/_/g, " ");
+      const truncate = (s, n) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s);
+      let campaignNameRoot;
+      if (sourceType === "property") {
+        campaignNameRoot = propertyData?.address || propertyData?.title || sourceTitle || "Listing";
+      } else if (sourceType === "data_item") {
+        campaignNameRoot = sourceTitle || propertyData?.title || "Content asset";
+      } else {
+        // idea
+        const ideaSnippet = typeof campaignIdea === "string" ? truncate(campaignIdea.trim(), 60) : null;
+        campaignNameRoot = ideaSnippet || "Custom";
+      }
       const campaignId = `camp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const campaignName = campaign.campaignName || `${address} — ${(campaignType || "just_listed").replace(/_/g, " ")}`;
+      const campaignName = campaign.campaignName || `${campaignNameRoot} — ${campaignTypeLabel}`;
       const totalPosts = campaign.posts.length;
 
+      // Source attribution stored on each Draft's `warnings` array
+      // (existing pattern — free-form `key:value` tags). The Planner
+      // / Dashboard already reads `warnings` for source labels; this
+      // keeps schema unchanged while making non-property campaigns
+      // legible.
       const warnings = [
-        "source:listing-campaign",
+        `source:${sourceType}`,
         `campaignType:${campaignType || "just_listed"}`,
-        `address:${address}`,
+        `campaignNameRoot:${campaignNameRoot}`,
       ];
+      if (sourceType === "property" && propertyData?.address) {
+        warnings.push(`address:${propertyData.address}`);
+      }
+      if (sourceTitle) warnings.push(`sourceTitle:${truncate(sourceTitle, 120)}`);
+      if (sourceDataItemType) warnings.push(`sourceDataItemType:${sourceDataItemType}`);
+      if (sourceType === "idea" && typeof campaignIdea === "string" && campaignIdea.trim()) {
+        warnings.push(`campaignIdea:${truncate(campaignIdea.trim(), 200)}`);
+      }
       if (dataItemId) warnings.push(`dataItemId:${dataItemId}`);
 
       // Schedule spacing: map each post's campaignDay to a real
