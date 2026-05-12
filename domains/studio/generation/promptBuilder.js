@@ -1067,6 +1067,16 @@ export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageCon
   const sourceType = options.sourceType === "data_item" || options.sourceType === "idea"
     ? options.sourceType
     : "property";
+  // Optional ContentBlueprint chosen by findBestBlueprintForItem.
+  // Carries a `promptTemplate` we'll inject as a structural example
+  // for non-property campaigns. Property campaigns already have a
+  // strong built-in structure (the listing playbooks below); we
+  // skip blueprint injection for them to avoid double-prescribing.
+  const blueprint = options.blueprint &&
+    typeof options.blueprint.promptTemplate === "string" &&
+    options.blueprint.promptTemplate.trim().length > 0
+    ? options.blueprint
+    : null;
 
   // For non-property sources, prepend a strong framing marker so the
   // model doesn't invent listing details (prices, addresses, beds,
@@ -1089,6 +1099,21 @@ export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageCon
   lines.push(`--- ${sectionHeader} ---`);
   lines.push(...buildPropertyContextBlock(listingData));
   lines.push(`--- END ${sectionHeader} ---`);
+
+  // ContentBlueprint structural example — only for non-property
+  // campaigns. Gives the model a concrete pattern for the content
+  // type (testimonial layout, FAQ structure, etc.) without
+  // dictating exact wording. Property campaigns have their own
+  // listing-specific playbook below and don't get a blueprint to
+  // avoid double-prescribing.
+  if (blueprint && sourceType !== "property") {
+    lines.push(`\n--- STRUCTURE EXAMPLE (${blueprint.name}) ---`);
+    lines.push(blueprint.promptTemplate.trim());
+    lines.push(`--- END STRUCTURE EXAMPLE ---`);
+    lines.push(
+      `Use the structure example above as guidance for organization and angle, not as exact wording. Adapt it to the CAMPAIGN CONTEXT.`,
+    );
+  }
 
   // Available images — only meaningful for property campaigns (those
   // ship an `images` array from the listing). Data items / ideas

@@ -4697,12 +4697,50 @@ studioRouter.post(
         const { buildSystemPrompt, buildCampaignUserPrompt, buildCampaignResponseFormat } = await import("./generation/promptBuilder.js");
         const { generateStructuredContent } = await import("./generation/openai.provider.js");
         const { loadRealEstateGenerationAssets } = await import("../industry/realEstateGeneration.js");
+        const { findBestBlueprintForItem } = await import("./blueprint.service.js");
 
         const ctx = await loadClientGenerationContext(clientId);
 
         let realEstateAssets = null;
         if (ctx.realEstateContext) {
           try { realEstateAssets = await loadRealEstateGenerationAssets(clientId, ctx.realEstateContext); } catch {}
+        }
+
+        // ContentBlueprint injection — only for content-asset
+        // campaigns. The frontend tucks the data item type into
+        // propertyData._dataItemType so we can look up a matching
+        // structural template here without changing the body shape.
+        // Falls through silently when no match (the existing prompt
+        // path stays intact).
+        let blueprint = null;
+        if (sourceType === "data_item") {
+          const dataItemType = typeof propertyData?._dataItemType === "string"
+            ? propertyData._dataItemType
+            : null;
+          const slotChannels = Array.isArray(slots)
+            ? Array.from(
+                new Set(
+                  slots
+                    .map((s) => (typeof s?.channel === "string" ? s.channel : null))
+                    .filter(Boolean)
+                )
+              )
+            : [];
+          if (dataItemType) {
+            try {
+              blueprint = await findBestBlueprintForItem({
+                dataItemType,
+                channels: slotChannels,
+              });
+            } catch (err) {
+              // Don't fail the whole generate call on a blueprint
+              // lookup error — log + continue without it.
+              req.log?.warn(
+                { err: err?.message, dataItemType },
+                "blueprint_lookup_failed"
+              );
+            }
+          }
         }
 
         const systemPrompt = buildSystemPrompt(ctx);
@@ -4712,7 +4750,23 @@ studioRouter.post(
               description: typeof img?.description === "string" ? img.description.slice(0, 100) : "",
             }))
           : null;
-        const userPrompt = buildCampaignUserPrompt(ctx, propertyData, campaignType, safeImageContext, slots, { sourceType });
+        const userPrompt = buildCampaignUserPrompt(
+          ctx,
+          propertyData,
+          campaignType,
+          safeImageContext,
+          slots,
+          {
+            sourceType,
+            blueprint: blueprint
+              ? {
+                  name: blueprint.name,
+                  category: blueprint.category,
+                  promptTemplate: blueprint.promptTemplate,
+                }
+              : null,
+          }
+        );
         const responseFormat = buildCampaignResponseFormat();
 
         const result = await generateStructuredContent({
