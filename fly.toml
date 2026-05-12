@@ -3,6 +3,14 @@ primary_region = "ord"
 
 [build]
 
+[deploy]
+  # Run pending Prisma migrations before swapping in the new release.
+  # Fly spawns a temporary release machine, runs this command, and
+  # only proceeds with the rolling restart if it exits zero. This is
+  # the supported pattern in place of boot-time migrations, which
+  # would race when multiple machines come up in parallel.
+  release_command = "npx prisma migrate deploy"
+
 [http_service]
   internal_port = 8080
   force_https = true
