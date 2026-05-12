@@ -69,6 +69,7 @@ import {
   ListingFeedRefreshSchema,
   ListingFeedSettingsSchema,
   AutopilotSettingsSchema,
+  ContentPreferencesUpdateSchema,
   PlannerSuggestionsSchema,
   PlanMyWeekSchema,
   SwapSuggestionSchema,
@@ -135,6 +136,7 @@ import {
 } from "../industry/techStack.service.js";
 import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus, getAutopilotReadiness, getAutopilotActivity } from "./autopilot.service.js";
+import { getContentPreferences, updateContentPreferences } from "./contentPreferences.service.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
@@ -4241,6 +4243,51 @@ studioRouter.patch(
       });
 
       res.json({ settings: { autoGenerateOnImport: parsed.data.autoGenerateOnImport } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Content Preferences ───────────────────────────────────────────────
+//
+// Persistent per-workspace assistant defaults — channels, cadence,
+// CTA style, etc. The Create assistant reads these via
+// useContentPreferences on the web side. GET returns a default-filled
+// shape even when no row exists yet, so the settings page doesn't
+// need to special-case "first load".
+
+/**
+ * GET /api/v1/workspaces/:id/content-preferences
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/content-preferences`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const preferences = await getContentPreferences(req.params.id);
+      res.json({ preferences });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/workspaces/:id/content-preferences
+ */
+studioRouter.put(
+  `${BASE}/workspaces/:id/content-preferences`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ContentPreferencesUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const preferences = await updateContentPreferences(
+        req.params.id,
+        parsed.data,
+      );
+      res.json({ preferences });
     } catch (err) {
       next(err);
     }

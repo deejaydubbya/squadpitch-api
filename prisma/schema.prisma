@@ -188,6 +188,7 @@ model Client {
   voiceProfile      VoiceProfile?
   mediaProfile      MediaProfile?
   brandPersona      BrandPersona?
+  contentPreferences ContentPreferences?
   channelSettings   ChannelSettings[]
   drafts            Draft[]
   moderationLogs    ModerationLog[]
@@ -248,6 +249,30 @@ model VoiceProfile {
   client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@map("voice_profiles")
+}
+
+// Persistent per-workspace defaults the assistant reads when the
+// user hasn't made an explicit choice in-session yet. Already wired
+// into lib/assistant/contentPreferences.ts on the web side; this
+// model + the matching /content-preferences route are the backing
+// storage. All fields are optional / nullable so that a workspace
+// without any saved preferences still resolves to safe defaults.
+model ContentPreferences {
+  clientId                 String    @id
+  preferredChannels        Channel[] @default([])
+  defaultQuickPostChannel  Channel?
+  preferredTone            String?
+  preferredCtaStyle        String?
+  preferredCampaignCadence String?
+  defaultCampaignType      String?
+  mediaOrderPreference     String?
+  defaultContentBucket     String?
+  alwaysRequireReview      Boolean   @default(true)
+  autoGenerateMedia        Boolean   @default(false)
+  updatedAt                DateTime  @updatedAt
+  client                   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("content_preferences")
 }
 
 model MediaProfile {

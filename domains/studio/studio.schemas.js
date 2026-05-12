@@ -608,6 +608,63 @@ export const ManualSetupSchema = z.object({
   ),
 });
 
+// ── Content Preferences ───────────────────────────────────────────────
+//
+// Persistent per-workspace defaults the assistant consumes when the
+// user hasn't made an explicit choice. Discriminated-union string
+// fields are validated against the option set the assistant code
+// understands; null clears a preference; arrays default to empty.
+
+const PreferredToneEnum = z.enum([
+  "professional",
+  "casual",
+  "witty",
+  "inspirational",
+  "urgent",
+  "luxury",
+]);
+
+const PreferredCtaStyleEnum = z.enum([
+  "direct",
+  "soft",
+  "question",
+  "urgency",
+  "none",
+]);
+
+const PreferredCadenceEnum = z.enum([
+  "aggressive",
+  "balanced",
+  "luxury",
+]);
+
+const MediaOrderPreferenceEnum = z.enum([
+  "exterior_first",
+  "hero_first",
+  "ai_recommended",
+  "manual",
+]);
+
+// Free-form by design — campaign types come from per-industry
+// adapters and the generic set in lib/assistant/types.ts. Adding a
+// new campaign type should not require a settings-schema edit, so
+// we keep this a string with a reasonable length cap.
+const CampaignTypeString = z.string().min(1).max(64);
+const ContentBucketString = z.string().min(1).max(64);
+
+export const ContentPreferencesUpdateSchema = z.object({
+  preferredChannels: z.array(ChannelEnum).max(8).optional(),
+  defaultQuickPostChannel: ChannelEnum.nullable().optional(),
+  preferredTone: PreferredToneEnum.nullable().optional(),
+  preferredCtaStyle: PreferredCtaStyleEnum.nullable().optional(),
+  preferredCampaignCadence: PreferredCadenceEnum.nullable().optional(),
+  defaultCampaignType: CampaignTypeString.nullable().optional(),
+  mediaOrderPreference: MediaOrderPreferenceEnum.nullable().optional(),
+  defaultContentBucket: ContentBucketString.nullable().optional(),
+  alwaysRequireReview: z.boolean().optional(),
+  autoGenerateMedia: z.boolean().optional(),
+});
+
 // ── Autopilot ─────────────────────────────────────────────────────────
 
 export const AutopilotSettingsSchema = z.object({
