@@ -5156,7 +5156,7 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { campaign, propertyData, campaignType, dataItemId, schedulePreset, addToPlanner, mediaAssetIds } = req.body;
+      const { campaign, propertyData, campaignType, dataItemId, schedulePreset, addToPlanner, mediaAssetIds, startDate, slots } = req.body;
       if (!campaign || !Array.isArray(campaign.posts) || campaign.posts.length === 0) {
         return validationError(res, [{ path: ["campaign"], message: "Campaign with posts array is required" }]);
       }
@@ -5184,9 +5184,31 @@ studioRouter.post(
       ];
       if (dataItemId) warnings.push(`dataItemId:${dataItemId}`);
 
-      // Schedule spacing: map campaignDay to real dates based on preset
+      // Schedule spacing: map each post's campaignDay to a real
+      // datetime. The campaignStartDate confirmed by the user in the
+      // schedule-review step anchors day 1 — without it, posts used
+      // to silently anchor to "today + 1 day" regardless of what the
+      // schedule UI showed. When startDate is absent (legacy callers,
+      // ad-hoc generation paths) we fall back to today so existing
+      // behaviour is preserved.
       const presetDays = schedulePreset === 14 ? 14 : schedulePreset === 10 ? 10 : 7;
       const maxCampaignDay = Math.max(...campaign.posts.map((p) => p.campaignDay || 1));
+
+      // Validate startDate. Accepted format: YYYY-MM-DD (the format
+      // the assistant session stores). Anything else falls back to
+      // "today + 1 day" so a malformed input doesn't schedule posts
+      // into the past.
+      let scheduleAnchor;
+      if (typeof startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+        const parsed = new Date(`${startDate}T10:00:00Z`);
+        if (!Number.isNaN(parsed.getTime())) {
+          scheduleAnchor = parsed;
+        }
+      }
+      if (!scheduleAnchor) {
+        scheduleAnchor = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        scheduleAnchor.setUTCHours(10, 0, 0, 0);
+      }
 
       function computeScheduledDate(campaignDay) {
         if (!addToPlanner) return null;
@@ -5194,10 +5216,17 @@ studioRouter.post(
         const dayOffset = maxCampaignDay > 1
           ? Math.round(((campaignDay - 1) / (maxCampaignDay - 1)) * (presetDays - 1))
           : 0;
-        const date = new Date(Date.now() + (dayOffset + 1) * 24 * 60 * 60 * 1000);
+        // Anchor day 1 at the user's confirmed start date. Day N
+        // lands `dayOffset` days after that.
+        const date = new Date(scheduleAnchor.getTime() + dayOffset * 24 * 60 * 60 * 1000);
         date.setUTCHours(10, 0, 0, 0);
         return date;
       }
+      // Acknowledge `slots` so eslint / linters don't flag the
+      // unused destructured field. The current scheduler keys off
+      // campaignDay only; slot ordering is implicit in the per-post
+      // campaignDay sent up by the review card.
+      void slots;
 
       const drafts = await Promise.all(
         campaign.posts.map((post, idx) => {
