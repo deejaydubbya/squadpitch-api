@@ -137,6 +137,7 @@ import {
 import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus, getAutopilotReadiness, getAutopilotActivity } from "./autopilot.service.js";
 import { getContentPreferences, updateContentPreferences } from "./contentPreferences.service.js";
+import { zonedLocalToUtc, bumpToNextAllowedDay, getClientTimezone } from "../../lib/timezone.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
@@ -5404,6 +5405,30 @@ studioRouter.post(
       }
       if (dataItemId) warnings.push(`dataItemId:${dataItemId}`);
 
+      // ── Scheduling preferences (Plan 10 enforcement) ──────────────
+      //
+      // Resolve workspace-level scheduling defaults server-side so
+      // the client can't lie about its own preferences. Loaded in
+      // parallel and used to:
+      //   - anchor each post at the user's preferredPostingTime
+      //     converted from Client.timezone to UTC (instead of the
+      //     legacy 10:00 UTC hardcode)
+      //   - bump each scheduled date forward to the next allowed
+      //     posting day when preferredPostingDays is set
+      //   - drive the alwaysRequireReview status mapping (see below)
+      //
+      // Any of these can be unset; missing fields fall through to
+      // the prior 10:00 UTC / no-bump / no-review-required behavior.
+      const [contentPrefs, clientTimezone] = await Promise.all([
+        getContentPreferences(clientId).catch(() => null),
+        getClientTimezone(clientId).catch(() => 'UTC'),
+      ]);
+      const preferredPostingTime = contentPrefs?.preferredPostingTime || null;
+      const preferredPostingDays = Array.isArray(contentPrefs?.preferredPostingDays)
+        ? contentPrefs.preferredPostingDays
+        : [];
+      const alwaysRequireReview = contentPrefs?.alwaysRequireReview !== false;
+
       // Schedule spacing: map each post's campaignDay to a real
       // datetime. The campaignStartDate confirmed by the user in the
       // schedule-review step anchors day 1 — without it, posts used
@@ -5414,21 +5439,35 @@ studioRouter.post(
       const presetDays = schedulePreset === 14 ? 14 : schedulePreset === 10 ? 10 : 7;
       const maxCampaignDay = Math.max(...campaign.posts.map((p) => p.campaignDay || 1));
 
-      // Validate startDate. Accepted format: YYYY-MM-DD (the format
-      // the assistant session stores). Anything else falls back to
-      // "today + 1 day" so a malformed input doesn't schedule posts
-      // into the past.
-      let scheduleAnchor;
-      if (typeof startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
-        const parsed = new Date(`${startDate}T10:00:00Z`);
-        if (!Number.isNaN(parsed.getTime())) {
-          scheduleAnchor = parsed;
+      // Anchor a campaign day at the user's preferredPostingTime in
+      // Client.timezone when both are set; otherwise fall back to
+      // the legacy 10:00 UTC behavior. We compute the anchor by
+      // converting `startDate` + `preferredPostingTime` from the
+      // workspace timezone to UTC.
+      const anchorLocalDate =
+        typeof startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(startDate)
+          ? startDate
+          : null;
+      function resolveAnchor() {
+        if (anchorLocalDate && preferredPostingTime) {
+          const utc = zonedLocalToUtc(
+            anchorLocalDate,
+            preferredPostingTime,
+            clientTimezone,
+          );
+          if (utc) return utc;
         }
+        if (anchorLocalDate) {
+          // Legacy fallback: parse startDate as 10:00 UTC, same as
+          // before the Plan 10 changes.
+          const parsed = new Date(`${anchorLocalDate}T10:00:00Z`);
+          if (!Number.isNaN(parsed.getTime())) return parsed;
+        }
+        const fallback = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        fallback.setUTCHours(10, 0, 0, 0);
+        return fallback;
       }
-      if (!scheduleAnchor) {
-        scheduleAnchor = new Date(Date.now() + 24 * 60 * 60 * 1000);
-        scheduleAnchor.setUTCHours(10, 0, 0, 0);
-      }
+      const scheduleAnchor = resolveAnchor();
 
       function computeScheduledDate(campaignDay) {
         if (!addToPlanner) return null;
@@ -5438,8 +5477,14 @@ studioRouter.post(
           : 0;
         // Anchor day 1 at the user's confirmed start date. Day N
         // lands `dayOffset` days after that.
-        const date = new Date(scheduleAnchor.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-        date.setUTCHours(10, 0, 0, 0);
+        let date = new Date(scheduleAnchor.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+        // Apply day-of-week bump if the user has restricted posting
+        // days. Day-of-week is evaluated in the workspace timezone
+        // so a "Mon/Wed/Fri" rule actually lines up with the
+        // calendar the user sees.
+        if (preferredPostingDays.length > 0) {
+          date = bumpToNextAllowedDay(date, preferredPostingDays, clientTimezone);
+        }
         return date;
       }
       // Acknowledge `slots` so eslint / linters don't flag the
@@ -5448,6 +5493,20 @@ studioRouter.post(
       // campaignDay sent up by the review card.
       void slots;
 
+      // Status mapping (Plan 10):
+      //   addToPlanner=true  → explicit Approve & Schedule. Always
+      //                        proceeds to SCHEDULED — the user
+      //                        clicking that button counts as
+      //                        review.
+      //   addToPlanner=false → "Save as Drafts". If the workspace
+      //                        has alwaysRequireReview set (the
+      //                        default), use PENDING_REVIEW so the
+      //                        Planner's "Needs Review" chip lights
+      //                        up. Otherwise fall back to DRAFT for
+      //                        workspaces that opted out of the
+      //                        review gate.
+      const draftStatusForUnscheduled = alwaysRequireReview ? "PENDING_REVIEW" : "DRAFT";
+
       const drafts = await Promise.all(
         campaign.posts.map((post, idx) => {
           const scheduledFor = computeScheduledDate(post.campaignDay || idx + 1);
@@ -5455,7 +5514,7 @@ studioRouter.post(
             data: {
               clientId,
               kind: "POST",
-              status: addToPlanner ? "SCHEDULED" : "DRAFT",
+              status: addToPlanner ? "SCHEDULED" : draftStatusForUnscheduled,
               channel: post.channel || "INSTAGRAM",
               generationGuidance: `${campaignName} — ${post.label || `Post ${idx + 1}`}`,
               body: post.body || "",
