@@ -4827,13 +4827,36 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { propertyData, campaignType, slot, campaignSummary, imageContext } = req.body;
+      const {
+        propertyData,
+        campaignType,
+        slot,
+        campaignSummary,
+        imageContext,
+        // Source attribution — added so per-post regen works for
+        // content-asset and idea campaigns. Legacy callers without
+        // these fields still get the prior property-only behavior
+        // because sourceType defaults to 'property'.
+        sourceType: rawSourceType,
+        sourceTitle,
+        sourceDataItemType,
+        campaignIdea,
+      } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
-        return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
+        return validationError(res, [{ path: ["propertyData"], message: "Property data / post context is required" }]);
       }
       if (!slot || typeof slot !== "object" || !slot.channel || !slot.day || !slot.label) {
         return validationError(res, [{ path: ["slot"], message: "Slot with channel, day, and label is required" }]);
       }
+      // Frontend synthesizes propertyData for non-property sources
+      // (mirroring the save-drafts contract) so the existence check
+      // above passes. sourceType tells the prompt builder how to
+      // frame the context.
+      const sourceType = ["property", "data_item", "idea"].includes(rawSourceType)
+        ? rawSourceType
+        : "property";
+      void sourceTitle; // currently unused server-side; reserved for prompt enrichment
+      void campaignIdea; // already carried inside propertyData.idea by the frontend
 
       // Service health pre-flight
       if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
@@ -4854,8 +4877,33 @@ studioRouter.post(
         const { loadClientGenerationContext } = await import("./generation/clientOrchestrator.js");
         const { buildSystemPrompt, buildRegeneratePostUserPrompt, buildRegeneratePostResponseFormat } = await import("./generation/promptBuilder.js");
         const { generateStructuredContent } = await import("./generation/openai.provider.js");
+        const { findBestBlueprintForItem } = await import("./blueprint.service.js");
 
         const ctx = await loadClientGenerationContext(clientId);
+
+        // Content-asset regens get a structural blueprint (same
+        // logic as the initial generate route). Property and idea
+        // regens don't — property has its built-in playbook; idea
+        // campaigns don't have a matching data-item type.
+        let blueprint = null;
+        if (sourceType === "data_item") {
+          const dataItemType =
+            (typeof sourceDataItemType === "string" && sourceDataItemType) ||
+            (typeof propertyData?._dataItemType === "string" ? propertyData._dataItemType : null);
+          if (dataItemType) {
+            try {
+              blueprint = await findBestBlueprintForItem({
+                dataItemType,
+                channels: slot?.channel ? [slot.channel] : [],
+              });
+            } catch (err) {
+              req.log?.warn(
+                { err: err?.message, dataItemType },
+                "blueprint_lookup_failed_in_regenerate"
+              );
+            }
+          }
+        }
 
         const systemPrompt = buildSystemPrompt(ctx);
         const safeImageContext = Array.isArray(imageContext)
@@ -4864,7 +4912,24 @@ studioRouter.post(
               description: typeof img?.description === "string" ? img.description.slice(0, 100) : "",
             }))
           : null;
-        const userPrompt = buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, slot, campaignSummary, safeImageContext);
+        const userPrompt = buildRegeneratePostUserPrompt(
+          ctx,
+          propertyData,
+          campaignType,
+          slot,
+          campaignSummary,
+          safeImageContext,
+          {
+            sourceType,
+            blueprint: blueprint
+              ? {
+                  name: blueprint.name,
+                  category: blueprint.category,
+                  promptTemplate: blueprint.promptTemplate,
+                }
+              : null,
+          }
+        );
         const responseFormat = buildRegeneratePostResponseFormat();
 
         const result = await generateStructuredContent({

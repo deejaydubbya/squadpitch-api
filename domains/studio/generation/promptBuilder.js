@@ -1332,16 +1332,55 @@ export const SINGLE_POST_SCHEMA = {
  * Build the user prompt for regenerating a single campaign post.
  * Includes property details, the specific slot info, campaign context, and image context.
  */
-export function buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, slot, campaignSummary, imageContext = null) {
+export function buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, slot, campaignSummary, imageContext = null, options = {}) {
   const lines = [];
+  // Source-aware regenerate. Mirrors buildCampaignUserPrompt's
+  // contract so per-post regen works for content-asset + idea
+  // campaigns. Defaults to 'property' for legacy callers that
+  // don't pass options.sourceType.
+  const sourceType = options.sourceType === "data_item" || options.sourceType === "idea"
+    ? options.sourceType
+    : "property";
+  const blueprint = options.blueprint &&
+    typeof options.blueprint.promptTemplate === "string" &&
+    options.blueprint.promptTemplate.trim().length > 0
+    ? options.blueprint
+    : null;
 
-  // Structured property context (shared helper)
-  lines.push(`--- PROPERTY CONTEXT ---`);
+  // Non-property sources get a strong framing marker so the model
+  // doesn't invent listing details when regenerating one post for
+  // a content-asset or idea campaign.
+  if (sourceType === "data_item") {
+    lines.push(
+      `[SOURCE: CONTENT_ASSET] This post belongs to a content-asset campaign (testimonial, offer, FAQ, etc.). Use the POST CONTEXT below. DO NOT invent listing details — no addresses, prices, bedroom counts, square footage, open house dates, or property features — unless the context literally contains those values.`
+    );
+  } else if (sourceType === "idea") {
+    lines.push(
+      `[SOURCE: IDEA] This post belongs to an idea-based campaign, NOT a property listing. The POST CONTEXT below contains the user's idea. DO NOT invent listing details, addresses, prices, bedrooms, square footage, or open house dates. Stay on the campaign's idea theme.`
+    );
+  }
+
+  // Structured source context. Section header reflects source type.
+  const sectionHeader = sourceType === "property" ? "PROPERTY CONTEXT" : "POST CONTEXT";
+  lines.push(`--- ${sectionHeader} ---`);
   lines.push(...buildPropertyContextBlock(propertyData));
-  lines.push(`--- END PROPERTY CONTEXT ---`);
+  lines.push(`--- END ${sectionHeader} ---`);
 
-  // Available images (optional)
-  if (Array.isArray(imageContext) && imageContext.length > 0) {
+  // Optional structural blueprint for non-property campaigns. Same
+  // injection pattern used by buildCampaignUserPrompt.
+  if (blueprint && sourceType !== "property") {
+    lines.push(`\n--- STRUCTURE EXAMPLE (${blueprint.name}) ---`);
+    lines.push(blueprint.promptTemplate.trim());
+    lines.push(`--- END STRUCTURE EXAMPLE ---`);
+    lines.push(
+      `Use the structure example above as guidance for organization and angle, not exact wording. Adapt it to the POST CONTEXT.`,
+    );
+  }
+
+  // Available images — only meaningful for property campaigns.
+  // Content-asset / idea campaigns don't ship an `images` array
+  // from the source.
+  if (sourceType === "property" && Array.isArray(imageContext) && imageContext.length > 0) {
     lines.push(`\n--- AVAILABLE PROPERTY IMAGES ---`);
     imageContext.slice(0, 8).forEach((img, idx) => {
       const label = (img.label || "photo").replace(/_/g, " ");
@@ -1374,17 +1413,35 @@ export function buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, s
     lines.push(`--- END CAMPAIGN CONTEXT ---`);
   }
 
+  // Source-specific "use real details" rule. Property campaigns
+  // are anchored to a listing's real fields; content-asset / idea
+  // campaigns derive truth from the post context block above.
+  const detailRule =
+    sourceType === "property"
+      ? "- Use REAL details from the property — never invent or assume"
+      : sourceType === "data_item"
+        ? "- Use REAL details from the POST CONTEXT — never invent. Do not introduce a property/listing if the context doesn't describe one."
+        : "- Stay on the campaign's idea theme from the POST CONTEXT — never invent property/listing details (address, price, beds, open house)";
+
+  // imageHint guidance: only meaningful for property campaigns,
+  // where an image manifest is provided above. For non-property
+  // sources tell the model to leave it empty.
+  const imageHintRule =
+    sourceType === "property"
+      ? "- Suggest which property image best fits this post in `imageHint` — use the image labels provided above. If no images were provided, leave imageHint empty."
+      : "- Leave `imageHint` empty — this campaign has no property image manifest.";
+
   lines.push(`
 Generate ONE replacement post for the slot described above. It must be fresh — do not repeat hooks or angles from the other posts in the campaign.
 
 RULES:
-- Use REAL details from the property — never invent or assume
+${detailRule}
 - No cliches: "dream home", "don't miss out", "act now", "stunning", "gorgeous"
 - Soft CTAs only — never aggressive or high-pressure
 - Match the local market tone — sound like a knowledgeable local agent
 - Generate a \`bodyAlt\` — an alternate version of the body with a distinctly different hook or angle (not a minor rewording)
 - Score the opening hook 0-100 in \`hookScore\` (100 = extremely compelling, 0 = generic)
-- Suggest which property image best fits this post in \`imageHint\` — use the image labels provided above. If no images were provided, leave imageHint empty.
+${imageHintRule}
 - Set \`slotType\` to 'social_post' for social media posts, 'email' for email content, 'listing_description' for MLS/website listings.
 - Set "subject" to empty string for non-email posts
 
