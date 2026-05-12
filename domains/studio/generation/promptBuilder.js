@@ -953,6 +953,49 @@ const CAMPAIGN_TYPE_INSTRUCTIONS = {
 - CTA: "Imagine living here", "Discover this home", "Learn more"
 - Urgency: Low — focus on aspiration and desire
 - Paint a picture of life in this home and neighborhood`,
+
+  // ── Generic cross-industry types (for Content Asset + Idea sources)
+  awareness: `CAMPAIGN TYPE: AWARENESS
+- Tone: Inviting, top-of-funnel, conversational
+- Goal: Make new people aware of the brand, topic, or offer
+- CTA: "Follow for more", "Save for later", "Send this to someone who needs it"
+- Urgency: Low — focus on intrigue, not pressure
+- Lead with a clear hook that explains why this matters`,
+
+  lead_generation: `CAMPAIGN TYPE: LEAD GENERATION
+- Tone: Direct, helpful, confidence-inspiring
+- Goal: Convert viewers into inquiries, sign-ups, or DM conversations
+- CTA: "DM me to get started", "Link in bio", "Comment 'YES' for details"
+- Urgency: Medium — make the next step easy and obvious
+- Every post needs an unmistakable call-to-action`,
+
+  educational: `CAMPAIGN TYPE: EDUCATIONAL
+- Tone: Authoritative but accessible, generous, teacher-like
+- Goal: Teach the audience something useful over a sequence
+- CTA: "Save this", "Follow for more tips", "Send this to a friend"
+- Urgency: None — value-first, no hard sell
+- Each post should leave the viewer smarter than they started`,
+
+  promotion_offer: `CAMPAIGN TYPE: PROMOTION / OFFER
+- Tone: Value-driven, energetic, time-aware
+- Goal: Highlight a deal, discount, or limited-time offer
+- CTA: "Claim yours", "Use code at checkout", "Tap link to redeem"
+- Urgency: High — make the deadline / scarcity explicit
+- Lead with the offer; don't bury it`,
+
+  social_proof: `CAMPAIGN TYPE: TESTIMONIAL / SOCIAL PROOF
+- Tone: Genuine, story-led, trust-building
+- Goal: Spotlight reviews, client results, or case studies
+- CTA: "Be next", "Read the full story", "Book a chat"
+- Urgency: Low — focus on credibility, not pressure
+- Quote the customer directly when possible; never invent quotes`,
+
+  event_announcement: `CAMPAIGN TYPE: EVENT / ANNOUNCEMENT
+- Tone: Excited, inviting, attendance-focused
+- Goal: Promote an upcoming event or news moment
+- CTA: "RSVP now", "Mark your calendar", "Join us", "Spread the word"
+- Urgency: Medium-high — make the date/time unmistakable
+- Repeat key event details (date/time/where) across posts`,
 };
 
 /**
@@ -1015,16 +1058,42 @@ function buildPropertyContextBlock(data) {
   return lines;
 }
 
-export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageContext = null, slots = null) {
+export function buildCampaignUserPrompt(ctx, listingData, campaignType, imageContext = null, slots = null, options = {}) {
   const lines = [];
+  // What kind of source is feeding this campaign? Property is the
+  // legacy real-estate path; data_item is a saved Content Asset
+  // (testimonial, offer, service, etc.); idea is freeform user text.
+  // Defaults to property for legacy callers that don't pass it.
+  const sourceType = options.sourceType === "data_item" || options.sourceType === "idea"
+    ? options.sourceType
+    : "property";
 
-  // Structured property context
-  lines.push(`--- PROPERTY CONTEXT ---`);
+  // For non-property sources, prepend a strong framing marker so the
+  // model doesn't invent listing details (prices, addresses, beds,
+  // open houses, etc.). The campaign generator's response schema +
+  // existing prompt language are listing-focused; this header
+  // re-anchors the LLM.
+  if (sourceType === "data_item") {
+    lines.push(
+      `[SOURCE: CONTENT_ASSET] This campaign is based on a saved content asset (testimonial, article, offer, service detail, etc.). Use the CAMPAIGN CONTEXT below to write the posts. DO NOT invent any specific real-estate listing details — no addresses, prices, bedroom counts, square footage, open house dates, MLS numbers, or showings — unless the context below literally contains those values.`
+    );
+  } else if (sourceType === "idea") {
+    lines.push(
+      `[SOURCE: IDEA] This campaign is based on a freeform user idea, NOT a property listing. The CAMPAIGN CONTEXT below contains the user's idea. DO NOT invent listing details, addresses, prices, bedroom counts, square footage, open house dates, or property features. Build a multi-post campaign that develops the idea across channels.`
+    );
+  }
+
+  // Structured source context. Header reflects source type so the
+  // model has the right mental frame for what it's reading.
+  const sectionHeader = sourceType === "property" ? "PROPERTY CONTEXT" : "CAMPAIGN CONTEXT";
+  lines.push(`--- ${sectionHeader} ---`);
   lines.push(...buildPropertyContextBlock(listingData));
-  lines.push(`--- END PROPERTY CONTEXT ---`);
+  lines.push(`--- END ${sectionHeader} ---`);
 
-  // Available images (optional — from screenshot extraction)
-  if (Array.isArray(imageContext) && imageContext.length > 0) {
+  // Available images — only meaningful for property campaigns (those
+  // ship an `images` array from the listing). Data items / ideas
+  // don't have a comparable image manifest.
+  if (sourceType === "property" && Array.isArray(imageContext) && imageContext.length > 0) {
     lines.push(`\n--- AVAILABLE PROPERTY IMAGES ---`);
     imageContext.slice(0, 8).forEach((img, idx) => {
       const label = (img.label || "photo").replace(/_/g, " ");

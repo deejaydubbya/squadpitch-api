@@ -4624,10 +4624,16 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { propertyData, campaignType, imageContext, slots, dataItemId } = req.body;
+      const { propertyData, campaignType, imageContext, slots, dataItemId, sourceType: rawSourceType } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
         return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
       }
+      // Legacy clients (and the regenerate-post endpoint) don't send
+      // sourceType — default to 'property' so existing real-estate
+      // flows behave identically.
+      const sourceType = ["property", "data_item", "idea"].includes(rawSourceType)
+        ? rawSourceType
+        : "property";
 
       // Service health pre-flight
       if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
@@ -4646,19 +4652,24 @@ studioRouter.post(
         const actorSub = getAuth0Sub(req);
         req.log?.info({ clientId, userId: req.user?.id, campaignType }, "campaign_extraction_started");
 
-        // Reuse existing data item if one was selected from the property library
+        // Resolve / record the source data item.
+        //
+        //  - property + dataItemId → verify workspace ownership and reuse.
+        //  - property without dataItemId → ingest a synthetic listing
+        //    (legacy real-estate path; preserves attribution for older
+        //    callers that haven't yet wired up the new source picker).
+        //  - data_item → must come with a dataItemId; verify ownership.
+        //  - idea → no data item is created (the prompt receives the
+        //    raw idea text via propertyData).
         let resolvedDataItemId = null;
         if (dataItemId && typeof dataItemId === "string") {
-          // Verify the data item belongs to this workspace
           const existing = await prisma.workspaceDataItem.findFirst({
             where: { id: dataItemId, clientId },
             select: { id: true },
           });
           if (existing) resolvedDataItemId = existing.id;
         }
-
-        // Only ingest a new data item if we don't have an existing one
-        if (!resolvedDataItemId) {
+        if (sourceType === "property" && !resolvedDataItemId) {
           const derivedTitle = propertyData.title
             || propertyData.name
             || (propertyData.year && propertyData.make && propertyData.model
@@ -4701,7 +4712,7 @@ studioRouter.post(
               description: typeof img?.description === "string" ? img.description.slice(0, 100) : "",
             }))
           : null;
-        const userPrompt = buildCampaignUserPrompt(ctx, propertyData, campaignType, safeImageContext, slots);
+        const userPrompt = buildCampaignUserPrompt(ctx, propertyData, campaignType, safeImageContext, slots, { sourceType });
         const responseFormat = buildCampaignResponseFormat();
 
         const result = await generateStructuredContent({
