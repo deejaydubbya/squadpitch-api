@@ -4,12 +4,21 @@ primary_region = "ord"
 [build]
 
 [deploy]
-  # Run pending Prisma migrations before swapping in the new release.
-  # Fly spawns a temporary release machine, runs this command, and
-  # only proceeds with the rolling restart if it exits zero. This is
-  # the supported pattern in place of boot-time migrations, which
-  # would race when multiple machines come up in parallel.
-  release_command = "npx prisma migrate deploy"
+  # Runs on the temporary release machine before the rolling restart.
+  # If it exits non-zero, the deploy aborts and the prior release
+  # keeps serving traffic.
+  #
+  # Two steps chained with &&:
+  #   1. npx prisma migrate deploy — apply any pending migrations.
+  #      The supported pattern in place of boot-time migrations,
+  #      which would race when multiple machines come up.
+  #   2. node scripts/backfillCampaigns.js — idempotent backfill of
+  #      Campaign rows for legacy Draft.campaignId strings. Skips
+  #      groups that already have a Campaign row, so after the
+  #      first successful run this is a cheap no-op on every
+  #      subsequent deploy (and a safety net against any future
+  #      code path that generates an orphan campaignId).
+  release_command = "npx prisma migrate deploy && node scripts/backfillCampaigns.js"
 
 [http_service]
   internal_port = 8080
