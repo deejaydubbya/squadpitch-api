@@ -48,6 +48,22 @@ export const env = {
   // Token encryption (base64-encoded 32 bytes for AES-256-GCM)
   TOKEN_ENCRYPTION_KEY: process.env.TOKEN_ENCRYPTION_KEY,
 
+  // SquadSites — public runtime integration (Phase B).
+  // PUBLIC_SITES_BASE_DOMAIN is the hostname suffix the resolve
+  // endpoint accepts. Must match the value set on the
+  // squadpitch-public runtime (default "squadpitchsites.com").
+  PUBLIC_SITES_BASE_DOMAIN: process.env.PUBLIC_SITES_BASE_DOMAIN || "squadpitchsites.com",
+  // RUNTIME_REVALIDATE_URL points at the squadpitch-public
+  // /api/revalidate endpoint so the API can drop cached pages
+  // immediately on publish. Token must match the value the
+  // runtime expects (same secret on both apps).
+  RUNTIME_REVALIDATE_URL: process.env.RUNTIME_REVALIDATE_URL,
+  RUNTIME_REVALIDATE_TOKEN: process.env.RUNTIME_REVALIDATE_TOKEN,
+  // Salt used by FormSubmission IP hashing. Must match the
+  // runtime's RUNTIME_IP_SALT so dedupe + abuse tracking work
+  // across both sides. Generate with: openssl rand -base64 32
+  RUNTIME_IP_SALT: process.env.RUNTIME_IP_SALT,
+
   // TikTok
   TIKTOK_CLIENT_KEY: process.env.TIKTOK_CLIENT_KEY,
   TIKTOK_CLIENT_SECRET: process.env.TIKTOK_CLIENT_SECRET,

@@ -190,6 +190,7 @@ model Client {
   brandPersona      BrandPersona?
   contentPreferences ContentPreferences?
   campaigns         Campaign[]
+  site              Site?
   channelSettings   ChannelSettings[]
   drafts            Draft[]
   moderationLogs    ModerationLog[]
@@ -339,11 +340,136 @@ model Campaign {
   client            Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
   sourceDataItem    WorkspaceDataItem? @relation("CampaignSourceDataItem", fields: [sourceDataItemId], references: [id], onDelete: SetNull)
   drafts            Draft[]
+  sitePages         SitePage[]
 
   @@index([clientId, status])
   @@index([clientId, createdAt])
   @@index([sourceDataItemId])
   @@map("campaigns")
+}
+
+// ── SquadSites ────────────────────────────────────────────────────────
+//
+// First-class models for the SquadSites public runtime
+// (squadpitch-public, served at [client].squadpitchsites.com).
+// Phase B implementation: data model + read endpoints + form
+// intake. Phase C adds the page builder UI in squadpitch-web.
+//
+// Constraint per the user: form submissions are stored only.
+// No Conversation/Inbox models are created here — that's a
+// separate later phase.
+
+enum SiteStatus {
+  DRAFT
+  PUBLISHED
+  UNPUBLISHED
+}
+
+enum PageStatus {
+  DRAFT
+  PUBLISHED
+  UNPUBLISHED
+}
+
+enum SubmissionStatus {
+  NEW
+  PROCESSED
+  SPAM
+}
+
+model Site {
+  // MVP: one Site per workspace (enforced by the unique
+  // constraint on clientId). Multi-site comes in a later phase.
+  id               String     @id @default(cuid())
+  clientId         String     @unique
+  status           SiteStatus @default(DRAFT)
+  themeJson        Json?
+  faviconUrl       String?
+  ogDefaultImageId String?
+  createdBy        String
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  client           Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  pages            SitePage[]
+  forms            LeadForm[]
+
+  @@index([clientId, status])
+  @@map("sites")
+}
+
+model SitePage {
+  id              String     @id @default(cuid())
+  siteId          String
+  clientId        String                                    // denormalized for fast public lookup
+  slug            String                                    // URL path segment
+  campaignId      String?
+  title           String
+  description     String?
+  status          PageStatus @default(DRAFT)
+  blocksJson      Json                                      // [{ type, ...config }]
+  heroImageId     String?
+  seoTitle        String?
+  seoDescription  String?
+  ogImageId       String?
+  revalidateSec   Int        @default(60)                   // per-page ISR window
+  publishedAt     DateTime?
+  createdBy       String
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  site            Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  campaign        Campaign?  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@unique([clientId, slug])
+  @@index([clientId, status])
+  @@index([campaignId])
+  @@map("site_pages")
+}
+
+model LeadForm {
+  id            String   @id @default(cuid())
+  siteId        String
+  clientId      String                                      // denormalized
+  name          String
+  fieldsJson    Json                                        // [{ key, label, type, required, options? }]
+  successAction Json                                        // { type: 'message' | 'redirect', message?, url? }
+  notifyEmail   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  site          Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  submissions   FormSubmission[]
+
+  @@index([clientId])
+  @@map("lead_forms")
+}
+
+model FormSubmission {
+  id            String           @id @default(cuid())
+  formId        String
+  clientId      String                                      // denormalized for query speed + retention
+  campaignId    String?
+  pageId        String?
+  dataJson      Json
+  // Extracted from dataJson for query speed + future Inbox
+  // contact lookup. Best-effort — may be null if the form has
+  // no email/phone field.
+  contactEmail  String?
+  contactPhone  String?
+  // SHA-256(ip + RUNTIME_IP_SALT). Never store the raw IP.
+  ipHash        String?
+  userAgent     String?                                     // truncated to 500 chars at write time
+  referer       String?
+  status        SubmissionStatus @default(NEW)
+  createdAt     DateTime         @default(now())
+
+  form          LeadForm         @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, status])
+  @@index([formId, createdAt])
+  @@index([campaignId])
+  @@map("form_submissions")
 }
 
 model MediaProfile {

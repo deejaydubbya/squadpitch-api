@@ -93,4 +93,9 @@ describe("API route module boot smoke", () => {
     const mod = await import("../domains/industry/industry.routes.js");
     expect(mod.industryRouter).toBeTruthy();
   });
+
+  it("sites/public.routes loads without import errors", async () => {
+    const mod = await import("../domains/sites/public.routes.js");
+    expect(mod.publicSitesRouter).toBeTruthy();
+  });
 });

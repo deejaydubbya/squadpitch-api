@@ -16,6 +16,7 @@ import { conversionPublicRouter } from "./domains/studio/conversion.routes.js";
 import { billingRouter } from "./domains/billing/billing.routes.js";
 import { notificationRouter, notificationPublicRouter } from "./domains/notifications/notification.routes.js";
 import { metaThreadsWebhookRouter } from "./domains/integrations/metaThreadsWebhook.routes.js";
+import { publicSitesRouter } from "./domains/sites/public.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
 import { webhookRouter } from "./domains/notifications/webhook.routes.js";
 import { integrationRouter } from "./domains/integrations/integration.routes.js";
@@ -143,6 +144,13 @@ app.use(conversionPublicRouter);
 // signed_request HMAC inside the router). Must mount before the
 // /api auth middleware below.
 app.use(metaThreadsWebhookRouter);
+
+// SquadSites public surface — un-authed by design. Used by
+// squadpitch-public to resolve pages and accept form
+// submissions. Must mount BEFORE the /api auth middleware so
+// the resolve + form-submit routes don't get caught by
+// requireAuth.
+app.use(publicSitesRouter);
 
 // Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
 app.use("/api", (req, res, next) => {

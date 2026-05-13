@@ -12,7 +12,8 @@
     "db:migrate": "npx prisma migrate deploy",
     "db:backfill-campaigns": "node scripts/backfillCampaigns.js",
     "db:backfill-campaigns:dry": "node scripts/backfillCampaigns.js --dry-run",
-    "db:seed-flags": "node scripts/seedFlags.js"
+    "db:seed-flags": "node scripts/seedFlags.js",
+    "db:seed-test-site": "node scripts/seedTestSite.js"
   },
   "dependencies": {
     "@fal-ai/client": "^1.2.0",
