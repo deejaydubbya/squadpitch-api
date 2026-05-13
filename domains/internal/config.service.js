@@ -216,6 +216,42 @@ const SEED_FLAGS = [
     category: "ops",
     scope: "global",
   },
+  // ── Suite modules (foundation prompt 04) ───────────────────────────
+  // Each starts disabled-everywhere — admins flip the targetIds list
+  // to roll out a workspace to the new shells. Once we promote a
+  // module to general availability, flip to scope='global' +
+  // enabled=true. Default scope is 'targeted' with empty targetIds
+  // so the modules stay hidden until explicit opt-in.
+  {
+    key: "suite.sites",
+    name: "Suite: Sites",
+    description:
+      "Show the Sites module entry + placeholder shell. Public runtime serves at [client].squadpitchsites.com.",
+    category: "feature",
+    scope: "targeted",
+    targetType: "workspace",
+    targetIds: [],
+  },
+  {
+    key: "suite.inbox",
+    name: "Suite: Inbox",
+    description:
+      "Show the Inbox module entry + placeholder shell. Currently surfaces form submissions only (no social DMs yet).",
+    category: "feature",
+    scope: "targeted",
+    targetType: "workspace",
+    targetIds: [],
+  },
+  {
+    key: "suite.ads",
+    name: "Suite: Ads",
+    description:
+      "Show the Ads module entry + placeholder shell. MVP is export-only (no live ad-platform launch).",
+    category: "feature",
+    scope: "targeted",
+    targetType: "workspace",
+    targetIds: [],
+  },
 ];
 
 export async function seedFlags() {

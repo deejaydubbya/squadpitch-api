@@ -139,6 +139,7 @@ import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runSchedul
 import { getContentPreferences, updateContentPreferences } from "./contentPreferences.service.js";
 import { zonedLocalToUtc, bumpToNextAllowedDay, getClientTimezone } from "../../lib/timezone.js";
 import { initialCampaignStatus, formatCampaign } from "./campaign.service.js";
+import { evaluateFlag } from "../internal/config.service.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
@@ -4316,6 +4317,36 @@ studioRouter.get(
         return sendError(res, 403, "FORBIDDEN", "You don't have access to this campaign");
       }
       res.json({ campaign: formatCampaign(row) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Suite Feature Flags ───────────────────────────────────────────────
+//
+// Workspace-scoped read endpoint that returns the active state of
+// each suite-module feature flag (Sites, Inbox, Ads). The
+// dashboard sidebar + module shells gate visibility off these
+// values. Evaluated server-side via the existing
+// configService.evaluateFlag() helper, which already supports
+// per-workspace targeting + global enablement + rollout
+// percentages.
+//
+// Returns a flat shape so the web client doesn't have to
+// re-parse — one query, three booleans.
+studioRouter.get(
+  `${BASE}/workspaces/:id/suite-flags`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const ctx = { workspaceId: req.params.id, userId: req.user?.id };
+      const [sites, inbox, ads] = await Promise.all([
+        evaluateFlag("suite.sites", ctx),
+        evaluateFlag("suite.inbox", ctx),
+        evaluateFlag("suite.ads", ctx),
+      ]);
+      res.json({ sites, inbox, ads });
     } catch (err) {
       next(err);
     }
