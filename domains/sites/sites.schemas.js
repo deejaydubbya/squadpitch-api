@@ -1,0 +1,178 @@
+// Zod schemas for the authenticated SquadSites dashboard API.
+//
+// These are workspace-owner-only routes; the body shapes here are
+// stricter than the public /resolve payload because the dashboard
+// writes back into the database. Block + form-field shapes match
+// what the public runtime expects to render.
+
+import { z } from "zod";
+
+const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,127}[a-z0-9])?$/;
+const FIELD_KEY_PATTERN = /^[a-z][a-z0-9_]{0,39}$/;
+
+export const SiteStatusEnum = z.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+export const PageStatusEnum = z.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
+export const SubmissionStatusEnum = z.enum(["NEW", "RESOLVED", "SPAM"]);
+
+// ── Blocks ──────────────────────────────────────────────────────────────
+//
+// Block shape is intentionally permissive on a per-block basis so the
+// dashboard can roll out new block types ahead of the runtime catching
+// up. The runtime block-renderer silently skips unknown block types.
+
+const HeroBlockSchema = z.object({
+  type: z.literal("hero"),
+  headline: z.string().max(240).optional().default(""),
+  subheadline: z.string().max(600).optional().default(""),
+  imageId: z.string().max(128).optional(),
+  imageUrl: z.string().url().optional(),
+});
+
+const ParagraphBlockSchema = z.object({
+  type: z.literal("paragraph"),
+  body: z.string().max(4000).optional().default(""),
+});
+
+const ImageBlockSchema = z.object({
+  type: z.literal("image"),
+  imageId: z.string().max(128).optional(),
+  imageUrl: z.string().url().optional(),
+  alt: z.string().max(240).optional().default(""),
+  caption: z.string().max(400).optional().default(""),
+});
+
+const CtaBlockSchema = z.object({
+  type: z.literal("cta"),
+  label: z.string().max(120),
+  href: z.string().url(),
+});
+
+const LeadFormBlockSchema = z.object({
+  type: z.literal("lead_form"),
+  formId: z.string().min(1).max(64),
+});
+
+const BlockSchema = z.discriminatedUnion("type", [
+  HeroBlockSchema,
+  ParagraphBlockSchema,
+  ImageBlockSchema,
+  CtaBlockSchema,
+  LeadFormBlockSchema,
+]);
+
+// ── Form field defs ─────────────────────────────────────────────────────
+
+const FormFieldTypeEnum = z.enum([
+  "text",
+  "email",
+  "phone",
+  "textarea",
+  "select",
+  "checkbox",
+]);
+
+const FormFieldSchema = z
+  .object({
+    key: z.string().regex(FIELD_KEY_PATTERN, {
+      message: "key must start with a letter and contain only lowercase letters, digits, underscores",
+    }),
+    label: z.string().min(1).max(120),
+    type: FormFieldTypeEnum,
+    required: z.boolean().optional().default(false),
+    placeholder: z.string().max(120).optional(),
+    options: z
+      .array(z.object({ value: z.string().min(1).max(80), label: z.string().min(1).max(120) }))
+      .max(50)
+      .optional(),
+  })
+  .superRefine((field, ctx) => {
+    if (field.type === "select" && (!field.options || field.options.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "select fields require at least one option",
+        path: ["options"],
+      });
+    }
+  });
+
+const SuccessActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("message"), message: z.string().min(1).max(400) }),
+  z.object({ type: z.literal("redirect"), url: z.string().url() }),
+]);
+
+// ── Site ────────────────────────────────────────────────────────────────
+
+export const UpdateSiteSchema = z.object({
+  status: SiteStatusEnum.optional(),
+  themeJson: z
+    .object({
+      accent: z.string().max(32).optional(),
+      bg: z.string().max(32).optional(),
+      fontFamily: z.string().max(80).optional(),
+    })
+    .passthrough()
+    .nullable()
+    .optional(),
+  faviconUrl: z.string().url().nullable().optional(),
+  ogDefaultImageId: z.string().max(128).nullable().optional(),
+});
+
+// ── SitePage ────────────────────────────────────────────────────────────
+
+export const CreatePageSchema = z.object({
+  slug: z.string().min(1).max(128).regex(SLUG_PATTERN, {
+    message: "slug must be lowercase alphanumeric with dashes",
+  }),
+  title: z.string().min(1).max(200),
+  description: z.string().max(400).optional(),
+  blocksJson: z.array(BlockSchema).max(80).optional().default([]),
+  campaignId: z.string().max(64).nullable().optional(),
+  heroImageId: z.string().max(128).nullable().optional(),
+  seoTitle: z.string().max(160).nullable().optional(),
+  seoDescription: z.string().max(400).nullable().optional(),
+  ogImageId: z.string().max(128).nullable().optional(),
+  revalidateSec: z.number().int().min(0).max(86400).optional(),
+});
+
+export const UpdatePageSchema = z.object({
+  slug: z.string().min(1).max(128).regex(SLUG_PATTERN).optional(),
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(400).nullable().optional(),
+  status: PageStatusEnum.optional(),
+  blocksJson: z.array(BlockSchema).max(80).optional(),
+  campaignId: z.string().max(64).nullable().optional(),
+  heroImageId: z.string().max(128).nullable().optional(),
+  seoTitle: z.string().max(160).nullable().optional(),
+  seoDescription: z.string().max(400).nullable().optional(),
+  ogImageId: z.string().max(128).nullable().optional(),
+  revalidateSec: z.number().int().min(0).max(86400).optional(),
+});
+
+// ── LeadForm ────────────────────────────────────────────────────────────
+
+export const CreateFormSchema = z.object({
+  name: z.string().min(1).max(200),
+  fieldsJson: z.array(FormFieldSchema).min(1).max(40),
+  successAction: SuccessActionSchema,
+  notifyEmail: z.string().email().nullable().optional(),
+});
+
+export const UpdateFormSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  fieldsJson: z.array(FormFieldSchema).min(1).max(40).optional(),
+  successAction: SuccessActionSchema.optional(),
+  notifyEmail: z.string().email().nullable().optional(),
+});
+
+// ── Submission ──────────────────────────────────────────────────────────
+
+export const UpdateSubmissionSchema = z.object({
+  status: SubmissionStatusEnum,
+});
+
+export const ListSubmissionsQuerySchema = z.object({
+  status: SubmissionStatusEnum.optional(),
+  formId: z.string().max(64).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional().default(50),
+  cursor: z.string().max(64).optional(),
+});

@@ -17,6 +17,7 @@ import { billingRouter } from "./domains/billing/billing.routes.js";
 import { notificationRouter, notificationPublicRouter } from "./domains/notifications/notification.routes.js";
 import { metaThreadsWebhookRouter } from "./domains/integrations/metaThreadsWebhook.routes.js";
 import { publicSitesRouter } from "./domains/sites/public.routes.js";
+import { sitesDashboardRouter } from "./domains/sites/sites.dashboard.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
 import { webhookRouter } from "./domains/notifications/webhook.routes.js";
 import { integrationRouter } from "./domains/integrations/integration.routes.js";
@@ -163,6 +164,11 @@ app.use("/api", (req, res, next) => {
 
 // Studio domain
 app.use(studioRouter);
+
+// SquadSites authenticated dashboard surface. Mounted AFTER the
+// global /api auth middleware — every route inside enforces
+// workspace ownership via requireClientOwner.
+app.use(sitesDashboardRouter);
 
 // Billing domain (webhook handler verifies via Stripe signature, not Bearer token)
 app.use(billingRouter);
