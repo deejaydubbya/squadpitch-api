@@ -18,7 +18,7 @@ primary_region = "ord"
   #      first successful run this is a cheap no-op on every
   #      subsequent deploy (and a safety net against any future
   #      code path that generates an orphan campaignId).
-  release_command = "npx prisma migrate deploy && node scripts/backfillCampaigns.js"
+  release_command = "sh -c 'npx prisma migrate deploy && node scripts/backfillCampaigns.js'"
 
 [http_service]
   internal_port = 8080
