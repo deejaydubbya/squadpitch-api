@@ -9,7 +9,9 @@
     "test:watch": "vitest",
     "db:push": "npx prisma db push",
     "db:generate": "npx prisma generate",
-    "db:migrate": "npx prisma migrate deploy"
+    "db:migrate": "npx prisma migrate deploy",
+    "db:backfill-campaigns": "node scripts/backfillCampaigns.js",
+    "db:backfill-campaigns:dry": "node scripts/backfillCampaigns.js --dry-run"
   },
   "dependencies": {
     "@fal-ai/client": "^1.2.0",

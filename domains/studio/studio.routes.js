@@ -138,6 +138,7 @@ import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus, getAutopilotReadiness, getAutopilotActivity } from "./autopilot.service.js";
 import { getContentPreferences, updateContentPreferences } from "./contentPreferences.service.js";
 import { zonedLocalToUtc, bumpToNextAllowedDay, getClientTimezone } from "../../lib/timezone.js";
+import { initialCampaignStatus } from "./campaign.service.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
@@ -5381,7 +5382,12 @@ studioRouter.post(
         const ideaSnippet = typeof campaignIdea === "string" ? truncate(campaignIdea.trim(), 60) : null;
         campaignNameRoot = ideaSnippet || "Custom";
       }
-      const campaignId = `camp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      // Campaign id — we let Prisma generate a cuid via the model's
+      // implicit string PK so new campaigns get the same id shape as
+      // every other Squadpitch entity. Legacy `camp_<ts>_<rand>` ids
+      // from before the Campaign model existed are preserved via
+      // the backfill script and remain valid (Campaign.id is just
+      // TEXT — either format coexists).
       const campaignName = campaign.campaignName || `${campaignNameRoot} — ${campaignTypeLabel}`;
       const totalPosts = campaign.posts.length;
 
@@ -5507,9 +5513,58 @@ studioRouter.post(
       //                        review gate.
       const draftStatusForUnscheduled = alwaysRequireReview ? "PENDING_REVIEW" : "DRAFT";
 
+      // Pre-compute each draft's scheduledFor up front so the
+      // Campaign row can record the actual schedule envelope
+      // (startsAt = earliest, endsAt = latest). Without this we'd
+      // have to use the stale scheduleAnchor, which doesn't account
+      // for the per-slot day-of-week bump from preferredPostingDays.
+      const scheduledForByIdx = campaign.posts.map((post, idx) =>
+        computeScheduledDate(post.campaignDay || idx + 1),
+      );
+      const scheduledDates = scheduledForByIdx.filter((d) => d != null);
+      const campaignStartsAt = scheduledDates.length > 0
+        ? new Date(Math.min(...scheduledDates.map((d) => d.getTime())))
+        : null;
+      const campaignEndsAt = scheduledDates.length > 0
+        ? new Date(Math.max(...scheduledDates.map((d) => d.getTime())))
+        : null;
+
+      // Promote Campaign to a first-class row before the draft
+      // batch lands. New campaigns receive a cuid via Prisma; the
+      // existing `Draft.warnings` source tags are still written
+      // (back-compat) so any reader that hasn't migrated to
+      // Campaign.sourceType/etc. keeps working.
+      const campaignRow = await prisma.campaign.create({
+        data: {
+          // id omitted — Prisma generates a cuid via the model's
+          // @default(cuid()). Backfill rows pass an explicit id to
+          // preserve legacy `camp_<ts>_<rand>` strings.
+          clientId,
+          name: campaignName,
+          campaignType: campaignType || "just_listed",
+          sourceType,
+          sourceDataItemId: sourceType === "data_item" ? dataItemId ?? null : (sourceType === "property" ? dataItemId ?? null : null),
+          sourceTitle:
+            sourceType === "property"
+              ? propertyData?.address ?? propertyData?.title ?? sourceTitle ?? null
+              : sourceType === "data_item"
+                ? sourceTitle ?? null
+                : null,
+          campaignIdea:
+            sourceType === "idea" && typeof campaignIdea === "string"
+              ? campaignIdea.trim() || null
+              : null,
+          status: initialCampaignStatus({ addToPlanner, alwaysRequireReview }),
+          startsAt: campaignStartsAt,
+          endsAt: campaignEndsAt,
+          createdBy: req.user.id,
+        },
+      });
+      const campaignId = campaignRow.id;
+
       const drafts = await Promise.all(
         campaign.posts.map((post, idx) => {
-          const scheduledFor = computeScheduledDate(post.campaignDay || idx + 1);
+          const scheduledFor = scheduledForByIdx[idx];
           return prisma.draft.create({
             data: {
               clientId,

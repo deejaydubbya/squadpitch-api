@@ -189,6 +189,7 @@ model Client {
   mediaProfile      MediaProfile?
   brandPersona      BrandPersona?
   contentPreferences ContentPreferences?
+  campaigns         Campaign[]
   channelSettings   ChannelSettings[]
   drafts            Draft[]
   moderationLogs    ModerationLog[]
@@ -285,6 +286,63 @@ model ContentPreferences {
   client                   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@map("content_preferences")
+}
+
+// First-class Campaign rows. Until now campaigns were an implicit
+// grouping reconstructed from Draft.campaignId / Name / Type. This
+// table promotes Campaign to its own entity so future Squadpitch
+// modules (Sites, Ads, Inbox) can attach to a campaign cleanly.
+//
+// In this phase Draft.campaignId remains a plain String — backfill
+// populates a Campaign row for every existing distinct campaignId,
+// and the FK is added in a follow-up migration once production
+// backfill is verified.
+enum CampaignStatus {
+  DRAFT
+  PENDING_REVIEW
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  ARCHIVED
+  FAILED
+}
+
+model Campaign {
+  // Prisma's @default(cuid()) generates ids for new rows; the
+  // backfill script overrides this by passing an explicit `id`
+  // equal to the existing Draft.campaignId string (e.g.
+  // "camp_1759939200000_a3b9z2"), so legacy and new ids coexist.
+  // The column itself is just TEXT and accepts either format.
+  id                String          @id @default(cuid())
+  clientId          String
+  name              String
+  campaignType      String                              // free-form, matches Draft.campaignType
+  /* Source attribution. Plans 02/04 persisted these into
+     Draft.warnings as key:value tags; promoting them to typed
+     columns lets Sites / Ads / Inbox read source attribution
+     without parsing warnings. Existing Draft.warnings writes are
+     preserved in this phase. */
+  sourceType        String?                             // 'property' | 'data_item' | 'idea'
+  sourceDataItemId  String?
+  sourceTitle       String?
+  campaignIdea      String?         @db.Text
+  status            CampaignStatus  @default(DRAFT)
+  startsAt          DateTime?
+  endsAt            DateTime?
+  metadataJson      Json?
+  // Nullable so backfill never fails on a missing first-draft
+  // createdBy. New campaigns set this to the acting user id.
+  createdBy         String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  client            Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sourceDataItem    WorkspaceDataItem? @relation("CampaignSourceDataItem", fields: [sourceDataItemId], references: [id], onDelete: SetNull)
+
+  @@index([clientId, status])
+  @@index([clientId, createdAt])
+  @@index([sourceDataItemId])
+  @@map("campaigns")
 }
 
 model MediaProfile {
@@ -1042,6 +1100,7 @@ model WorkspaceDataItem {
   dataSource     WorkspaceDataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
   contentSources GeneratedContentSource[]
   performance    DataItemPerformance?
+  campaigns      Campaign[]               @relation("CampaignSourceDataItem")
 
   @@index([clientId, status])
   @@index([clientId, type])
