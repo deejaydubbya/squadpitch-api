@@ -338,6 +338,7 @@ model Campaign {
 
   client            Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
   sourceDataItem    WorkspaceDataItem? @relation("CampaignSourceDataItem", fields: [sourceDataItemId], references: [id], onDelete: SetNull)
+  drafts            Draft[]
 
   @@index([clientId, status])
   @@index([clientId, createdAt])
@@ -473,6 +474,12 @@ model Draft {
   updatedAt            DateTime    @updatedAt
 
   client               Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // Draft.campaignId became a real FK in Phase 4 of the Campaign
+  // model promotion. The historical `camp_<ts>_<rand>` strings and
+  // the new cuid-based ids both live in this column — Campaign.id
+  // is TEXT and accepts either. SetNull preserves publishing
+  // history if a campaign is later archived/deleted.
+  campaign             Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   moderationLogs       ModerationLog[]
   mediaAssets          MediaAsset[]
   draftAssets          DraftAsset[]
