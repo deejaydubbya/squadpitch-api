@@ -12,6 +12,7 @@ import {
 import {
   inferStatusFromDraftStatuses,
   initialCampaignStatus,
+  formatCampaign,
 } from "../domains/studio/campaign.service.js";
 
 describe("parseDraftSourceMeta", () => {
@@ -205,5 +206,73 @@ describe("initialCampaignStatus", () => {
     expect(initialCampaignStatus({ addToPlanner: false })).toBe(
       "PENDING_REVIEW",
     );
+  });
+});
+
+describe("formatCampaign", () => {
+  const sampleRow = {
+    id: "camp_1234567890_abcdef",
+    clientId: "client_abc",
+    name: "508 King George Court — just listed",
+    campaignType: "just_listed",
+    sourceType: "property",
+    sourceDataItemId: "item_123",
+    sourceTitle: "508 King George Court",
+    campaignIdea: null,
+    status: "SCHEDULED",
+    startsAt: new Date("2026-05-13T14:00:00Z"),
+    endsAt: new Date("2026-05-20T14:00:00Z"),
+    metadataJson: null,
+    createdBy: "user_42",
+    createdAt: new Date("2026-05-01T10:00:00Z"),
+    updatedAt: new Date("2026-05-01T10:00:00Z"),
+  };
+
+  it("returns null when row is null", () => {
+    expect(formatCampaign(null)).toBeNull();
+    expect(formatCampaign(undefined)).toBeNull();
+  });
+
+  it("serializes a fully-populated row to ISO date strings", () => {
+    const result = formatCampaign(sampleRow);
+    expect(result).not.toBeNull();
+    expect(result.startsAt).toBe("2026-05-13T14:00:00.000Z");
+    expect(result.endsAt).toBe("2026-05-20T14:00:00.000Z");
+    expect(result.createdAt).toBe("2026-05-01T10:00:00.000Z");
+  });
+
+  it("preserves the canonical fields the web client expects", () => {
+    const result = formatCampaign(sampleRow);
+    expect(result.id).toBe(sampleRow.id);
+    expect(result.clientId).toBe(sampleRow.clientId);
+    expect(result.name).toBe(sampleRow.name);
+    expect(result.campaignType).toBe("just_listed");
+    expect(result.sourceType).toBe("property");
+    expect(result.sourceTitle).toBe("508 King George Court");
+    expect(result.status).toBe("SCHEDULED");
+    expect(result.createdBy).toBe("user_42");
+  });
+
+  it("nullifies missing optional fields rather than emitting undefined", () => {
+    const minimal = {
+      ...sampleRow,
+      sourceType: null,
+      sourceDataItemId: null,
+      sourceTitle: null,
+      campaignIdea: null,
+      startsAt: null,
+      endsAt: null,
+      metadataJson: null,
+      createdBy: null,
+    };
+    const result = formatCampaign(minimal);
+    expect(result.sourceType).toBeNull();
+    expect(result.sourceDataItemId).toBeNull();
+    expect(result.sourceTitle).toBeNull();
+    expect(result.campaignIdea).toBeNull();
+    expect(result.startsAt).toBeNull();
+    expect(result.endsAt).toBeNull();
+    expect(result.metadataJson).toBeNull();
+    expect(result.createdBy).toBeNull();
   });
 });

@@ -138,7 +138,7 @@ import { invalidateClientContext } from "./generation/clientOrchestrator.js";
 import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus, getAutopilotReadiness, getAutopilotActivity } from "./autopilot.service.js";
 import { getContentPreferences, updateContentPreferences } from "./contentPreferences.service.js";
 import { zonedLocalToUtc, bumpToNextAllowedDay, getClientTimezone } from "../../lib/timezone.js";
-import { initialCampaignStatus } from "./campaign.service.js";
+import { initialCampaignStatus, formatCampaign } from "./campaign.service.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
@@ -4245,6 +4245,77 @@ studioRouter.patch(
       });
 
       res.json({ settings: { autoGenerateOnImport: parsed.data.autoGenerateOnImport } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ── Campaigns ─────────────────────────────────────────────────────────
+//
+// Read-only endpoints for the new first-class Campaign rows.
+// save-drafts creates Campaign records; this surface lets the
+// Planner, Dashboard, and future Sites/Ads modules read canonical
+// campaign metadata when present (falling back to the Draft
+// denorm fields when not).
+
+/**
+ * GET /api/v1/workspaces/:id/campaigns
+ *
+ * Optional ?status=… filter restricts to one CampaignStatus value;
+ * otherwise returns every campaign in the workspace ordered by
+ * createdAt desc.
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/campaigns`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const where = { clientId: req.params.id };
+      if (typeof req.query.status === "string" && req.query.status) {
+        where.status = req.query.status;
+      }
+      const rows = await prisma.campaign.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+      });
+      res.json({ campaigns: rows.map(formatCampaign) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/campaigns/:id
+ *
+ * Single-campaign read. Loads the row, verifies workspace
+ * ownership against the requesting user, then returns the
+ * serialized Campaign. 404 when missing; 403 when the campaign
+ * belongs to another workspace.
+ */
+studioRouter.get(
+  `${BASE}/campaigns/:id`,
+  async (req, res, next) => {
+    try {
+      const row = await prisma.campaign.findUnique({
+        where: { id: req.params.id },
+      });
+      if (!row) {
+        return sendError(res, 404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
+      }
+      // Manual ownership check — the requireClientOwner middleware
+      // keys off :id meaning workspace id, not campaign id, so we
+      // load the row first and check clientId against the user's
+      // owned workspaces.
+      const client = await prisma.client.findUnique({
+        where: { id: row.clientId },
+        select: { createdBy: true },
+      });
+      if (!client || client.createdBy !== req.user.id) {
+        return sendError(res, 403, "FORBIDDEN", "You don't have access to this campaign");
+      }
+      res.json({ campaign: formatCampaign(row) });
     } catch (err) {
       next(err);
     }

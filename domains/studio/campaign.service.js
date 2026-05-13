@@ -59,3 +59,29 @@ export function initialCampaignStatus({ addToPlanner, alwaysRequireReview }) {
   if (addToPlanner) return "SCHEDULED";
   return alwaysRequireReview === false ? "DRAFT" : "PENDING_REVIEW";
 }
+
+/**
+ * Serialize a Campaign row to the API shape consumed by the web
+ * client. Stable shape so the frontend interface in
+ * squadpitch-web/src/hooks/useSquadpitch.ts can rely on it.
+ */
+export function formatCampaign(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    clientId: row.clientId,
+    name: row.name,
+    campaignType: row.campaignType,
+    sourceType: row.sourceType ?? null,
+    sourceDataItemId: row.sourceDataItemId ?? null,
+    sourceTitle: row.sourceTitle ?? null,
+    campaignIdea: row.campaignIdea ?? null,
+    status: row.status,
+    startsAt: row.startsAt ? row.startsAt.toISOString() : null,
+    endsAt: row.endsAt ? row.endsAt.toISOString() : null,
+    metadataJson: row.metadataJson ?? null,
+    createdBy: row.createdBy ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
