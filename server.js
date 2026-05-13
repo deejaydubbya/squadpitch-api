@@ -146,7 +146,7 @@ app.use(conversionPublicRouter);
 app.use(metaThreadsWebhookRouter);
 
 // SquadSites public surface — un-authed by design. Used by
-// squadpitch-public to resolve pages and accept form
+// squadpitch-sites to resolve pages and accept form
 // submissions. Must mount BEFORE the /api auth middleware so
 // the resolve + form-submit routes don't get caught by
 // requireAuth.

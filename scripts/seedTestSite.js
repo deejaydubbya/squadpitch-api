@@ -114,7 +114,7 @@ async function main() {
       type: "hero",
       headline: `Welcome to ${client.name || clientSlug}`,
       subheadline:
-        "This is a Phase B test page served by squadpitch-public. The runtime fetched this content from /api/v1/public/sites/resolve, then rendered the blocks below.",
+        "This is a Phase B test page served by squadpitch-sites. The runtime fetched this content from /api/v1/public/sites/resolve, then rendered the blocks below.",
     },
     {
       type: "paragraph",

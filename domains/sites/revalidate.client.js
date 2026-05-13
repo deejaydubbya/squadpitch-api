@@ -1,4 +1,4 @@
-// Bridge from squadpitch-api → squadpitch-public's revalidate
+// Bridge from squadpitch-api → squadpitch-sites's revalidate
 // webhook. Called whenever a SitePage transitions to
 // PUBLISHED / UNPUBLISHED, or its content changes after publish,
 // so the runtime drops its cached HTML for that path

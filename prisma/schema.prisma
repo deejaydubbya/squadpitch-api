@@ -351,7 +351,7 @@ model Campaign {
 // ── SquadSites ────────────────────────────────────────────────────────
 //
 // First-class models for the SquadSites public runtime
-// (squadpitch-public, served at [client].squadpitchsites.com).
+// (squadpitch-sites, served at [client].squadpitchsites.com).
 // Phase B implementation: data model + read endpoints + form
 // intake. Phase C adds the page builder UI in squadpitch-web.
 //

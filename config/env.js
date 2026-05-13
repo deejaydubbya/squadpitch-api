@@ -51,9 +51,9 @@ export const env = {
   // SquadSites — public runtime integration (Phase B).
   // PUBLIC_SITES_BASE_DOMAIN is the hostname suffix the resolve
   // endpoint accepts. Must match the value set on the
-  // squadpitch-public runtime (default "squadpitchsites.com").
+  // squadpitch-sites runtime (default "squadpitchsites.com").
   PUBLIC_SITES_BASE_DOMAIN: process.env.PUBLIC_SITES_BASE_DOMAIN || "squadpitchsites.com",
-  // RUNTIME_REVALIDATE_URL points at the squadpitch-public
+  // RUNTIME_REVALIDATE_URL points at the squadpitch-sites
   // /api/revalidate endpoint so the API can drop cached pages
   // immediately on publish. Token must match the value the
   // runtime expects (same secret on both apps).

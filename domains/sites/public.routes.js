@@ -17,7 +17,7 @@ const BASE = "/api/v1/public";
 
 // ── GET /api/v1/public/sites/resolve ────────────────────────────────
 //
-// Used by squadpitch-public on every cache-miss render. Resolves
+// Used by squadpitch-sites on every cache-miss render. Resolves
 // host + path → page payload, gated to PUBLISHED-only content
 // and bounded to a safe-to-surface response shape.
 publicSitesRouter.get(`${BASE}/sites/resolve`, async (req, res, next) => {
