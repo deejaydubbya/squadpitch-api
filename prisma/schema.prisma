@@ -363,12 +363,14 @@ enum SiteStatus {
   DRAFT
   PUBLISHED
   UNPUBLISHED
+  ARCHIVED
 }
 
 enum PageStatus {
   DRAFT
   PUBLISHED
   UNPUBLISHED
+  ARCHIVED
 }
 
 enum SubmissionStatus {

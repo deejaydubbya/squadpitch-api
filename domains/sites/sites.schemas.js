@@ -16,8 +16,8 @@ const FIELD_KEY_PATTERN = /^[a-z][a-z0-9_]{0,39}$/;
 // created the canonical names below; an earlier Phase C revision
 // of this file accidentally used ARCHIVED / RESOLVED, which would
 // have crashed the first real status transition.
-export const SiteStatusEnum = z.enum(["DRAFT", "PUBLISHED", "UNPUBLISHED"]);
-export const PageStatusEnum = z.enum(["DRAFT", "PUBLISHED", "UNPUBLISHED"]);
+export const SiteStatusEnum = z.enum(["DRAFT", "PUBLISHED", "UNPUBLISHED", "ARCHIVED"]);
+export const PageStatusEnum = z.enum(["DRAFT", "PUBLISHED", "UNPUBLISHED", "ARCHIVED"]);
 export const SubmissionStatusEnum = z.enum(["NEW", "PROCESSED", "SPAM"]);
 
 // New in plan 02 of the SquadSites MVP — source-aware metadata.
@@ -204,4 +204,17 @@ export const ListSubmissionsQuerySchema = z.object({
   formId: z.string().max(64).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),
   cursor: z.string().max(64).optional(),
+});
+
+// ── Page generation ────────────────────────────────────────────────────
+
+export const GeneratePageSchema = z.object({
+  sourceType: SiteSourceTypeEnum,
+  // Required for non-IDEA sources; service-layer guards return a
+  // typed 400 if missing.
+  sourceId: z.string().min(1).max(64).optional(),
+  pageGoal: SitePageGoalEnum,
+  // Free-form additional context. Required for IDEA sources (the
+  // prompt IS the source), optional for the others.
+  customPrompt: z.string().max(4000).optional(),
 });
