@@ -377,6 +377,31 @@ enum SubmissionStatus {
   SPAM
 }
 
+// Source-aware metadata for SitePage. When a page is generated
+// from an existing workspace artifact (campaign, property listing,
+// content asset, idea) we record that origin so future AI
+// generation can re-use the source context, and the dashboard
+// can show "from <campaign>" attribution. Nullable on the column
+// because not every page has a single source — manually composed
+// pages have no sourceType.
+enum SiteSourceType {
+  CAMPAIGN
+  PROPERTY
+  DATA_ITEM
+  IDEA
+}
+
+// What the page is trying to accomplish. Drives default block
+// composition + AI generation tone. Optional — manually composed
+// pages can leave it null.
+enum SitePageGoal {
+  LEAD_CAPTURE
+  LISTING
+  OFFER
+  EVENT
+  CONSULTATION
+}
+
 model Site {
   // MVP: one Site per workspace (enforced by the unique
   // constraint on clientId). Multi-site comes in a later phase.
@@ -404,6 +429,19 @@ model SitePage {
   clientId        String                                    // denormalized for fast public lookup
   slug            String                                    // URL path segment
   campaignId      String?
+  // Source-aware metadata. campaignId stays for the FK relation;
+  // sourceType + sourceId generalize to non-campaign origins so
+  // a page generated from a property/data_item/idea can still
+  // record its lineage. When sourceType=CAMPAIGN we also set
+  // sourceId=campaignId so a single index covers all cases.
+  sourceType      SiteSourceType?
+  sourceId        String?
+  pageGoal        SitePageGoal?
+  // SEO directive — honored by the public runtime to emit
+  // <meta name="robots" content="noindex,nofollow"> without
+  // blocking the page render. Useful for unlisted /
+  // share-by-link-only pages.
+  noIndex         Boolean    @default(false)
   title           String
   description     String?
   status          PageStatus @default(DRAFT)
@@ -424,6 +462,7 @@ model SitePage {
   @@unique([clientId, slug])
   @@index([clientId, status])
   @@index([campaignId])
+  @@index([sourceType, sourceId])
   @@map("site_pages")
 }
 

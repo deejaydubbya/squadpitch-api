@@ -115,8 +115,12 @@ export async function resolvePublicPage({ host, path }) {
       seoDescription: true,
       ogImageId: true,
       revalidateSec: true,
+      noIndex: true,
       publishedAt: true,
       campaignId: true,
+      // Intentionally NOT selecting sourceType / sourceId / pageGoal
+      // — those are workspace-internal metadata. The public payload
+      // should only carry rendering + SEO flags.
     },
   });
   if (!page || page.status !== "PUBLISHED") return null;
@@ -163,6 +167,7 @@ export async function resolvePublicPage({ host, path }) {
       description: page.description,
       blocksJson: page.blocksJson,
       revalidateSec: page.revalidateSec,
+      noIndex: page.noIndex,
       publishedAt: page.publishedAt,
       seo: {
         title: page.seoTitle,

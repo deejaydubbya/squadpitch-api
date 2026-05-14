@@ -10,9 +10,30 @@ import { z } from "zod";
 const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,127}[a-z0-9])?$/;
 const FIELD_KEY_PATTERN = /^[a-z][a-z0-9_]{0,39}$/;
 
-export const SiteStatusEnum = z.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-export const PageStatusEnum = z.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-export const SubmissionStatusEnum = z.enum(["NEW", "RESOLVED", "SPAM"]);
+// IMPORTANT: these mirror the Prisma enums in schema.prisma. Keep
+// values in sync — Postgres will reject unknown enum values at
+// write time, which would 500 the API. The Phase B migration
+// created the canonical names below; an earlier Phase C revision
+// of this file accidentally used ARCHIVED / RESOLVED, which would
+// have crashed the first real status transition.
+export const SiteStatusEnum = z.enum(["DRAFT", "PUBLISHED", "UNPUBLISHED"]);
+export const PageStatusEnum = z.enum(["DRAFT", "PUBLISHED", "UNPUBLISHED"]);
+export const SubmissionStatusEnum = z.enum(["NEW", "PROCESSED", "SPAM"]);
+
+// New in plan 02 of the SquadSites MVP — source-aware metadata.
+export const SiteSourceTypeEnum = z.enum([
+  "CAMPAIGN",
+  "PROPERTY",
+  "DATA_ITEM",
+  "IDEA",
+]);
+export const SitePageGoalEnum = z.enum([
+  "LEAD_CAPTURE",
+  "LISTING",
+  "OFFER",
+  "EVENT",
+  "CONSULTATION",
+]);
 
 // ── Blocks ──────────────────────────────────────────────────────────────
 //
@@ -127,6 +148,10 @@ export const CreatePageSchema = z.object({
   description: z.string().max(400).optional(),
   blocksJson: z.array(BlockSchema).max(80).optional().default([]),
   campaignId: z.string().max(64).nullable().optional(),
+  sourceType: SiteSourceTypeEnum.nullable().optional(),
+  sourceId: z.string().max(64).nullable().optional(),
+  pageGoal: SitePageGoalEnum.nullable().optional(),
+  noIndex: z.boolean().optional(),
   heroImageId: z.string().max(128).nullable().optional(),
   seoTitle: z.string().max(160).nullable().optional(),
   seoDescription: z.string().max(400).nullable().optional(),
@@ -141,6 +166,10 @@ export const UpdatePageSchema = z.object({
   status: PageStatusEnum.optional(),
   blocksJson: z.array(BlockSchema).max(80).optional(),
   campaignId: z.string().max(64).nullable().optional(),
+  sourceType: SiteSourceTypeEnum.nullable().optional(),
+  sourceId: z.string().max(64).nullable().optional(),
+  pageGoal: SitePageGoalEnum.nullable().optional(),
+  noIndex: z.boolean().optional(),
   heroImageId: z.string().max(128).nullable().optional(),
   seoTitle: z.string().max(160).nullable().optional(),
   seoDescription: z.string().max(400).nullable().optional(),

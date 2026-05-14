@@ -52,6 +52,10 @@ export async function listPages(clientId) {
       description: true,
       status: true,
       campaignId: true,
+      sourceType: true,
+      sourceId: true,
+      pageGoal: true,
+      noIndex: true,
       publishedAt: true,
       createdAt: true,
       updatedAt: true,
@@ -79,6 +83,14 @@ export async function createPage(clientId, createdBy, input) {
     err.code = "SLUG_TAKEN";
     throw err;
   }
+  // If a page is created from a CAMPAIGN source, mirror sourceId
+  // back into campaignId so the existing FK relation continues to
+  // work. For non-campaign sources we leave campaignId null.
+  const sourceType = input.sourceType ?? null;
+  const sourceId = input.sourceId ?? null;
+  const derivedCampaignId =
+    input.campaignId ??
+    (sourceType === "CAMPAIGN" && sourceId ? sourceId : null);
   return prisma.sitePage.create({
     data: {
       siteId: site.id,
@@ -88,7 +100,11 @@ export async function createPage(clientId, createdBy, input) {
       description: input.description ?? null,
       status: "DRAFT",
       blocksJson: input.blocksJson || [],
-      campaignId: input.campaignId ?? null,
+      campaignId: derivedCampaignId,
+      sourceType,
+      sourceId,
+      pageGoal: input.pageGoal ?? null,
+      noIndex: input.noIndex ?? false,
       heroImageId: input.heroImageId ?? null,
       seoTitle: input.seoTitle ?? null,
       seoDescription: input.seoDescription ?? null,
@@ -134,6 +150,10 @@ export async function updatePage(clientId, pageId, patch) {
       status: patch.status,
       blocksJson: patch.blocksJson === undefined ? undefined : patch.blocksJson,
       campaignId: patch.campaignId === undefined ? undefined : patch.campaignId,
+      sourceType: patch.sourceType === undefined ? undefined : patch.sourceType,
+      sourceId: patch.sourceId === undefined ? undefined : patch.sourceId,
+      pageGoal: patch.pageGoal === undefined ? undefined : patch.pageGoal,
+      noIndex: patch.noIndex === undefined ? undefined : patch.noIndex,
       heroImageId: patch.heroImageId === undefined ? undefined : patch.heroImageId,
       seoTitle: patch.seoTitle === undefined ? undefined : patch.seoTitle,
       seoDescription:
