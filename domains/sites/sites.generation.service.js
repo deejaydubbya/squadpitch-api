@@ -209,15 +209,20 @@ export async function generatePageFromSource({
   });
 
   // 5. Fire-and-forget usage logging so we have cost telemetry.
+  // trackAiUsage is sync (it handles its own .catch internally),
+  // so don't chain a .catch here — that would crash on undefined.
+  // actionType must be an AiActionType enum value; until we add
+  // GENERATE_SITE_PAGE to the enum we lump under GENERATE_POST
+  // — the sourceType + pageGoal in metadata disambiguates.
   trackAiUsage({
     userId,
     clientId,
-    actionType: "site_page_generation",
+    actionType: "GENERATE_POST",
     model: result.model,
     promptTokens: result.usage?.prompt_tokens ?? 0,
     completionTokens: result.usage?.completion_tokens ?? 0,
-    metadata: { sourceType, pageGoal },
-  }).catch(() => {});
+    metadata: { source: "site_page", sourceType, pageGoal },
+  });
 
   // 6. Normalize the LLM output. The strict response_format makes
   //    this mostly defensive — but we still trim slugs, drop
