@@ -58,10 +58,36 @@ export async function getConversation(clientId, conversationId) {
     },
   });
   if (!row) return null;
+
+  // Page + campaign summaries for source context in the Inbox UI.
+  // No Prisma relations defined on Conversation for these FKs, so
+  // we look them up manually with a tight select whitelist —
+  // never include blocksJson, themeJson, or any other heavyweight
+  // payload. Mirrors the lookup in generateAiReply().
+  const [page, campaign] = await Promise.all([
+    row.pageId
+      ? prisma.sitePage.findUnique({
+          where: { id: row.pageId },
+          select: { id: true, title: true, slug: true, status: true },
+        })
+      : null,
+    row.campaignId
+      ? prisma.campaign.findUnique({
+          where: { id: row.campaignId },
+          select: {
+            id: true,
+            name: true,
+            campaignType: true,
+            status: true,
+          },
+        })
+      : null,
+  ]);
+
   // Stamp workspaceReadAt as a side effect of viewing — flips
   // unread to read. Caller decides whether to honor this via the
   // dedicated PATCH; here we just decorate without writing.
-  return decorateUnread(row);
+  return decorateUnread({ ...row, page, campaign });
 }
 
 function decorateUnread(conversation) {
@@ -402,7 +428,7 @@ function truncate(s, max) {
 // ── Stats for dashboard widget ─────────────────────────────────────────
 
 export async function getInboxStats(clientId) {
-  const [unreadCount, openCount] = await Promise.all([
+  const [unreadCount, openCount, spamCount, totalCount] = await Promise.all([
     prisma.conversation.count({
       where: {
         clientId,
@@ -417,6 +443,16 @@ export async function getInboxStats(clientId) {
     prisma.conversation.count({
       where: { clientId, status: "OPEN", spam: false },
     }),
+    // Spam bucket — independent of status so it stays accurate
+    // even after a closed-then-marked-spam conversation.
+    prisma.conversation.count({
+      where: { clientId, spam: true },
+    }),
+    // Total conversations in the workspace, regardless of status
+    // or spam. Powers the "Total" pill in the redesigned header.
+    prisma.conversation.count({
+      where: { clientId },
+    }),
   ]);
-  return { unreadCount, openCount };
+  return { unreadCount, openCount, spamCount, totalCount };
 }
