@@ -10,6 +10,7 @@
 // "what's safe to return publicly" contract is in one place.
 
 import { prisma } from "../../prisma.js";
+import { intakeFormSubmission } from "../inbox/inbox.intake.service.js";
 
 // Strip any port + scheme off the host so we work with a bare
 // hostname. Returns null on shapes we don't trust.
@@ -247,7 +248,7 @@ export async function createFormSubmission({
   const contactEmail = pickFieldValue(fieldDefs, fields, "email");
   const contactPhone = pickFieldValue(fieldDefs, fields, "phone");
 
-  return prisma.formSubmission.create({
+  const submission = await prisma.formSubmission.create({
     data: {
       formId: form.id,
       clientId: form.clientId,
@@ -263,6 +264,21 @@ export async function createFormSubmission({
       status: "NEW",
     },
   });
+
+  // Fire-and-forget Inbox intake. Intentionally NOT awaited so a
+  // failing inbox-side path never blocks or fails the form submit
+  // (the form-submit endpoint has its own 5/min IP rate limit, so
+  // it's perf-sensitive). The intake service is idempotent on
+  // submission.id, so the backfill script can pick up anything
+  // that fails here.
+  //
+  // MVP keeps this inline; a future Redis-backed worker would
+  // slot in by changing this single call to enqueue a job.
+  intakeFormSubmission(submission).catch((err) => {
+    console.warn("[inbox.intake] failed for submission %s: %s", submission.id, err?.message ?? err);
+  });
+
+  return submission;
 }
 
 function pickFieldValue(fieldDefs, submittedFields, wantedType) {

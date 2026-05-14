@@ -209,6 +209,8 @@ model Client {
   techStackConnections WorkspaceTechStackConnection[]
   trackableLinks       TrackableLink[]
   conversionEvents     ConversionEvent[]
+  contacts             Contact[]
+  conversations        Conversation[]
 
   @@index([status])
   @@map("clients")
@@ -511,6 +513,219 @@ model FormSubmission {
   @@index([formId, createdAt])
   @@index([campaignId])
   @@map("form_submissions")
+}
+
+// ── SquadInbox ─────────────────────────────────────────────────────────
+//
+// Lead/contact management on top of SquadSites form submissions.
+// FormSubmission rows are immutable raw event data; Inbox layers a
+// derived Contact + Conversation + Message graph that the dashboard
+// works with. The intake service is idempotent on
+// Conversation.sourceFormSubmissionId so retrying the worker (or
+// running the backfill) on an already-processed submission is a no-op.
+
+enum ContactSource {
+  FORM
+  IMPORT
+  MANUAL
+  // Social/email reserved for later phases; not used yet.
+  SOCIAL
+  EMAIL_REPLY
+}
+
+enum ContactStatus {
+  NEW
+  ENGAGED
+  QUALIFIED
+  CONVERTED
+  ARCHIVED
+}
+
+enum ConversationSource {
+  FORM
+  SOCIAL
+  EMAIL_REPLY
+  MANUAL
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  CLOSED
+  SNOOZED
+}
+
+enum ConversationParty {
+  CONTACT
+  WORKSPACE
+  SYSTEM
+}
+
+enum MessageChannel {
+  FORM_SUBMISSION
+  EMAIL
+  SMS
+  SOCIAL_DM
+  MANUAL_LOG
+}
+
+model Contact {
+  id                  String   @id @default(cuid())
+  clientId            String
+
+  // Identity. At least one of email/phone must be non-null —
+  // enforced at the service layer, not Prisma (which would require
+  // a check constraint that doesn't round-trip cleanly).
+  email               String?
+  phone               String?
+  name                String?
+
+  firstSeenVia        ContactSource @default(FORM)
+  firstSeenFormId     String?
+  firstSeenPageId     String?
+  firstSeenCampaignId String?
+
+  // Append-only metadata captured at first sight + any subsequent
+  // form fields. Service merges new entries; never overwrites.
+  enrichmentJson      Json?
+
+  // Workspace-managed labels. Distinct from per-conversation tags
+  // (deferred). Plain Postgres text[] for MVP.
+  tags                String[]
+  status              ContactStatus @default(NEW)
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  client        Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  // Per-workspace uniqueness — same email in two workspaces is
+  // two distinct Contacts (multi-tenancy).
+  @@unique([clientId, email])
+  @@unique([clientId, phone])
+  @@index([clientId, status, updatedAt])
+  @@map("contacts")
+}
+
+model Conversation {
+  id          String   @id @default(cuid())
+  clientId    String
+  contactId   String
+
+  sourceType  ConversationSource @default(FORM)
+  // 1:1 with the originating FormSubmission — unique constraint
+  // is the idempotency key for the intake service. Re-running
+  // intake on an already-converted submission is a safe no-op.
+  sourceFormSubmissionId String? @unique
+  pageId      String?
+  campaignId  String?
+
+  status      ConversationStatus @default(OPEN)
+  spam        Boolean  @default(false)
+
+  // Inbox sort + unread badging. workspaceReadAt < lastMessageAt
+  // && lastMessageFrom == CONTACT == unread.
+  lastMessageAt    DateTime
+  lastMessageFrom  ConversationParty
+  workspaceReadAt  DateTime?
+
+  // Assignee (future multi-user — currently solo workspaces leave
+  // this null). String, not FK, so it can hold either User.id or
+  // an Auth0 sub depending on the caller's convention.
+  assignedUserId   String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  client      Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  contact     Contact               @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  messages    Message[]
+  notes       ConversationNote[]
+  aiReplies   AIReplySuggestion[]
+
+  @@index([clientId, status, lastMessageAt])
+  @@index([contactId])
+  @@index([assignedUserId])
+  @@map("conversations")
+}
+
+model Message {
+  id              String   @id @default(cuid())
+  conversationId  String
+
+  // CONTACT  — inbound from the lead
+  // WORKSPACE — outbound from the agent (manual log for MVP)
+  // SYSTEM   — automated event note ("Conversation opened", etc.)
+  party           ConversationParty
+  channel         MessageChannel?
+
+  body            String   @db.Text
+
+  // Original structured payload. For FORM_SUBMISSION messages this
+  // is the form's dataJson (label→value pairs) so the UI can render
+  // a key/value strip alongside the body.
+  payloadJson     Json?
+
+  // External provider id for outbound channels (Postmark, Twilio).
+  // Unused for MVP since outbound delivery is deferred.
+  externalMessageId String?
+
+  // The user who composed an outbound/system message. Null for
+  // inbound CONTACT messages.
+  authorUserId    String?
+
+  // Provenance: which AI suggestion was accepted, if any.
+  fromSuggestionId String?
+
+  createdAt       DateTime @default(now())
+
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model ConversationNote {
+  id             String   @id @default(cuid())
+  conversationId String
+  authorUserId   String
+  body           String   @db.Text
+  createdAt      DateTime @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("conversation_notes")
+}
+
+model AIReplySuggestion {
+  id             String   @id @default(cuid())
+  conversationId String
+
+  // The message this suggestion was generated to respond to.
+  // If the contact replies again the dashboard can mark older
+  // suggestions stale.
+  forMessageId   String
+
+  body           String   @db.Text
+  tone           String?
+  model          String
+  promptTokens     Int @default(0)
+  completionTokens Int @default(0)
+
+  // When the workspace user clicked "use this" — the resulting
+  // outbound Message stamps fromSuggestionId, and we mark this
+  // row acceptedAt. Used for "how often is the AI useful"
+  // analytics later.
+  acceptedAt     DateTime?
+
+  createdAt      DateTime @default(now())
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_reply_suggestions")
 }
 
 model MediaProfile {
