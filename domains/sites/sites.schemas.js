@@ -73,12 +73,82 @@ const LeadFormBlockSchema = z.object({
   formId: z.string().min(1).max(64),
 });
 
+// Plan 03 — section/block expansion to cover the SquadSites MVP
+// section list (gallery, details, testimonial, FAQ, contact).
+// Each block's fields are length-capped + array-bounded to keep
+// the runtime renderer's surface predictable and the dashboard
+// generation prompt budget small.
+
+const GalleryBlockSchema = z.object({
+  type: z.literal("gallery"),
+  imageUrls: z.array(z.string().url()).min(1).max(20),
+  layout: z.enum(["grid", "carousel"]).optional().default("grid"),
+});
+
+const KeyDetailsBlockSchema = z.object({
+  type: z.literal("key_details"),
+  heading: z.string().max(120).optional(),
+  items: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(80),
+        value: z.string().min(1).max(240),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
+
+const TestimonialBlockSchema = z.object({
+  type: z.literal("testimonial"),
+  quote: z.string().min(1).max(800),
+  author: z.string().max(120).optional(),
+  role: z.string().max(120).optional(),
+  imageUrl: z.string().url().optional(),
+});
+
+const FaqBlockSchema = z.object({
+  type: z.literal("faq"),
+  heading: z.string().max(120).optional(),
+  items: z
+    .array(
+      z.object({
+        question: z.string().min(1).max(240),
+        answer: z.string().min(1).max(2000),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
+
+const ContactBlockSchema = z.object({
+  type: z.literal("contact"),
+  heading: z.string().max(120).optional(),
+  phone: z.string().max(40).optional(),
+  email: z.string().email().optional(),
+  address: z.string().max(400).optional(),
+  socials: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(40),
+        url: z.string().url(),
+      }),
+    )
+    .max(10)
+    .optional(),
+});
+
 const BlockSchema = z.discriminatedUnion("type", [
   HeroBlockSchema,
   ParagraphBlockSchema,
   ImageBlockSchema,
   CtaBlockSchema,
   LeadFormBlockSchema,
+  GalleryBlockSchema,
+  KeyDetailsBlockSchema,
+  TestimonialBlockSchema,
+  FaqBlockSchema,
+  ContactBlockSchema,
 ]);
 
 // ── Form field defs ─────────────────────────────────────────────────────

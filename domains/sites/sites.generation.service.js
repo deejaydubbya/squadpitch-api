@@ -43,18 +43,30 @@ const PAGE_OUTPUT_SCHEMA = {
       blocks: {
         type: "array",
         minItems: 3,
-        maxItems: 10,
+        maxItems: 12,
         items: {
           type: "object",
           properties: {
             type: {
               type: "string",
-              enum: ["hero", "paragraph", "image", "cta", "lead_form"],
+              enum: [
+                "hero",
+                "paragraph",
+                "image",
+                "cta",
+                "lead_form",
+                "key_details",
+                "testimonial",
+                "faq",
+                "contact",
+              ],
             },
             // All block-field properties are optional at the
             // schema layer — we filter and normalize per block
             // type after parse so unknown fields don't poison
-            // the runtime renderer.
+            // the runtime renderer. The LLM picks the subset
+            // that's relevant per block type (hero uses
+            // headline + subheadline, faq uses items, etc.)
             headline: { type: "string" },
             subheadline: { type: "string" },
             body: { type: "string" },
@@ -63,6 +75,26 @@ const PAGE_OUTPUT_SCHEMA = {
             imageUrl: { type: "string" },
             alt: { type: "string" },
             caption: { type: "string" },
+            heading: { type: "string" },
+            quote: { type: "string" },
+            author: { type: "string" },
+            role: { type: "string" },
+            phone: { type: "string" },
+            email: { type: "string" },
+            address: { type: "string" },
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  label: { type: "string" },
+                  value: { type: "string" },
+                  question: { type: "string" },
+                  answer: { type: "string" },
+                },
+                additionalProperties: false,
+              },
+            },
             includeLeadForm: { type: "boolean" },
           },
           required: ["type"],
@@ -448,6 +480,68 @@ function normalizeBlock(block) {
     case "lead_form":
       // The route fills in the real formId before persisting.
       return { type: "lead_form", formId: "__PENDING__" };
+    case "key_details": {
+      const items = Array.isArray(block.items)
+        ? block.items
+            .map((it) => {
+              if (!it || typeof it !== "object") return null;
+              const label = trimString(it.label, 80);
+              const value = trimString(it.value, 240);
+              if (!label || !value) return null;
+              return { label, value };
+            })
+            .filter(Boolean)
+        : [];
+      if (items.length === 0) return null;
+      return {
+        type: "key_details",
+        ...(trimString(block.heading, 120) ? { heading: trimString(block.heading, 120) } : {}),
+        items,
+      };
+    }
+    case "testimonial": {
+      const quote = trimString(block.quote, 800);
+      if (!quote) return null;
+      return {
+        type: "testimonial",
+        quote,
+        ...(trimString(block.author, 120) ? { author: trimString(block.author, 120) } : {}),
+        ...(trimString(block.role, 120) ? { role: trimString(block.role, 120) } : {}),
+        ...(block.imageUrl && isSafeUrl(block.imageUrl) ? { imageUrl: block.imageUrl } : {}),
+      };
+    }
+    case "faq": {
+      const items = Array.isArray(block.items)
+        ? block.items
+            .map((it) => {
+              if (!it || typeof it !== "object") return null;
+              const question = trimString(it.question, 240);
+              const answer = trimString(it.answer, 2000);
+              if (!question || !answer) return null;
+              return { question, answer };
+            })
+            .filter(Boolean)
+        : [];
+      if (items.length === 0) return null;
+      return {
+        type: "faq",
+        ...(trimString(block.heading, 120) ? { heading: trimString(block.heading, 120) } : {}),
+        items,
+      };
+    }
+    case "contact": {
+      const phone = trimString(block.phone, 40);
+      const email = trimString(block.email, 200);
+      const address = trimString(block.address, 400);
+      if (!phone && !email && !address) return null;
+      return {
+        type: "contact",
+        ...(trimString(block.heading, 120) ? { heading: trimString(block.heading, 120) } : {}),
+        ...(phone ? { phone } : {}),
+        ...(email ? { email } : {}),
+        ...(address ? { address } : {}),
+      };
+    }
     default:
       return null;
   }
