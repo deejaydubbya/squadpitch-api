@@ -26,10 +26,21 @@ import {
 } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 
-// JSON schema enforced by OpenAI's structured-output mode. The
-// model is required to return exactly this shape. Block enums
-// here mirror the runtime block renderers — adding a new block
-// type means updating both the runtime + this schema.
+// JSON schema passed to OpenAI's structured-output endpoint as a
+// shape hint. Block enums here mirror the runtime block
+// renderers — adding a new block type means updating both the
+// runtime + this schema.
+//
+// IMPORTANT: this schema is intentionally NOT strict-mode
+// (`strict: false` on the response_format below). The block
+// items array can contain either key_details rows ({label, value})
+// or faq rows ({question, answer}), so the inner row object
+// can't legitimately require all four keys. Strict mode insists
+// every property be in `required`, which would force the model
+// to fabricate placeholder values for the wrong block type.
+// Non-strict mode lets OpenAI use the schema as guidance; the
+// post-parse normalizer (normalizeBlock) is the real validator
+// and drops any block that doesn't have its required fields.
 const PAGE_OUTPUT_SCHEMA = {
   name: "site_page",
   schema: {
@@ -124,7 +135,7 @@ const PAGE_OUTPUT_SCHEMA = {
     required: ["title", "slug", "description", "blocks", "suggestedFormFields"],
     additionalProperties: false,
   },
-  strict: true,
+  strict: false,
 };
 
 const PAGE_GOAL_BLURB = {
