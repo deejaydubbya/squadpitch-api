@@ -65,7 +65,21 @@ const ImageBlockSchema = z.object({
 const CtaBlockSchema = z.object({
   type: z.literal("cta"),
   label: z.string().max(120),
-  href: z.string().url(),
+  // Permissive enough to cover the realistic landing-page CTA
+  // shapes: absolute URLs (https://...), relative paths
+  // (/contact), and same-page anchors (#lead-form). Strict
+  // .url() validation would reject the last two — but those
+  // are the more common CTA targets on a single-page landing
+  // page. We still hard-block javascript:/data:/vbscript:/file:
+  // schemes since rendered <a href> with one of those is an
+  // XSS surface.
+  href: z
+    .string()
+    .min(1)
+    .max(2000)
+    .refine((v) => !/^\s*(javascript|data|vbscript|file):/i.test(v), {
+      message: "CTA href cannot use javascript:, data:, vbscript:, or file: schemes",
+    }),
 });
 
 const LeadFormBlockSchema = z.object({
