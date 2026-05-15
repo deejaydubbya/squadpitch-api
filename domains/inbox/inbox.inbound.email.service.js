@@ -317,6 +317,9 @@ export async function processInboundEmail(payload) {
           party: "SYSTEM",
           channel: null,
           body: "Conversation reopened by inbound email reply.",
+          // System audit rows are workspace-only — never include
+          // them in the lead-visible thread.
+          visibility: "INTERNAL",
           createdAt: new Date(messageAt.getTime() + 1),
         },
       })

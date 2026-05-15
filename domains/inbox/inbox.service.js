@@ -11,6 +11,7 @@ import { loadClientGenerationContext } from "../studio/generation/clientOrchestr
 import { generateStructuredContent } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { emailCapabilityFor } from "./inbox.outbound.email.service.js";
+import { getAvailableReplyActions } from "./inbox.replyActions.js";
 
 // ── Conversation list + detail ─────────────────────────────────────────
 
@@ -95,10 +96,23 @@ export async function getConversation(clientId, conversationId) {
     note: { available: true, reason: null },
   };
 
+  // Channel-aware action list — richer surface than
+  // replyCapabilities. Drives the redesigned composer which
+  // renders modes from the server list rather than three
+  // hard-coded tabs. Older UI continues to work off
+  // replyCapabilities until it migrates.
+  const availableReplyActions = getAvailableReplyActions(row);
+
   // Stamp workspaceReadAt as a side effect of viewing — flips
   // unread to read. Caller decides whether to honor this via the
   // dedicated PATCH; here we just decorate without writing.
-  return decorateUnread({ ...row, page, campaign, replyCapabilities });
+  return decorateUnread({
+    ...row,
+    page,
+    campaign,
+    replyCapabilities,
+    availableReplyActions,
+  });
 }
 
 function decorateUnread(conversation) {

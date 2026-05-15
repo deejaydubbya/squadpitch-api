@@ -551,6 +551,44 @@ enum ConversationSource {
   MANUAL
 }
 
+// Per-network provider for a Conversation. Coarser sourceType
+// (FORM/SOCIAL/...) stays as the high-level bucket; provider is
+// the specific origin so the reply-action resolver can decide
+// what's actually possible (SEND_EMAIL vs REPLY_DM vs review-reply).
+// SQUADSITES covers the standard public-form intake path.
+enum ConversationProvider {
+  SQUADSITES
+  EMAIL
+  SMS
+  FACEBOOK
+  INSTAGRAM
+  GOOGLE_BUSINESS
+  YOUTUBE
+  LINKEDIN
+  X
+  TIKTOK
+  THREADS
+  PINTEREST
+  WEB_CHAT
+  MANUAL
+}
+
+// Privacy framing for an individual Message. Drives the UI's
+// channel-aware composer rendering AND filters what is safe to
+// include in AI prompts.
+//   PUBLIC   — visible to anyone who can see the source (e.g. a
+//              social comment reply that lives on the platform).
+//   PRIVATE  — between the workspace and the lead only (email,
+//              SMS, DM, form submission).
+//   INTERNAL — workspace-only; never shown to the lead. Audit
+//              SYSTEM messages and any future "private team note"
+//              flavored messages.
+enum MessageVisibility {
+  PUBLIC
+  PRIVATE
+  INTERNAL
+}
+
 enum ConversationStatus {
   OPEN
   PENDING
@@ -641,6 +679,18 @@ model Conversation {
   pageId                 String?
   campaignId             String?
 
+  // Per-network provider — finer-grained than sourceType. Drives
+  // the reply-action resolver (getAvailableReplyActions). Defaults
+  // to SQUADSITES so existing FormSubmission conversations match
+  // current production behavior after the backfill migration.
+  provider ConversationProvider @default(SQUADSITES)
+
+  // External thread/conversation id on the source provider. For
+  // social DMs this is the platform's conversation id; for email
+  // it's null because the RFC In-Reply-To chain lives on Message
+  // rows. Nullable — only set when the provider gives us one.
+  externalThreadId String?
+
   status ConversationStatus @default(OPEN)
   spam   Boolean            @default(false)
 
@@ -665,6 +715,7 @@ model Conversation {
   aiReplies AIReplySuggestion[]
 
   @@index([clientId, status, lastMessageAt])
+  @@index([clientId, provider, lastMessageAt])
   @@index([contactId])
   @@index([assignedUserId])
   @@map("conversations")
@@ -723,6 +774,20 @@ model Message {
   // conversation so different conversations can coincidentally
   // reuse a key (UUIDs make that effectively impossible anyway).
   idempotencyKey String?
+
+  // Privacy framing. PRIVATE for direct channels (email, SMS, form
+  // submissions, DMs); PUBLIC for surfaces that live on the
+  // provider (e.g. a comment-reply on a social post); INTERNAL for
+  // workspace-only audit/system rows. Defaulted to PRIVATE so
+  // existing rows backfill safely.
+  visibility MessageVisibility @default(PRIVATE)
+
+  // Public-surface link, when applicable. For a social comment
+  // this is the post URL on the platform; for an email it's null
+  // (the email itself isn't web-addressable). Used by the UI to
+  // offer "Open on Facebook" / "Open on YouTube" actions next to
+  // the message body when present.
+  sourceUrl String?
 
   createdAt DateTime @default(now())
 
