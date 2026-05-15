@@ -257,7 +257,9 @@ describe("intakeFormSubmission", () => {
     expect(result.status).toBe("created");
     const contact = [...prismaMock.state.contacts.values()][0];
     expect(contact.email).toBeNull();
-    expect(contact.phone).toBe("+15551234567");
+    // Phone is stored normalized (non-digits stripped) so future
+    // lookups match across different submission formats.
+    expect(contact.phone).toBe("15551234567");
     expect(contact.name).toBe("Bob");
   });
 
@@ -327,9 +329,9 @@ describe("intakeFormSubmission", () => {
     expect(prismaMock.state.contacts.size).toBe(1);
     const merged = [...prismaMock.state.contacts.values()][0];
     expect(merged.id).toBe(existingId);
-    // Phone is preserved (it was already the existing phone), and
-    // the previously-null email is now filled in.
-    expect(merged.phone).toBe("+15551234567");
+    // Phone is preserved in normalized form (it was already the
+    // existing phone), and the previously-null email is now filled in.
+    expect(merged.phone).toBe("15551234567");
     expect(merged.email).toBe("newperson@example.com");
     // Still creates the second conversation + initial message.
     expect(prismaMock.state.conversations.size).toBe(2);
@@ -358,7 +360,10 @@ describe("intakeFormSubmission", () => {
     expect(prismaMock.state.contacts.size).toBe(1);
     const merged = [...prismaMock.state.contacts.values()][0];
     expect(merged.email).toBe("owner@example.com"); // not overwritten
-    expect(merged.phone).toBe("+15551234567");
+    expect(merged.phone).toBe("15551234567");
+    // The newly-submitted (but ignored as primary) email is preserved
+    // as an alternate so the UI can show "Also submitted with…".
+    expect(merged.enrichmentJson?.alternateEmails).toContain("shared@example.com");
   });
 
   it("does not overwrite an existing phone when a different one arrives for the same email", async () => {
@@ -379,6 +384,114 @@ describe("intakeFormSubmission", () => {
     expect(result.status).toBe("created");
     const merged = [...prismaMock.state.contacts.values()][0];
     expect(merged.email).toBe("person@example.com");
-    expect(merged.phone).toBe("+15551111111"); // not overwritten
+    expect(merged.phone).toBe("15551111111"); // not overwritten
+    // The newly-submitted (but ignored as primary) phone is
+    // preserved as an alternate.
+    expect(merged.enrichmentJson?.alternatePhones).toContain("15552222222");
+  });
+
+  // ── Identity normalization + alternate preservation (spinstr404) ──
+
+  it("normalizes email case + phone formatting for matching", async () => {
+    // Seed contact with one form, then submit again with a
+    // different-cased email and a +-prefixed phone — both should
+    // resolve to the same Contact via normalized lookup.
+    await intakeFormSubmission(
+      makeSubmission({
+        contactEmail: "lead@example.com",
+        contactPhone: "5551234567",
+        dataJson: { email: "lead@example.com", phone: "5551234567" },
+      }),
+    );
+    expect(prismaMock.state.contacts.size).toBe(1);
+
+    const result = await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-norm",
+        contactEmail: "LEAD@EXAMPLE.COM",
+        contactPhone: "(555) 123-4567",
+        dataJson: { email: "LEAD@EXAMPLE.COM", phone: "(555) 123-4567" },
+      }),
+    );
+    expect(result.status).toBe("created");
+    // Still one contact — normalized matching collapses both forms.
+    expect(prismaMock.state.contacts.size).toBe(1);
+  });
+
+  it("FormSubmission row preserves the exact submitted email + phone (intake never touches it)", async () => {
+    // The intake service never updates FormSubmission — that table
+    // is written by sites.service.createFormSubmission. Confirm
+    // we don't accidentally call any update path that would
+    // overwrite the raw submitted values stored there.
+    const rawEmail = "Daniel.Wardlow+SquadPitch@Squadpitch.com";
+    const rawPhone = "+1 (555) 123-4567 x99";
+    const sub = makeSubmission({
+      contactEmail: rawEmail,
+      contactPhone: rawPhone,
+      dataJson: { email: rawEmail, phone: rawPhone },
+    });
+    await intakeFormSubmission(sub);
+
+    // Submission object retains the exact strings the user typed
+    // (we passed them in via fixture; nothing in intake mutates them).
+    expect(sub.contactEmail).toBe(rawEmail);
+    expect(sub.contactPhone).toBe(rawPhone);
+    // But the Contact row stores normalized values for matching.
+    const contact = [...prismaMock.state.contacts.values()][0];
+    expect(contact.email).toBe("daniel.wardlow+squadpitch@squadpitch.com");
+    expect(contact.phone).toBe("1555123456799");
+  });
+
+  it("does NOT auto-merge two contacts when only the name matches (no email/phone overlap)", async () => {
+    // First submission: name "Alice Smith", email A, phone A.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-aliceA",
+        contactEmail: "alice@one.com",
+        contactPhone: "5550001111",
+        dataJson: { name: "Alice Smith", email: "alice@one.com", phone: "5550001111" },
+      }),
+    );
+    // Second submission: SAME name, DIFFERENT email AND phone.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-aliceB",
+        contactEmail: "alice@two.com",
+        contactPhone: "5559998888",
+        dataJson: { name: "Alice Smith", email: "alice@two.com", phone: "5559998888" },
+      }),
+    );
+
+    // Two contacts — name alone never auto-merges.
+    expect(prismaMock.state.contacts.size).toBe(2);
+  });
+
+  it("a typo'd email does not overwrite an existing primary email", async () => {
+    // Seed contact with valid email + phone.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-original",
+        contactEmail: "alice@example.com",
+        contactPhone: "5551234567",
+        dataJson: { email: "alice@example.com", phone: "5551234567" },
+      }),
+    );
+
+    // Repeat submission: SAME phone, TYPO email.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-typo",
+        contactEmail: "alce@example.com", // typo
+        contactPhone: "5551234567",
+        dataJson: { email: "alce@example.com", phone: "5551234567" },
+      }),
+    );
+
+    // Phone-lookup matches the original contact. Email stays as-is
+    // (never overwritten); the typo lives in alternates.
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const merged = [...prismaMock.state.contacts.values()][0];
+    expect(merged.email).toBe("alice@example.com");
+    expect(merged.enrichmentJson?.alternateEmails).toContain("alce@example.com");
   });
 });

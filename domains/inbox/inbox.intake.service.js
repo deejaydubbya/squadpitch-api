@@ -41,12 +41,16 @@ export async function intakeFormSubmission(submission) {
   }
 
   // Contacts are keyed on (clientId, email) OR (clientId, phone).
-  // If neither is available, we can't build a Contact — skip
-  // intake but log so the SubmissionsPanel still surfaces the
-  // raw row.
+  // Skip when neither is available — OR when the values can't be
+  // normalized (e.g. a phone field that came in as "abc" with no
+  // digits). FormSubmission keeps the raw value either way; this
+  // gate only decides whether to materialize an Inbox surface.
   const email = nonEmpty(submission.contactEmail);
   const phone = nonEmpty(submission.contactPhone);
-  if (!email && !phone) {
+  const hasUsableIdentity =
+    Boolean(normalizeEmailForLookup(email)) ||
+    Boolean(normalizePhoneForLookup(phone));
+  if (!hasUsableIdentity) {
     return {
       conversationId: null,
       contactId: null,
@@ -85,24 +89,29 @@ export async function intakeFormSubmission(submission) {
 async function upsertContact({ clientId, email, phone, submission }) {
   // Identity resolution. Contact has TWO unique constraints in
   // this workspace — (clientId, email) AND (clientId, phone) — and
-  // a single new submission can collide on either. Previous version
-  // only looked up by email and then unconditionally created on
-  // miss, which P2002'd when another contact had the same phone.
+  // a single new submission can collide on either. Older versions
+  // P2002'd on the second key; the safe-merge logic below fills in
+  // missing identity fields without ever overwriting an existing
+  // primary, and preserves any DIFFERENT identity values that
+  // arrive on later submissions as alternates in enrichmentJson.
   //
-  // New rule: try email first (more stable identity), then phone.
-  // Once we have a match, do a safe-merge update that NEVER
-  // overwrites an existing identity field — only fills in nulls,
-  // and even then verifies the new value isn't already claimed by
-  // another contact in the workspace.
+  // FormSubmission.contactEmail / contactPhone keep the exact
+  // value the user typed (not normalized) — that lives in
+  // sites.service.js. We only normalize for matching + Contact-
+  // table writes here.
+  const normEmail = normalizeEmailForLookup(email);
+  const normPhone = normalizePhoneForLookup(phone);
+
+  // Lookup: email first (more stable identity), then phone.
   let existing = null;
-  if (email) {
+  if (normEmail) {
     existing = await prisma.contact.findUnique({
-      where: { clientId_email: { clientId, email } },
+      where: { clientId_email: { clientId, email: normEmail } },
     });
   }
-  if (!existing && phone) {
+  if (!existing && normPhone) {
     existing = await prisma.contact.findUnique({
-      where: { clientId_phone: { clientId, phone } },
+      where: { clientId_phone: { clientId, phone: normPhone } },
     });
   }
 
@@ -111,9 +120,9 @@ async function upsertContact({ clientId, email, phone, submission }) {
   // shows the email/phone as the headline if no name was given.
   const inferredName = pickField(submission.dataJson, ["name", "fullName", "full_name", "firstName"]);
 
-  // Merge enrichment without overwriting prior fields. The
-  // dataJson from the new submission goes into a tagged sub-key
-  // so multiple submissions accumulate.
+  // Build the enrichment update. submissions are append-only;
+  // alternate identity arrays are deduped against what's already
+  // on the existing contact (if any).
   const enrichmentMerge = {
     submissions: [
       {
@@ -129,6 +138,32 @@ async function upsertContact({ clientId, email, phone, submission }) {
   };
 
   if (existing) {
+    // Alternates: if the incoming normalized identity differs from
+    // the existing primary, append it to the alternates list so the
+    // UI can render "Also submitted with…" without overwriting the
+    // primary. Never includes the existing primary itself.
+    const existingAlts = readAlternates(existing.enrichmentJson);
+    const altEmails = [...existingAlts.emails];
+    const altPhones = [...existingAlts.phones];
+    if (
+      normEmail &&
+      existing.email &&
+      normEmail !== existing.email &&
+      !altEmails.includes(normEmail)
+    ) {
+      altEmails.push(normEmail);
+    }
+    if (
+      normPhone &&
+      existing.phone &&
+      normPhone !== existing.phone &&
+      !altPhones.includes(normPhone)
+    ) {
+      altPhones.push(normPhone);
+    }
+    enrichmentMerge.alternateEmails = altEmails;
+    enrichmentMerge.alternatePhones = altPhones;
+
     const merged = mergeEnrichment(existing.enrichmentJson, enrichmentMerge);
     const data = {
       enrichmentJson: merged,
@@ -139,20 +174,20 @@ async function upsertContact({ clientId, email, phone, submission }) {
     if (!existing.name && inferredName) data.name = inferredName;
     // Fill in a missing email — but only if no OTHER contact in
     // this workspace already claims it (would P2002 otherwise).
-    if (!existing.email && email) {
+    if (!existing.email && normEmail) {
       const taken = await prisma.contact.findFirst({
-        where: { clientId, email, id: { not: existing.id } },
+        where: { clientId, email: normEmail, id: { not: existing.id } },
         select: { id: true },
       });
-      if (!taken) data.email = email;
+      if (!taken) data.email = normEmail;
     }
     // Same check for phone.
-    if (!existing.phone && phone) {
+    if (!existing.phone && normPhone) {
       const taken = await prisma.contact.findFirst({
-        where: { clientId, phone, id: { not: existing.id } },
+        where: { clientId, phone: normPhone, id: { not: existing.id } },
         select: { id: true },
       });
-      if (!taken) data.phone = phone;
+      if (!taken) data.phone = normPhone;
     }
     return prisma.contact.update({
       where: { id: existing.id },
@@ -169,8 +204,8 @@ async function upsertContact({ clientId, email, phone, submission }) {
   return prisma.contact.create({
     data: {
       clientId,
-      email: email ?? null,
-      phone: phone ?? null,
+      email: normEmail,
+      phone: normPhone,
       name: inferredName,
       firstSeenVia: "FORM",
       firstSeenFormId: submission.formId,
@@ -274,11 +309,56 @@ function humanizeKey(key) {
 
 function mergeEnrichment(prev, next) {
   // prev may be null (first time) or an object with shape
-  // { submissions: [...], ...future-tagged-keys }.
+  // { submissions: [...], alternateEmails: [...], alternatePhones: [...],
+  // ...future-tagged-keys }.
   const base = prev && typeof prev === "object" && !Array.isArray(prev) ? prev : {};
   const submissions = Array.isArray(base.submissions) ? base.submissions : [];
-  return {
+  const merged = {
     ...base,
     submissions: [...submissions, ...(next.submissions || [])],
   };
+  // Alternates: callers compute the FULL list (existing + new),
+  // then pass it in next.alternateEmails / next.alternatePhones.
+  // We replace (not concat) so duplicates stay deduped.
+  if (Array.isArray(next.alternateEmails)) {
+    merged.alternateEmails = next.alternateEmails;
+  }
+  if (Array.isArray(next.alternatePhones)) {
+    merged.alternatePhones = next.alternatePhones;
+  }
+  return merged;
+}
+
+// Pull alternate emails/phones off a Contact.enrichmentJson. Both
+// arrays are always strings (normalized form). Tolerates missing /
+// malformed enrichment shapes.
+function readAlternates(enrichmentJson) {
+  const empty = { emails: [], phones: [] };
+  if (!enrichmentJson || typeof enrichmentJson !== "object") return empty;
+  const emails = Array.isArray(enrichmentJson.alternateEmails)
+    ? enrichmentJson.alternateEmails.filter((s) => typeof s === "string" && s.length > 0)
+    : [];
+  const phones = Array.isArray(enrichmentJson.alternatePhones)
+    ? enrichmentJson.alternatePhones.filter((s) => typeof s === "string" && s.length > 0)
+    : [];
+  return { emails, phones };
+}
+
+// Normalize an email for matching + Contact-table storage. The raw
+// user-typed value is preserved on FormSubmission.contactEmail (set
+// in sites.service.js) — never touched here.
+function normalizeEmailForLookup(email) {
+  if (typeof email !== "string") return null;
+  const trimmed = email.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+// Normalize a phone for matching + Contact-table storage. Strips
+// every non-digit character. Anything less than 7 digits is
+// treated as junk and returns null (so a "phone-only" Contact
+// isn't created on accidental garbage).
+function normalizePhoneForLookup(phone) {
+  if (typeof phone !== "string") return null;
+  const digits = phone.replace(/\D+/g, "");
+  return digits.length >= 7 ? digits : null;
 }
