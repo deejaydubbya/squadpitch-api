@@ -30,8 +30,12 @@ inboxWebhookRouter.post(
     // configurations can pick whichever it supports. See
     // verifyWebhookSecret() below.
     if (!verifyWebhookSecret(req)) {
-      // No diagnostic detail — we never log the candidate value
-      // either, to avoid leaking the configured secret via tail logs.
+      // Diagnostic — fingerprints only, never the full secret. Lets
+      // ops see (a) which auth method Postmark is using, (b) whether
+      // the lengths match, and (c) whether the prefix/suffix matches
+      // (so a copy-paste typo is obvious). Will be removed once
+      // the inbound webhook is confirmed working end-to-end.
+      console.warn("[postmark.inbound] 403 — secret mismatch:", auditAuthAttempt(req));
       return sendError(res, 403, "FORBIDDEN", "Invalid webhook secret");
     }
 
@@ -106,4 +110,59 @@ function timingSafeEqual(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
   if (a.length !== b.length) return false;
   return cryptoTimingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+// Diagnostic: fingerprints what auth Postmark sent without
+// revealing either the candidate or the configured secret. We log
+// length + first/last 2 chars of each so a typo is obvious from
+// the log line without making the secret reconstructible.
+function auditAuthAttempt(req) {
+  const expected = env.POSTMARK_INBOUND_WEBHOOK_SECRET;
+  const out = {
+    expectedConfigured: Boolean(expected),
+    expectedLen: typeof expected === "string" ? expected.length : 0,
+    expectedFp: fingerprint(expected),
+    methods: {
+      header: false,
+      basicAuth: false,
+      query: false,
+    },
+    headerFp: null,
+    basicAuthFp: null,
+    queryFp: null,
+  };
+
+  const headerSecret = req.headers["x-postmark-secret"];
+  if (typeof headerSecret === "string" && headerSecret.length > 0) {
+    out.methods.header = true;
+    out.headerFp = fingerprint(headerSecret);
+  }
+
+  const auth = req.headers["authorization"];
+  if (typeof auth === "string" && auth.startsWith("Basic ")) {
+    out.methods.basicAuth = true;
+    try {
+      const decoded = Buffer.from(auth.slice(6).trim(), "base64").toString("utf8");
+      const idx = decoded.indexOf(":");
+      const password = idx >= 0 ? decoded.slice(idx + 1) : decoded;
+      out.basicAuthFp = fingerprint(password);
+    } catch {
+      out.basicAuthFp = "malformed-base64";
+    }
+  }
+
+  const querySecret = req.query?.secret;
+  if (typeof querySecret === "string" && querySecret.length > 0) {
+    out.methods.query = true;
+    out.queryFp = fingerprint(querySecret);
+  }
+
+  return out;
+}
+
+// "len=64 first=DXBf last=Oq6C" — enough to spot a typo, not
+// enough to reconstruct the value.
+function fingerprint(s) {
+  if (typeof s !== "string" || s.length === 0) return null;
+  return `len=${s.length} first=${s.slice(0, 4)} last=${s.slice(-4)}`;
 }
