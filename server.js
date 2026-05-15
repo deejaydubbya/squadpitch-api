@@ -19,6 +19,7 @@ import { metaThreadsWebhookRouter } from "./domains/integrations/metaThreadsWebh
 import { publicSitesRouter } from "./domains/sites/public.routes.js";
 import { sitesDashboardRouter } from "./domains/sites/sites.dashboard.routes.js";
 import { inboxRouter } from "./domains/inbox/inbox.routes.js";
+import { inboxWebhookRouter } from "./domains/inbox/inbox.webhook.routes.js";
 import { adsRouter } from "./domains/ads/ads.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
 import { webhookRouter } from "./domains/notifications/webhook.routes.js";
@@ -154,6 +155,11 @@ app.use(metaThreadsWebhookRouter);
 // the resolve + form-submit routes don't get caught by
 // requireAuth.
 app.use(publicSitesRouter);
+
+// SquadInbox inbound webhook — Postmark calls this directly to
+// deliver parsed lead replies. Verified via shared-secret
+// (POSTMARK_INBOUND_WEBHOOK_SECRET); no Bearer auth.
+app.use(inboxWebhookRouter);
 
 // Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
 app.use("/api", (req, res, next) => {
