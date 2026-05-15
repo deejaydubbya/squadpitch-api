@@ -270,10 +270,31 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
   try {
     providerResponse = await pm.sendEmail(postmarkPayload);
   } catch (rawErr) {
-    const reason = rawErr?.message || String(rawErr).slice(0, 1000);
+    // Postmark SDK throws with rich diagnostics (HTTP status,
+    // ErrorCode, full response body). Log server-side so ops can
+    // see what actually broke without leaking it to the client.
+    const reason =
+      rawErr?.message || String(rawErr).slice(0, 1000) || "Postmark SDK threw";
+    console.error("[INBOX_OUTBOUND_EMAIL] Postmark sendEmail threw:", {
+      messageId: messageRow.id,
+      conversationId,
+      clientId,
+      from: postmarkPayload.From,
+      to: postmarkPayload.To,
+      stream: postmarkPayload.MessageStream,
+      errorName: rawErr?.name,
+      errorMessage: rawErr?.message,
+      errorCode: rawErr?.code,
+      statusCode: rawErr?.statusCode ?? rawErr?.status,
+      postmarkBody: rawErr?.body ?? rawErr?.response?.body ?? null,
+      stack: rawErr?.stack?.split("\n").slice(0, 5).join("\n"),
+    });
     await prisma.message.update({
       where: { id: messageRow.id },
-      data: { deliveryStatus: "FAILED", errorReason: reason },
+      data: {
+        deliveryStatus: "FAILED",
+        errorReason: `${rawErr?.name ?? "Error"}: ${reason}`.slice(0, 4000),
+      },
     });
     const err = new Error("Email provider call failed");
     err.status = 503;
@@ -287,6 +308,16 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
   // unsubscribed recipient, etc.). Treat as FAILED.
   if (providerResponse?.ErrorCode && providerResponse.ErrorCode !== 0) {
     const reason = providerResponse.Message || `ErrorCode ${providerResponse.ErrorCode}`;
+    console.error("[INBOX_OUTBOUND_EMAIL] Postmark rejected:", {
+      messageId: messageRow.id,
+      conversationId,
+      clientId,
+      from: postmarkPayload.From,
+      to: postmarkPayload.To,
+      stream: postmarkPayload.MessageStream,
+      errorCode: providerResponse.ErrorCode,
+      message: providerResponse.Message,
+    });
     await prisma.message.update({
       where: { id: messageRow.id },
       data: {
