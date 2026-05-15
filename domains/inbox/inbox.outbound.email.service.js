@@ -173,11 +173,144 @@ export function buildPostmarkUserMessage(errorCode, rawMessage) {
 export function plainToHtml(text) {
   const s = String(text ?? "").trim();
   if (!s) return "";
-  const escaped = s
+  return escapeHtml(s).replace(/\r?\n/g, "<br>\n");
+}
+
+// HTML-escape: every untrusted string going into the outbound HTML
+// body MUST pass through this. Quote forms cover both element text
+// AND attribute values so the helper is safe in either context.
+export function escapeHtml(s) {
+  if (typeof s !== "string") return "";
+  return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  return escaped.replace(/\r?\n/g, "<br>\n");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// ── Outbound email body composition (context block) ─────────────────────
+//
+// The Message row stored in the DB carries ONLY the workspace user's
+// reply text — that's what we render in the Inbox thread, so it has
+// to stay clean. But the email actually sent to the lead also
+// includes a quoted context section below the reply showing what's
+// being replied to. Same pattern as Gmail/Outlook's quoted thread
+// or any CRM's "Original inquiry" block.
+//
+// Returns { text, html } — these go straight into Postmark's
+// TextBody / HtmlBody fields.
+
+const QUOTE_SEPARATOR = "─".repeat(40);
+
+function isFormSubmissionMessage(msg) {
+  return msg && msg.channel === "FORM_SUBMISSION";
+}
+
+function buildQuoteHeader({ latestContactMessage, contact }) {
+  // FORM_SUBMISSION messages get a "Original inquiry" header — the
+  // first form submission isn't really a "reply", so framing it
+  // as the original message is clearer to the lead. Subsequent
+  // CONTACT messages (e.g. an email reply that came back via the
+  // inbound webhook) use the standard "On <date>, <name> wrote:"
+  // convention every email client recognizes.
+  const name = contact?.name || contact?.email || contact?.phone || "the lead";
+  if (isFormSubmissionMessage(latestContactMessage)) {
+    return `Original inquiry from ${name}`;
+  }
+  const dateStr = formatHumanDate(latestContactMessage?.createdAt);
+  return `On ${dateStr}, ${name} wrote:`;
+}
+
+function formatHumanDate(d) {
+  if (!d) return "an earlier date";
+  const date = d instanceof Date ? d : new Date(d);
+  if (Number.isNaN(date.getTime())) return "an earlier date";
+  return date.toUTCString();
+}
+
+/**
+ * Compose the outbound email's TextBody + HtmlBody. The user's
+ * reply is rendered AS-IS at the top; below it a separator and
+ * a quoted-context block referencing the latest CONTACT message
+ * plus source page / campaign info when known.
+ *
+ * INPUTS are all untrusted strings — every interpolation goes
+ * through escapeHtml when emitted as HTML.
+ */
+export function composeOutboundBody({
+  userReply,
+  latestContactMessage,
+  contact,
+  sourcePage,
+  sourceCampaign,
+}) {
+  const cleanReply = String(userReply ?? "").trim();
+
+  // No context to quote — emit just the user's reply. Still go
+  // through plainToHtml for HTML escaping.
+  if (!latestContactMessage) {
+    return { text: cleanReply, html: plainToHtml(cleanReply) };
+  }
+
+  const header = buildQuoteHeader({ latestContactMessage, contact });
+  const quotedBody = (latestContactMessage.body ?? "").trim();
+
+  // ── Plain text version ──
+  const textLines = [cleanReply, "", "", QUOTE_SEPARATOR, header];
+  if (isFormSubmissionMessage(latestContactMessage)) {
+    if (latestContactMessage.createdAt) {
+      textLines.push(`Submitted on ${formatHumanDate(latestContactMessage.createdAt)}`);
+    }
+    if (sourcePage?.title) {
+      textLines.push(`From page: ${sourcePage.title}`);
+    } else if (sourcePage?.slug) {
+      textLines.push(`From page: /${sourcePage.slug}`);
+    }
+  }
+  if (sourceCampaign?.name) {
+    textLines.push(`Campaign: ${sourceCampaign.name}`);
+  }
+  textLines.push("");
+  // Prefix each line of the quoted body with "> " (standard email
+  // quote convention). Empty lines stay as ">".
+  const quotedLines = quotedBody.split(/\r?\n/).map((line) => (line.length > 0 ? `> ${line}` : ">"));
+  textLines.push(...quotedLines);
+
+  // ── HTML version ──
+  const html = [];
+  html.push(plainToHtml(cleanReply));
+  html.push("<br><br>");
+  html.push(
+    '<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;">',
+  );
+  html.push(
+    '<div style="color: #6b7280; font-size: 13px; line-height: 1.5; margin-bottom: 12px;">',
+  );
+  html.push(`<strong>${escapeHtml(header)}</strong>`);
+  if (isFormSubmissionMessage(latestContactMessage)) {
+    if (latestContactMessage.createdAt) {
+      html.push(
+        `<br>Submitted on ${escapeHtml(formatHumanDate(latestContactMessage.createdAt))}`,
+      );
+    }
+    if (sourcePage?.title) {
+      html.push(`<br>From page: ${escapeHtml(sourcePage.title)}`);
+    } else if (sourcePage?.slug) {
+      html.push(`<br>From page: /${escapeHtml(sourcePage.slug)}`);
+    }
+  }
+  if (sourceCampaign?.name) {
+    html.push(`<br>Campaign: ${escapeHtml(sourceCampaign.name)}`);
+  }
+  html.push("</div>");
+  html.push(
+    '<blockquote style="margin: 0; padding: 8px 14px; border-left: 3px solid #d1d5db; color: #4b5563; font-size: 14px; line-height: 1.55;">',
+  );
+  html.push(plainToHtml(quotedBody));
+  html.push("</blockquote>");
+
+  return { text: textLines.join("\n"), html: html.join("\n") };
 }
 
 // ── The send call ──────────────────────────────────────────────────────
@@ -245,11 +378,48 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
     throw err;
   }
 
-  // Look up the workspace name for the From: display name. Light
-  // cost — one extra query — and lets the lead see who's writing.
-  const client = await prisma.client
-    .findUnique({ where: { id: clientId }, select: { name: true } })
-    .catch(() => null);
+  // Pre-send lookups (run in parallel):
+  //   - Workspace name for the From: display
+  //   - Latest CONTACT message (what we're replying to — quoted in
+  //     the outbound body)
+  //   - Source page + campaign (rendered in the context block when
+  //     the latest CONTACT message is a FORM_SUBMISSION)
+  //
+  // Internal notes and AI suggestions are NEVER pulled here —
+  // those stay workspace-private. Same goes for older WORKSPACE
+  // messages (the lead already received those).
+  const [client, latestContactMessage, sourcePage, sourceCampaign] =
+    await Promise.all([
+      prisma.client
+        .findUnique({ where: { id: clientId }, select: { name: true } })
+        .catch(() => null),
+      prisma.message.findFirst({
+        where: { conversationId, party: "CONTACT" },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          channel: true,
+          body: true,
+          createdAt: true,
+        },
+      }),
+      conversation.pageId
+        ? prisma.sitePage
+            .findUnique({
+              where: { id: conversation.pageId },
+              select: { id: true, title: true, slug: true },
+            })
+            .catch(() => null)
+        : Promise.resolve(null),
+      conversation.campaignId
+        ? prisma.campaign
+            .findUnique({
+              where: { id: conversation.campaignId },
+              select: { id: true, name: true },
+            })
+            .catch(() => null)
+        : Promise.resolve(null),
+    ]);
 
   // Step 1: create the Message row in SENDING state BEFORE the
   // provider call. An in-flight crash leaves an auditable row at
@@ -273,12 +443,24 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
   const messageIdHeader = buildMessageId(env, conversationId, messageRow.id);
   const subjectLine = buildSubject({ override: subject, clientName: client?.name });
 
+  // Compose the outbound body: user's reply + a quoted context
+  // section showing the latest CONTACT message and (when it's a
+  // FORM_SUBMISSION) the source page / campaign. Internal notes
+  // and AI suggestions are NOT included — they were never loaded.
+  const { text: textBody, html: htmlBody } = composeOutboundBody({
+    userReply: body,
+    latestContactMessage,
+    contact: conversation.contact,
+    sourcePage,
+    sourceCampaign,
+  });
+
   const postmarkPayload = {
     From: fromHeader,
     To: conversation.contact.email,
     Subject: subjectLine,
-    HtmlBody: plainToHtml(body),
-    TextBody: body.trim(),
+    HtmlBody: htmlBody,
+    TextBody: textBody,
     MessageStream: env.POSTMARK_MESSAGE_STREAM || "outbound",
     // Postmark sets its own Message-ID when omitted, but providing
     // our own gives us deterministic threading on future replies.

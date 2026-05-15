@@ -82,6 +82,21 @@ function buildPrismaMock({ conversations, contacts, clients }) {
       }),
     },
     message: {
+      // Used by sendInboxEmail to load the latest CONTACT message
+      // for the outbound context block. Sorted by createdAt desc.
+      findFirst: vi.fn(async ({ where, orderBy }) => {
+        let matches = messages.filter((m) => {
+          if (where?.conversationId && m.conversationId !== where.conversationId) return false;
+          if (where?.party && m.party !== where.party) return false;
+          return true;
+        });
+        if (orderBy?.createdAt === "desc") {
+          matches = matches.slice().sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+          );
+        }
+        return matches[0] ?? null;
+      }),
       create: vi.fn(async ({ data }) => {
         const id = `msg-${++messageCounter}`;
         const row = { id, createdAt: new Date(), ...data };
@@ -94,6 +109,15 @@ function buildPrismaMock({ conversations, contacts, clients }) {
         messages[idx] = { ...messages[idx], ...data };
         return messages[idx];
       }),
+    },
+    // Outbound also looks up the source page + campaign to render
+    // in the context block. Tests can seed these by extending the
+    // fixture map; otherwise lookups return null.
+    sitePage: {
+      findUnique: vi.fn(async () => null),
+    },
+    campaign: {
+      findUnique: vi.fn(async () => null),
     },
     client: {
       findUnique: vi.fn(async ({ where }) => clientsMap.get(where.id) ?? null),
@@ -418,6 +442,198 @@ describe("buildFromAddress / buildReplyToAddress / buildSubject — helpers", ()
     expect(outbound.buildSubject({ override: "Custom subject", clientName: "Smith Realty" })).toBe(
       "Custom subject",
     );
+  });
+});
+
+// ── Outbound context block (spinstr406) ────────────────────────────────
+
+describe("outbound email context block — composeOutboundBody", () => {
+  it("returns just the user reply when there's no contact message to quote", () => {
+    const { text, html } = outbound.composeOutboundBody({
+      userReply: "Thanks for reaching out!",
+      latestContactMessage: null,
+      contact: { name: "Alice", email: "alice@example.com" },
+    });
+    expect(text).toBe("Thanks for reaching out!");
+    expect(html).toBe("Thanks for reaching out!");
+    // No separator / quote marks when nothing to quote.
+    expect(text).not.toContain("Original inquiry");
+    expect(text).not.toContain("─");
+  });
+
+  it("includes 'Original inquiry' header + page title for FORM_SUBMISSION quotes", () => {
+    const { text, html } = outbound.composeOutboundBody({
+      userReply: "Happy to share details.",
+      latestContactMessage: {
+        channel: "FORM_SUBMISSION",
+        body: "How much is the home selling for?",
+        createdAt: new Date("2026-05-15T14:00:00Z"),
+      },
+      contact: { name: "Daniel Wardlow", email: "dwardlow@squadpitch.com" },
+      sourcePage: { title: "508 King George Court", slug: "508-king-george-court" },
+      sourceCampaign: null,
+    });
+    // Plain text version
+    expect(text).toMatch(/^Happy to share details\./);
+    expect(text).toContain("Original inquiry from Daniel Wardlow");
+    expect(text).toContain("From page: 508 King George Court");
+    expect(text).toContain("> How much is the home selling for?");
+    // HTML version — proper quote-block, no script.
+    expect(html).toContain("<blockquote");
+    expect(html).toMatch(/Original inquiry from Daniel Wardlow/);
+    expect(html).toContain("From page: 508 King George Court");
+    // Quote body went through escapeHtml.
+    expect(html).toMatch(/How much is the home selling for\?/);
+  });
+
+  it("includes 'On <date>, <name> wrote:' header for non-form latest CONTACT messages", () => {
+    const { text } = outbound.composeOutboundBody({
+      userReply: "Got it, will follow up tomorrow.",
+      latestContactMessage: {
+        channel: "EMAIL",
+        body: "Are you available this week?",
+        createdAt: new Date("2026-05-15T14:00:00Z"),
+      },
+      contact: { name: "Bob", email: "bob@example.com" },
+    });
+    expect(text).toMatch(/^Got it, will follow up tomorrow\./);
+    expect(text).toMatch(/On .+, Bob wrote:/);
+    expect(text).toContain("> Are you available this week?");
+    // The "Original inquiry" framing is reserved for form messages —
+    // it shouldn't appear here.
+    expect(text).not.toContain("Original inquiry");
+  });
+
+  it("includes campaign name when source campaign is supplied", () => {
+    const { text, html } = outbound.composeOutboundBody({
+      userReply: "Hi!",
+      latestContactMessage: {
+        channel: "FORM_SUBMISSION",
+        body: "Asking about your spring open house.",
+        createdAt: new Date("2026-05-15T14:00:00Z"),
+      },
+      contact: { email: "lead@example.com" },
+      sourcePage: null,
+      sourceCampaign: { name: "Spring Open House Push" },
+    });
+    expect(text).toContain("Campaign: Spring Open House Push");
+    expect(html).toContain("Campaign: Spring Open House Push");
+  });
+
+  it("HTML-escapes user-controlled values to prevent injection", () => {
+    const malicious = '<script>alert("xss")</script>';
+    const { html } = outbound.composeOutboundBody({
+      userReply: "Hi there.",
+      latestContactMessage: {
+        channel: "FORM_SUBMISSION",
+        body: malicious,
+        createdAt: new Date("2026-05-15T14:00:00Z"),
+      },
+      contact: { name: malicious, email: "lead@example.com" },
+      sourcePage: { title: malicious },
+      sourceCampaign: { name: malicious },
+    });
+    // The raw script tag is NEVER present in the output.
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("alert(\"xss\")");
+    // The escaped form IS present (proves the malicious text
+    // landed in the body but was rendered safe).
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("sendInboxEmail end-to-end: TextBody/HtmlBody include the latest contact message, Message.body stores ONLY user reply", async () => {
+    // Reset env — previous describe blocks may have left a stub.
+    envOverrides = {};
+    // Seed: existing form-submission CONTACT message in the
+    // conversation. The Postmark stub captures the payload we send.
+    state = { prisma: baseFixture() };
+    state.prisma.state.messages.push({
+      id: "msg-inbound-1",
+      conversationId: "conv-a",
+      party: "CONTACT",
+      channel: "FORM_SUBMISSION",
+      body: "How much are you asking for this home?",
+      createdAt: new Date("2026-05-15T14:00:00Z"),
+    });
+    // Pretend the conversation came from a SquadSite page.
+    state.prisma.state.convs.get("conv-a").pageId = "page-1";
+    state.prisma.sitePage.findUnique = vi.fn(async ({ where }) =>
+      where.id === "page-1"
+        ? { id: "page-1", title: "508 King George Court", slug: "508-king-george-court" }
+        : null,
+    );
+
+    const captured = {};
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async (payload) => {
+        Object.assign(captured, payload);
+        return { ErrorCode: 0, MessageID: "stub-msg-id" };
+      }),
+    });
+
+    rateLimitImpl = vi.fn(async () => ({ allowed: true, remaining: 49, retryAfterSec: 0 }));
+
+    const userReply = "Happy to share details — let me know a good time to call.";
+    const stored = await outbound.sendInboxEmail(
+      "client-a",
+      "conv-a",
+      "auth0|u1",
+      { body: userReply },
+    );
+
+    // The Message row stored in the thread keeps ONLY the user's
+    // reply — never the quoted thread.
+    expect(stored.body).toBe(userReply);
+    expect(stored.body).not.toContain("Original inquiry");
+    expect(stored.body).not.toContain("How much are you asking");
+
+    // The Postmark payload's TextBody DOES carry the context block.
+    expect(captured.TextBody).toContain(userReply);
+    expect(captured.TextBody).toContain("Original inquiry");
+    expect(captured.TextBody).toContain("From page: 508 King George Court");
+    expect(captured.TextBody).toContain("> How much are you asking for this home?");
+
+    // Same for HtmlBody.
+    expect(captured.HtmlBody).toContain("<blockquote");
+    expect(captured.HtmlBody).toContain("How much are you asking for this home?");
+    expect(captured.HtmlBody).toMatch(/Original inquiry from .*Alice/i);
+  });
+
+  it("sendInboxEmail never loads internal notes for the outbound context", async () => {
+    envOverrides = {};
+    state = { prisma: baseFixture() };
+    // Seed: a CONTACT message AND a workspace internal note.
+    state.prisma.state.messages.push({
+      id: "msg-inbound-1",
+      conversationId: "conv-a",
+      party: "CONTACT",
+      channel: "FORM_SUBMISSION",
+      body: "Public question from the lead.",
+      createdAt: new Date("2026-05-15T13:00:00Z"),
+    });
+    // Internal note — NOT a message. Stored on ConversationNote.
+    // The outbound service should not query notes at all.
+    const noteFindSpy = vi.fn(async () => null);
+    state.prisma.conversationNote = { findFirst: noteFindSpy, findMany: noteFindSpy };
+
+    const captured = {};
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async (payload) => {
+        Object.assign(captured, payload);
+        return { ErrorCode: 0, MessageID: "stub-msg-id" };
+      }),
+    });
+    rateLimitImpl = vi.fn(async () => ({ allowed: true, remaining: 49, retryAfterSec: 0 }));
+
+    await outbound.sendInboxEmail("client-a", "conv-a", "auth0|u1", {
+      body: "Reply text",
+    });
+
+    // The outbound path should never have queried notes.
+    expect(noteFindSpy).not.toHaveBeenCalled();
+    // The lead's public question made it into the quote; the
+    // internal-note table was never even touched.
+    expect(captured.TextBody).toContain("> Public question from the lead.");
   });
 });
 
