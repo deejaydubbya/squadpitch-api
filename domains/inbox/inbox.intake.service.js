@@ -145,6 +145,8 @@ async function upsertContact({ clientId, email, phone, submission }) {
     const existingAlts = readAlternates(existing.enrichmentJson);
     const altEmails = [...existingAlts.emails];
     const altPhones = [...existingAlts.phones];
+    const addedAltEmails = [];
+    const addedAltPhones = [];
     if (
       normEmail &&
       existing.email &&
@@ -152,6 +154,7 @@ async function upsertContact({ clientId, email, phone, submission }) {
       !altEmails.includes(normEmail)
     ) {
       altEmails.push(normEmail);
+      addedAltEmails.push(normEmail);
     }
     if (
       normPhone &&
@@ -160,6 +163,7 @@ async function upsertContact({ clientId, email, phone, submission }) {
       !altPhones.includes(normPhone)
     ) {
       altPhones.push(normPhone);
+      addedAltPhones.push(normPhone);
     }
     enrichmentMerge.alternateEmails = altEmails;
     enrichmentMerge.alternatePhones = altPhones;
@@ -189,10 +193,28 @@ async function upsertContact({ clientId, email, phone, submission }) {
       });
       if (!taken) data.phone = normPhone;
     }
-    return prisma.contact.update({
+    const updated = await prisma.contact.update({
       where: { id: existing.id },
       data,
     });
+
+    // Audit: emit a row when a brand-new alternate was preserved
+    // on the existing contact. Intake runs outside any user session
+    // (called from the public form-intake endpoint), so the actor
+    // is the system. Skip when no new alternates were added so the
+    // audit table doesn't fill with no-op rows on repeat submissions
+    // from the same identity.
+    if (addedAltEmails.length > 0 || addedAltPhones.length > 0) {
+      await writeIntakeAudit({
+        clientId,
+        contactId: updated.id,
+        submissionId: submission.id,
+        addedAltEmails,
+        addedAltPhones,
+      });
+    }
+
+    return updated;
   }
 
   // Neither key matched an existing contact. Safe to create.
@@ -342,6 +364,47 @@ function readAlternates(enrichmentJson) {
     ? enrichmentJson.alternatePhones.filter((s) => typeof s === "string" && s.length > 0)
     : [];
   return { emails, phones };
+}
+
+// Best-effort audit row for an intake event that added an alternate
+// identity to an existing Contact. Intake has no request context
+// (form-intake is a public endpoint, not user-driven), so the actor
+// is "system:intake". Never let an audit failure bubble — same
+// contract as writeAudit() in lib/auditLog.js.
+async function writeIntakeAudit({
+  clientId,
+  contactId,
+  submissionId,
+  addedAltEmails,
+  addedAltPhones,
+}) {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        actorSub: "system:intake",
+        actorEmail: null,
+        actorRoles: ["system"],
+        action: "contact.alternate.added",
+        resourceType: "Contact",
+        resourceId: contactId,
+        route: null,
+        metadata: {
+          clientId,
+          submissionId,
+          addedAlternateEmails: addedAltEmails,
+          addedAlternatePhones: addedAltPhones,
+        },
+        ip: null,
+        userAgent: null,
+      },
+    });
+  } catch (err) {
+    console.error("[INBOX_INTAKE] audit_write_failed:", {
+      contactId,
+      submissionId,
+      err: err?.message ?? err,
+    });
+  }
 }
 
 // Normalize an email for matching + Contact-table storage. The raw

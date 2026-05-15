@@ -40,6 +40,7 @@ function createPrismaMock(initialState = {}) {
     conversations: new Map(),
     contacts: new Map(),
     messages: [],
+    auditLogs: [],
     ...initialState,
   };
   // ids handed out by create — deterministic so assertions stay stable
@@ -139,6 +140,16 @@ function createPrismaMock(initialState = {}) {
         const id = `msg-${++messageCounter}`;
         const row = { id, ...data };
         state.messages.push(row);
+        return row;
+      }),
+    },
+    // Intake writes a system-actor AuditLog row when it adds a new
+    // alternate identity to an existing Contact. Tests inspect
+    // state.auditLogs to confirm the row was emitted.
+    auditLog: {
+      create: vi.fn(async ({ data }) => {
+        const row = { id: `audit-${state.auditLogs.length + 1}`, ...data };
+        state.auditLogs.push(row);
         return row;
       }),
     },
@@ -493,5 +504,113 @@ describe("intakeFormSubmission", () => {
     const merged = [...prismaMock.state.contacts.values()][0];
     expect(merged.email).toBe("alice@example.com");
     expect(merged.enrichmentJson?.alternateEmails).toContain("alce@example.com");
+  });
+
+  // ── Audit logging when alternates are added (spinstr409) ──
+
+  it("emits a system AuditLog row when intake preserves a new alternate email", async () => {
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-audit-1",
+        contactEmail: "primary@example.com",
+        contactPhone: "+15551234567",
+        dataJson: { email: "primary@example.com", phone: "+15551234567" },
+      }),
+    );
+    expect(prismaMock.state.auditLogs).toHaveLength(0);
+
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-audit-2",
+        contactEmail: "alternate@example.com",
+        contactPhone: "+15551234567",
+        dataJson: { email: "alternate@example.com", phone: "+15551234567" },
+      }),
+    );
+
+    expect(prismaMock.state.auditLogs).toHaveLength(1);
+    const row = prismaMock.state.auditLogs[0];
+    expect(row.actorSub).toBe("system:intake");
+    expect(row.action).toBe("contact.alternate.added");
+    expect(row.resourceType).toBe("Contact");
+    expect(row.metadata.addedAlternateEmails).toEqual(["alternate@example.com"]);
+    expect(row.metadata.addedAlternatePhones).toEqual([]);
+    expect(row.metadata.clientId).toBe(CLIENT_ID);
+    expect(row.metadata.submissionId).toBe("sub-audit-2");
+  });
+
+  it("does NOT emit an AuditLog row on a repeat submission with the same identity", async () => {
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-repeat-1",
+        contactEmail: "lead@example.com",
+        contactPhone: "+15559999999",
+        dataJson: { email: "lead@example.com", phone: "+15559999999" },
+      }),
+    );
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-repeat-2",
+        contactEmail: "lead@example.com",
+        contactPhone: "+15559999999",
+        dataJson: { email: "lead@example.com", phone: "+15559999999" },
+      }),
+    );
+    expect(prismaMock.state.auditLogs).toHaveLength(0);
+  });
+
+  it("emits the row when only a new alternate phone is added (no email change)", async () => {
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-ph-1",
+        contactEmail: "p@example.com",
+        contactPhone: "+15551111111",
+        dataJson: { email: "p@example.com", phone: "+15551111111" },
+      }),
+    );
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-ph-2",
+        contactEmail: "p@example.com",
+        contactPhone: "+15552222222",
+        dataJson: { email: "p@example.com", phone: "+15552222222" },
+      }),
+    );
+    expect(prismaMock.state.auditLogs).toHaveLength(1);
+    const row = prismaMock.state.auditLogs[0];
+    expect(row.metadata.addedAlternateEmails).toEqual([]);
+    expect(row.metadata.addedAlternatePhones).toEqual(["15552222222"]);
+  });
+
+  // ── Detail payload exposes alternates ──
+
+  it("Contact row exposes alternateEmails / alternatePhones for the detail payload to read", async () => {
+    // The detail handler includes `contact: true` on the
+    // Conversation lookup, which returns the full Contact row
+    // including enrichmentJson. This test confirms the data the UI
+    // depends on actually lands on the row after a multi-identity
+    // submission sequence.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-detail-1",
+        contactEmail: "owner@example.com",
+        contactPhone: "+15553334444",
+        dataJson: { email: "owner@example.com", phone: "+15553334444" },
+      }),
+    );
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-detail-2",
+        contactEmail: "owner.work@example.com",
+        contactPhone: "+15553334444",
+        dataJson: { email: "owner.work@example.com", phone: "+15553334444" },
+      }),
+    );
+
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const contact = [...prismaMock.state.contacts.values()][0];
+    expect(contact.email).toBe("owner@example.com");
+    expect(contact.enrichmentJson.alternateEmails).toEqual(["owner.work@example.com"]);
+    expect(contact.enrichmentJson.alternatePhones ?? []).toEqual([]);
   });
 });
