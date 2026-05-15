@@ -715,10 +715,20 @@ model Message {
   // Provenance: which AI suggestion was accepted, if any.
   fromSuggestionId String?
 
+  // Idempotency key for outbound sends. The web composer generates
+  // a fresh UUID per Send click; a retried request (double-click,
+  // network retry, server-restart-during-call) with the same key
+  // returns the existing Message rather than firing a second
+  // provider call. Nullable for legacy rows; uniqueness is per
+  // conversation so different conversations can coincidentally
+  // reuse a key (UUIDs make that effectively impossible anyway).
+  idempotencyKey String?
+
   createdAt DateTime @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
+  @@unique([conversationId, idempotencyKey])
   @@index([conversationId, createdAt])
   @@index([deliveryStatus])
   @@map("messages")

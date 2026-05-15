@@ -183,8 +183,39 @@ describe("inbound — happy path", () => {
 
   it("reopens a CLOSED conversation when a new reply arrives", async () => {
     state.prisma.state.convs.get("conv-abc").status = "CLOSED";
-    await service.processInboundEmail(basePayload());
+    const result = await service.processInboundEmail(basePayload());
     expect(state.prisma.state.convs.get("conv-abc").status).toBe("OPEN");
+    expect(result.reopened).toBe(true);
+  });
+
+  it("writes a SYSTEM audit message when reopening a CLOSED conversation", async () => {
+    state.prisma.state.convs.get("conv-abc").status = "CLOSED";
+    await service.processInboundEmail(basePayload());
+    // First persisted row is the inbound CONTACT message; the
+    // reopen audit follows. Both share the same conversation.
+    const systemMsgs = state.prisma.state.msgs.filter((m) => m.party === "SYSTEM");
+    expect(systemMsgs).toHaveLength(1);
+    expect(systemMsgs[0].conversationId).toBe("conv-abc");
+    expect(systemMsgs[0].channel).toBeNull();
+    expect(systemMsgs[0].body).toMatch(/reopened/i);
+  });
+
+  it("does NOT reopen a CLOSED+spam conversation", async () => {
+    const conv = state.prisma.state.convs.get("conv-abc");
+    conv.status = "CLOSED";
+    conv.spam = true;
+    const result = await service.processInboundEmail(basePayload());
+    expect(state.prisma.state.convs.get("conv-abc").status).toBe("CLOSED");
+    expect(result.reopened).toBe(false);
+    // No audit message either — we didn't reopen, so no event.
+    const systemMsgs = state.prisma.state.msgs.filter((m) => m.party === "SYSTEM");
+    expect(systemMsgs).toHaveLength(0);
+  });
+
+  it("does NOT write a SYSTEM audit when an OPEN conversation receives a reply", async () => {
+    await service.processInboundEmail(basePayload());
+    const systemMsgs = state.prisma.state.msgs.filter((m) => m.party === "SYSTEM");
+    expect(systemMsgs).toHaveLength(0);
   });
 
   it("never creates a Contact on inbound", async () => {

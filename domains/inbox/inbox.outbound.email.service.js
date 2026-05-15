@@ -387,7 +387,12 @@ const DEFAULT_DAILY_CAP_SCOPE = "inbox-email";
  *   502 PROVIDER_FAILED        — Postmark accepted the request but reported failure
  *   503 PROVIDER_UNREACHABLE   — Postmark call raised
  */
-export async function sendInboxEmail(clientId, conversationId, userId, { body, subject, fromSuggestionId } = {}) {
+export async function sendInboxEmail(
+  clientId,
+  conversationId,
+  userId,
+  { body, subject, fromSuggestionId, idempotencyKey } = {},
+) {
   if (!body || typeof body !== "string" || body.trim().length === 0) {
     const err = new Error("Body is required");
     err.status = 400;
@@ -407,6 +412,34 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
     err.status = 404;
     err.code = "CONVERSATION_NOT_FOUND";
     throw err;
+  }
+
+  // Idempotency pre-check. The web composer mints a fresh UUID per
+  // Send click; a retried request (double-click, network retry,
+  // server-restart-during-call) with the same key returns whatever
+  // we already wrote rather than firing a second provider send.
+  //
+  // Branches:
+  //   SENT      → return the existing Message (no-op retry, happy path)
+  //   FAILED    → return the existing Message so the UI surfaces the
+  //               failed state instead of duplicating it; a Retry
+  //               click must mint a new key (the web client does)
+  //   SENDING   → in-flight first attempt; 409 so the client can wait
+  //               and refetch rather than start a parallel send
+  //   anything else → return as-is (legacy SENT messages, etc.)
+  if (idempotencyKey) {
+    const existing = await prisma.message.findFirst({
+      where: { conversationId, idempotencyKey },
+    });
+    if (existing) {
+      if (existing.deliveryStatus === "SENDING") {
+        const err = new Error("A send with this idempotency key is already in progress");
+        err.status = 409;
+        err.code = "SEND_IN_PROGRESS";
+        throw err;
+      }
+      return existing;
+    }
   }
 
   const providerConfigured = isEmailProviderConfigured();
@@ -498,18 +531,42 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
   // provider call. An in-flight crash leaves an auditable row at
   // SENDING that ops can flip to FAILED manually if Postmark never
   // delivered.
-  const messageRow = await prisma.message.create({
-    data: {
-      conversationId,
-      party: "WORKSPACE",
-      channel: "EMAIL",
-      body: body.trim(),
-      authorUserId: userId,
-      fromSuggestionId: fromSuggestionId ?? null,
-      deliveryStatus: "SENDING",
-      lastAttemptedAt: new Date(),
-    },
-  });
+  // The composite unique (conversationId, idempotencyKey) means a
+  // concurrent second request that slipped past the pre-check
+  // (race window) will throw P2002 here. We catch it, refetch the
+  // winner, and return it — same outcome as a serialized retry.
+  let messageRow;
+  try {
+    messageRow = await prisma.message.create({
+      data: {
+        conversationId,
+        party: "WORKSPACE",
+        channel: "EMAIL",
+        body: body.trim(),
+        authorUserId: userId,
+        fromSuggestionId: fromSuggestionId ?? null,
+        idempotencyKey: idempotencyKey ?? null,
+        deliveryStatus: "SENDING",
+        lastAttemptedAt: new Date(),
+      },
+    });
+  } catch (createErr) {
+    if (idempotencyKey && createErr?.code === "P2002") {
+      const racedWinner = await prisma.message.findFirst({
+        where: { conversationId, idempotencyKey },
+      });
+      if (racedWinner) {
+        if (racedWinner.deliveryStatus === "SENDING") {
+          const err = new Error("A send with this idempotency key is already in progress");
+          err.status = 409;
+          err.code = "SEND_IN_PROGRESS";
+          throw err;
+        }
+        return racedWinner;
+      }
+    }
+    throw createErr;
+  }
 
   const fromHeader = buildFromAddress(env, client?.name);
   const replyToHeader = buildReplyToAddress(env, conversationId);

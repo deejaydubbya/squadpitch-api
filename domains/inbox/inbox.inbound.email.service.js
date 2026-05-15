@@ -286,17 +286,47 @@ export async function processInboundEmail(payload) {
   // again — we DELIBERATELY do NOT touch workspaceReadAt; the
   // existing decorateUnread() rule (lastMessageFrom=CONTACT &&
   // workspaceReadAt < lastMessageAt) will mark it unread.
-  // If the conversation was CLOSED, reopen — a real reply means
-  // the conversation isn't over yet.
+  //
+  // Reopen policy: a CLOSED conversation flips to OPEN on inbound
+  // — a real reply means the conversation isn't over. Spam
+  // conversations stay CLOSED/spam; the workspace already decided
+  // these are noise and an inbound reply shouldn't override that.
+  const wasClosed = conversation.status === "CLOSED";
+  const reopen = wasClosed && !conversation.spam;
   const convUpdate = {
     lastMessageAt: messageAt,
     lastMessageFrom: "CONTACT",
   };
-  if (conversation.status === "CLOSED") convUpdate.status = "OPEN";
+  if (reopen) convUpdate.status = "OPEN";
   await prisma.conversation.update({
     where: { id: conversationId },
     data: convUpdate,
   });
 
-  return { ok: true, reason: "CREATED", messageId: message.id };
+  // Audit note when we actually reopened. Sits in the thread just
+  // after the inbound message so a reader can see "the reply
+  // reopened this." Channel is null because SYSTEM events aren't
+  // a real delivery channel; deliveryStatus stays null for the
+  // same reason. Fire-and-forget — a failure here shouldn't bubble
+  // up and cause Postmark to retry the whole webhook.
+  if (reopen) {
+    await prisma.message
+      .create({
+        data: {
+          conversationId,
+          party: "SYSTEM",
+          channel: null,
+          body: "Conversation reopened by inbound email reply.",
+          createdAt: new Date(messageAt.getTime() + 1),
+        },
+      })
+      .catch((err) => {
+        console.error("[INBOX_INBOUND_EMAIL] Failed to write reopen audit:", {
+          conversationId,
+          err: err?.message,
+        });
+      });
+  }
+
+  return { ok: true, reason: "CREATED", messageId: message.id, reopened: reopen };
 }

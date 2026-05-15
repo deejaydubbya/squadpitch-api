@@ -83,11 +83,13 @@ function buildPrismaMock({ conversations, contacts, clients }) {
     },
     message: {
       // Used by sendInboxEmail to load the latest CONTACT message
-      // for the outbound context block. Sorted by createdAt desc.
+      // for the outbound context block (party filter, desc sort) AND
+      // to look up an existing Message by idempotency key (no sort).
       findFirst: vi.fn(async ({ where, orderBy }) => {
         let matches = messages.filter((m) => {
           if (where?.conversationId && m.conversationId !== where.conversationId) return false;
           if (where?.party && m.party !== where.party) return false;
+          if (where?.idempotencyKey !== undefined && m.idempotencyKey !== where.idempotencyKey) return false;
           return true;
         });
         if (orderBy?.createdAt === "desc") {
@@ -117,6 +119,23 @@ function buildPrismaMock({ conversations, contacts, clients }) {
         return matches;
       }),
       create: vi.fn(async ({ data }) => {
+        // Mirror the @@unique([conversationId, idempotencyKey])
+        // constraint so race tests can rely on a real P2002 throw.
+        if (data?.idempotencyKey) {
+          const collision = messages.find(
+            (m) =>
+              m.conversationId === data.conversationId &&
+              m.idempotencyKey === data.idempotencyKey,
+          );
+          if (collision) {
+            const err = new Error(
+              "Unique constraint failed on the fields: (`conversationId`,`idempotencyKey`)",
+            );
+            err.code = "P2002";
+            err.meta = { target: ["conversationId", "idempotencyKey"] };
+            throw err;
+          }
+        }
         const id = `msg-${++messageCounter}`;
         const row = { id, createdAt: new Date(), ...data };
         messages.push(row);
@@ -903,6 +922,120 @@ describe("sendInboxEmail — RFC threading headers end-to-end", () => {
     expect(headerNames).toContain("Message-ID");
     expect(headerNames).not.toContain("In-Reply-To");
     expect(headerNames).not.toContain("References");
+  });
+});
+
+// Server-side idempotency for send-email. A repeated request with
+// the same (conversationId, idempotencyKey) must return the prior
+// Message instead of firing a duplicate provider call.
+describe("sendInboxEmail — idempotency", () => {
+  beforeEach(() => {
+    envOverrides = {};
+    state = { prisma: baseFixture() };
+    rateLimitImpl = vi.fn(async () => ({ allowed: true, remaining: 49, retryAfterSec: 0 }));
+  });
+
+  it("returns the existing Message on a repeated key (no second Postmark call)", async () => {
+    const pm = stubPostmark({ MessageID: "pm-orig" });
+    outbound.__setPostmarkClientForTest(pm);
+
+    const first = await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", {
+      body: "Hello",
+      idempotencyKey: "client-uuid-1",
+    });
+    const second = await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", {
+      body: "Hello",
+      idempotencyKey: "client-uuid-1",
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(pm.sendEmail).toHaveBeenCalledTimes(1);
+    expect(state.prisma.state.messages.filter((m) => m.party === "WORKSPACE").length).toBe(1);
+  });
+
+  it("creates a NEW Message when the idempotency key differs", async () => {
+    const pm = stubPostmark();
+    outbound.__setPostmarkClientForTest(pm);
+
+    await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", {
+      body: "First",
+      idempotencyKey: "uuid-a",
+    });
+    await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", {
+      body: "Second",
+      idempotencyKey: "uuid-b",
+    });
+
+    expect(pm.sendEmail).toHaveBeenCalledTimes(2);
+    expect(state.prisma.state.messages.filter((m) => m.party === "WORKSPACE").length).toBe(2);
+  });
+
+  it("persists the idempotencyKey on the new Message row", async () => {
+    outbound.__setPostmarkClientForTest(stubPostmark());
+    await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", {
+      body: "hi",
+      idempotencyKey: "uuid-persist",
+    });
+    const row = state.prisma.state.messages.find((m) => m.party === "WORKSPACE");
+    expect(row.idempotencyKey).toBe("uuid-persist");
+  });
+
+  it("returns 409 SEND_IN_PROGRESS when an existing same-key Message is still SENDING", async () => {
+    // Seed a SENDING row directly (simulates the in-flight first
+    // attempt — provider call hasn't finished yet).
+    state.prisma.state.messages.push({
+      id: "msg-inflight",
+      conversationId: "conv-a",
+      party: "WORKSPACE",
+      channel: "EMAIL",
+      body: "in flight",
+      deliveryStatus: "SENDING",
+      idempotencyKey: "uuid-inflight",
+      createdAt: new Date(),
+    });
+    outbound.__setPostmarkClientForTest(stubPostmark());
+
+    await expect(
+      outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", {
+        body: "retry",
+        idempotencyKey: "uuid-inflight",
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "SEND_IN_PROGRESS" });
+  });
+
+  it("returns the existing FAILED Message on retry with the same key (no duplicate send)", async () => {
+    // Seed a FAILED row from an earlier attempt with this key.
+    state.prisma.state.messages.push({
+      id: "msg-failed",
+      conversationId: "conv-a",
+      party: "WORKSPACE",
+      channel: "EMAIL",
+      body: "earlier attempt",
+      deliveryStatus: "FAILED",
+      idempotencyKey: "uuid-failed",
+      errorReason: "402: Sandbox approval required",
+      createdAt: new Date(),
+    });
+    const pm = stubPostmark();
+    outbound.__setPostmarkClientForTest(pm);
+
+    const result = await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", {
+      body: "retry",
+      idempotencyKey: "uuid-failed",
+    });
+
+    expect(result.id).toBe("msg-failed");
+    expect(result.deliveryStatus).toBe("FAILED");
+    expect(pm.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("works without an idempotencyKey (legacy clients)", async () => {
+    outbound.__setPostmarkClientForTest(stubPostmark());
+    const result = await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", {
+      body: "no key",
+    });
+    expect(result.deliveryStatus).toBe("SENT");
+    expect(result.idempotencyKey ?? null).toBe(null);
   });
 });
 

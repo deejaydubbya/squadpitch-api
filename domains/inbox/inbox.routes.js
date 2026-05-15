@@ -152,11 +152,21 @@ inboxRouter.post(
     try {
       const parsed = SendEmailSchema.safeParse(req.body ?? {});
       if (!parsed.success) return validationError(res, parsed.error.issues);
+      // Idempotency key — client supplies via header, generates a
+      // fresh UUID per Send click. A retried POST (double-click,
+      // network retry, server-restart-during-call) with the same
+      // key returns the existing Message instead of firing a
+      // duplicate provider send. Falls through to a normal send
+      // when missing — older clients still work.
+      const idempotencyKey =
+        typeof req.headers["idempotency-key"] === "string" && req.headers["idempotency-key"].trim()
+          ? req.headers["idempotency-key"].trim().slice(0, 128)
+          : null;
       const message = await sendInboxEmail(
         req.params.id,
         req.params.conversationId,
         getAuth0Sub(req),
-        parsed.data,
+        { ...parsed.data, idempotencyKey },
       );
       res.status(201).json({ message });
     } catch (err) {
