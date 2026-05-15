@@ -19,8 +19,10 @@ import {
   CreateNoteSchema,
   ManualMessageSchema,
   AiReplyRequestSchema,
+  SendEmailSchema,
 } from "./inbox.schemas.js";
 import * as service from "./inbox.service.js";
+import { sendInboxEmail } from "./inbox.outbound.email.service.js";
 
 export const inboxRouter = express.Router();
 
@@ -125,6 +127,32 @@ inboxRouter.post(
       const parsed = ManualMessageSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
       const message = await service.logManualMessage(
+        req.params.id,
+        req.params.conversationId,
+        getAuth0Sub(req),
+        parsed.data,
+      );
+      res.status(201).json({ message });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Send email (real outbound — capability-gated) ──────────────────────
+//
+// First real send channel. Capability check + Postmark call live in
+// inbox.outbound.email.service.js; this route is just the auth +
+// validation seam. AI suggestions never auto-send — the user must
+// click this endpoint explicitly.
+inboxRouter.post(
+  `${BASE}/workspaces/:id/inbox/conversations/:conversationId/send-email`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = SendEmailSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const message = await sendInboxEmail(
         req.params.id,
         req.params.conversationId,
         getAuth0Sub(req),

@@ -49,3 +49,12 @@ export const ManualMessageSchema = z.object({
 export const AiReplyRequestSchema = z.object({
   tone: z.enum(["professional", "friendly", "concise"]).optional().default("professional"),
 });
+
+// Inbox outbound email — first real send channel (Postmark).
+// Body required; subject optional (service composes a default).
+// fromSuggestionId optional for AI-provenance audit trail.
+export const SendEmailSchema = z.object({
+  body: z.string().min(1).max(8000),
+  subject: z.string().max(300).optional(),
+  fromSuggestionId: z.string().max(64).optional(),
+});

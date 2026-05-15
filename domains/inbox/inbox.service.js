@@ -10,6 +10,7 @@ import { prisma } from "../../prisma.js";
 import { loadClientGenerationContext } from "../studio/generation/clientOrchestrator.js";
 import { generateStructuredContent } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
+import { emailCapabilityFor } from "./inbox.outbound.email.service.js";
 
 // ── Conversation list + detail ─────────────────────────────────────────
 
@@ -84,10 +85,20 @@ export async function getConversation(clientId, conversationId) {
       : null,
   ]);
 
+  // Reply-mode capabilities — what the composer is allowed to do.
+  // Computed server-side so the UI can't be talked into showing
+  // "Send email" when the lead has no email or the provider isn't
+  // configured. Internal note + log-external are always available.
+  const replyCapabilities = {
+    email: emailCapabilityFor({ conversation: row, contact: row.contact }),
+    logExternal: { available: true, reason: null },
+    note: { available: true, reason: null },
+  };
+
   // Stamp workspaceReadAt as a side effect of viewing — flips
   // unread to read. Caller decides whether to honor this via the
   // dedicated PATCH; here we just decorate without writing.
-  return decorateUnread({ ...row, page, campaign });
+  return decorateUnread({ ...row, page, campaign, replyCapabilities });
 }
 
 function decorateUnread(conversation) {

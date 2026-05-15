@@ -134,6 +134,25 @@ export const env = {
   // Notifications
   POSTMARK_SERVER_TOKEN: process.env.POSTMARK_SERVER_TOKEN,
   NOTIFICATION_FROM_EMAIL: process.env.NOTIFICATION_FROM_EMAIL ?? "notifications@squadpitch.com",
+
+  // Inbox outbound email — deliberately namespaced separately from
+  // NOTIFICATION_FROM_EMAIL so the system-notification path and the
+  // user→lead Inbox reply path can't accidentally share each
+  // other's sender or routing config. Postmark server token is
+  // shared (one account); From/Reply behaviors are separate.
+  POSTMARK_MESSAGE_STREAM: process.env.POSTMARK_MESSAGE_STREAM ?? "outbound",
+  INBOX_EMAIL_FROM: process.env.INBOX_EMAIL_FROM,
+  INBOX_EMAIL_REPLY_DOMAIN: process.env.INBOX_EMAIL_REPLY_DOMAIN,
+  // HMAC secret the Postmark inbound webhook signs with. Required
+  // by the inbound parser (separate prompt); set today so the
+  // shape exists.
+  POSTMARK_INBOUND_WEBHOOK_SECRET: process.env.POSTMARK_INBOUND_WEBHOOK_SECRET,
+  // Per-workspace daily send cap. Conservative default so a runaway
+  // workspace (or a bug) can't blast a Postmark account dry.
+  INBOX_EMAIL_DAILY_CAP: Number.isFinite(parseInt(process.env.INBOX_EMAIL_DAILY_CAP, 10))
+    ? parseInt(process.env.INBOX_EMAIL_DAILY_CAP, 10)
+    : 50,
+
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
   TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,

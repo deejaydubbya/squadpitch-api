@@ -572,6 +572,23 @@ enum MessageChannel {
   MANUAL_LOG
 }
 
+// Delivery lifecycle for outbound Messages we actually try to send
+// via a provider (Postmark, Twilio, Meta, etc). Nullable on the
+// column because existing FORM_SUBMISSION / MANUAL_LOG rows have
+// no real "delivery" — they were just recorded on the thread.
+//   DRAFT     — composed but not yet attempted (reserved for future
+//               "save draft" UX; current send path skips it).
+//   SENDING   — provider call in flight; written BEFORE the call so
+//               an in-flight crash leaves an auditable row.
+//   SENT      — provider accepted the message; providerMessageId set.
+//   FAILED    — provider rejected or call raised; errorReason set.
+enum MessageDeliveryStatus {
+  DRAFT
+  SENDING
+  SENT
+  FAILED
+}
+
 model Contact {
   id       String @id @default(cuid())
   clientId String
@@ -671,8 +688,25 @@ model Message {
   payloadJson Json?
 
   // External provider id for outbound channels (Postmark, Twilio).
-  // Unused for MVP since outbound delivery is deferred.
+  // Set after a successful provider call.
   externalMessageId String?
+
+  // Delivery lifecycle for real outbound sends (Inbox email reply
+  // via Postmark today; SMS/social later). NULL for legacy
+  // FORM_SUBMISSION + MANUAL_LOG rows that don't represent a
+  // real provider call.
+  deliveryStatus    MessageDeliveryStatus?
+  // Provider's own message id (Postmark MessageID, Twilio SID, etc.)
+  // — separate from externalMessageId because that field is also
+  // used for inbound threading (the contact's email Message-ID
+  // when we ingest a reply).
+  providerMessageId String?
+  // Last error reason when deliveryStatus = FAILED. Free-form so
+  // we can keep provider language verbatim.
+  errorReason       String?                @db.Text
+  // When the most recent send attempt was made. Used to enforce
+  // idempotency / rate limits at the audit layer.
+  lastAttemptedAt   DateTime?
 
   // The user who composed an outbound/system message. Null for
   // inbound CONTACT messages.
@@ -686,6 +720,7 @@ model Message {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt])
+  @@index([deliveryStatus])
   @@map("messages")
 }
 
