@@ -378,6 +378,32 @@ describe("generateAiReply — channel framing", () => {
     expect(captured.systemPrompt).toMatch(/single email reply/i);
   });
 
+  it("public_comment channel produces a short, safe, no-PII reply", async () => {
+    await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
+      tone: "professional",
+      channel: "public_comment",
+    });
+    expect(captured.systemPrompt).toMatch(/public reply/i);
+    // Hard prohibition on leaking lead PII in a public surface.
+    expect(captured.systemPrompt).toMatch(
+      /Never include the commenter's email, phone, address/i,
+    );
+    expect(captured.systemPrompt).toMatch(/visible to every viewer/i);
+    expect(captured.userPrompt).toMatch(/short public reply/i);
+  });
+
+  it("private_dm channel produces a conversational, no-sign-off reply", async () => {
+    await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
+      tone: "friendly",
+      channel: "private_dm",
+    });
+    expect(captured.systemPrompt).toMatch(/direct message/i);
+    expect(captured.systemPrompt).toMatch(/no formal greeting, no sign-off/i);
+    // First-name addressing IS allowed in DMs (private surface).
+    expect(captured.systemPrompt).toMatch(/Address the lead by first name/i);
+    expect(captured.userPrompt).toMatch(/direct message/i);
+  });
+
   it("note + source context summarizes facts for the team rather than the lead", async () => {
     // Same property-page fixture as the price-question test above
     // — but the note framing should reorient the rules toward the

@@ -22,6 +22,7 @@
 
 import { env } from "../../config/env.js";
 import { emailCapabilityFor } from "./inbox.outbound.email.service.js";
+import { capabilityFor as providerMatrixFor } from "./providerCapabilities.js";
 
 // Per-provider capability map. Drives which actions are
 // theoretically possible for a given Conversation.provider — does
@@ -125,18 +126,34 @@ export function getAvailableReplyActions(conversation) {
     });
   }
 
+  // Provider-matrix lookup — tells us WHY a reply path isn't
+  // connected (missing OAuth scope, no adapter yet, etc.) so the
+  // resolver can surface the truth rather than a generic
+  // "isn't connected yet" message.
+  const matrix = providerMatrixFor(provider);
+  const scopeBlocker =
+    matrix.missingScopes.length > 0
+      ? `Pending Meta App Review for additional scopes (${matrix.missingScopes.join(", ")}).`
+      : null;
+
   // ── REPLY_PUBLIC_COMMENT ────────────────────────────────────────────
   if (caps.supportsComment) {
     const hasCommentId = Boolean(
       lastInbound?.externalMessageId || lastInbound?.sourceUrl,
     );
+    let reason;
+    if (!hasCommentId) {
+      reason = "No public comment to reply to on this conversation.";
+    } else if (scopeBlocker) {
+      reason = scopeBlocker;
+    } else {
+      reason = `Public comment reply isn't connected yet for ${humanizeProvider(provider)}.`;
+    }
     actions.push({
       action: "REPLY_PUBLIC_COMMENT",
       label: "Reply to comment",
       available: false, // No send path wired for any provider yet.
-      reason: hasCommentId
-        ? `Public comment reply isn't connected yet for ${humanizeProvider(provider)}.`
-        : "No public comment to reply to on this conversation.",
+      reason,
       requiresConfig: hasCommentId,
     });
   }
@@ -144,13 +161,19 @@ export function getAvailableReplyActions(conversation) {
   // ── REPLY_DM ────────────────────────────────────────────────────────
   if (caps.supportsDm) {
     const hasThread = Boolean(conversation.externalThreadId);
+    let reason;
+    if (!hasThread) {
+      reason = `No ${humanizeProvider(provider)} thread on this conversation.`;
+    } else if (scopeBlocker) {
+      reason = scopeBlocker;
+    } else {
+      reason = `${humanizeProvider(provider)} DM sending isn't connected yet.`;
+    }
     actions.push({
       action: "REPLY_DM",
       label: "Reply via DM",
       available: false,
-      reason: hasThread
-        ? `${humanizeProvider(provider)} DM sending isn't connected yet.`
-        : `No ${humanizeProvider(provider)} thread on this conversation.`,
+      reason,
       requiresConfig: hasThread,
     });
   }
@@ -161,7 +184,8 @@ export function getAvailableReplyActions(conversation) {
       action: "REPLY_REVIEW",
       label: "Reply to review",
       available: false,
-      reason: `${humanizeProvider(provider)} review replies aren't connected yet.`,
+      reason:
+        scopeBlocker ?? `${humanizeProvider(provider)} review replies aren't connected yet.`,
       requiresConfig: true,
     });
   }

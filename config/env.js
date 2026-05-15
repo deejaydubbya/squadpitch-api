@@ -42,6 +42,19 @@ export const env = {
   META_APP_SECRET: process.env.META_APP_SECRET,
   META_OAUTH_REDIRECT_URI: process.env.META_OAUTH_REDIRECT_URI,
 
+  // Meta Inbox ingestion (Facebook Page comments + Instagram comments).
+  // Verify token is the value entered in the Meta App Dashboard's
+  // webhook subscription form — Meta sends it back on every GET
+  // verification handshake so we can confirm it's really them.
+  // The feature flag stays false until the Meta App Review grants
+  // pages_read_user_content / instagram_manage_comments. When false,
+  // the webhook still 200-OKs every POST but writes nothing — so we
+  // can deploy the receiver, prove it's reachable, and have ops
+  // visibility into payload shapes without persisting anything.
+  META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN,
+  META_INBOX_INGESTION_ENABLED:
+    String(process.env.META_INBOX_INGESTION_ENABLED ?? "false").toLowerCase() === "true",
+
   // OAuth state signing (HMAC secret, random 32+ bytes)
   OAUTH_STATE_SECRET: process.env.OAUTH_STATE_SECRET,
 

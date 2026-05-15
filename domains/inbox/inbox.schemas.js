@@ -47,16 +47,23 @@ export const ManualMessageSchema = z.object({
 });
 
 // channel hints what surface the workspace user is drafting toward.
-// "email"   — outbound email; full greeting + sign-off-ready
-// "reply"   — logged-external (paste into another tool); brief, no greeting
-// "note"    — internal team note about the lead; third-person, no greeting,
-//             references the lead by name/email
+// "email"          — outbound email; full greeting + sign-off-ready
+// "reply"          — logged-external (paste into another tool); brief, no greeting
+// "note"           — internal team note about the lead; third-person, no greeting
+// "public_comment" — public-surface reply (e.g. Facebook/Instagram
+//                    comment). Shorter, safer, no PII; assume the
+//                    whole internet can read it.
+// "private_dm"     — direct message (FB/IG DM); more conversational
+//                    like email but no sign-off — DMs are short.
 // Defaults to "email" because that's the only real outbound channel
 // today; older clients that don't send the field still get sensible
 // output.
 export const AiReplyRequestSchema = z.object({
   tone: z.enum(["professional", "friendly", "concise"]).optional().default("professional"),
-  channel: z.enum(["email", "reply", "note"]).optional().default("email"),
+  channel: z
+    .enum(["email", "reply", "note", "public_comment", "private_dm"])
+    .optional()
+    .default("email"),
 });
 
 // Inbox outbound email — first real send channel (Postmark).

@@ -20,6 +20,7 @@ import { publicSitesRouter } from "./domains/sites/public.routes.js";
 import { sitesDashboardRouter } from "./domains/sites/sites.dashboard.routes.js";
 import { inboxRouter } from "./domains/inbox/inbox.routes.js";
 import { inboxWebhookRouter } from "./domains/inbox/inbox.webhook.routes.js";
+import { inboxMetaWebhookRouter } from "./domains/inbox/inbox.meta.webhook.routes.js";
 import { adsRouter } from "./domains/ads/ads.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
 import { webhookRouter } from "./domains/notifications/webhook.routes.js";
@@ -160,6 +161,13 @@ app.use(publicSitesRouter);
 // deliver parsed lead replies. Verified via shared-secret
 // (POSTMARK_INBOUND_WEBHOOK_SECRET); no Bearer auth.
 app.use(inboxWebhookRouter);
+
+// SquadInbox Meta webhook — Facebook Page + Instagram comment
+// events. GET = subscription verification; POST = signed event
+// delivery. Body writes gated by META_INBOX_INGESTION_ENABLED so
+// the receiver can deploy before Meta App Review grants the new
+// scopes.
+app.use(inboxMetaWebhookRouter);
 
 // Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
 app.use("/api", (req, res, next) => {

@@ -489,15 +489,14 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext 
     sourceContext?.page || sourceContext?.campaign || sourceContext?.dataItem,
   );
 
-  // Channel framing. Three surfaces:
-  //   email   — real outbound email; the workspace user will click
-  //             Send. Needs a warm greeting and natural reply prose.
-  //   reply   — logged-external; the user is pasting this into
-  //             another tool (their CRM, their personal Gmail).
-  //             Skip the greeting/sign-off so they can adapt it.
-  //   note    — internal team note. Third-person ("Lead asked about
-  //             pricing; they came in from <page>…"). No greeting,
-  //             no first-person on behalf of the brand.
+  // Channel framing. Five surfaces:
+  //   email          — real outbound email; warm greeting + sign-off
+  //   reply          — logged-external; brief, no greeting/sign-off
+  //   note           — internal team note; third-person
+  //   public_comment — visible on the source platform to anyone who
+  //                    can see the post. Shorter, safer, no PII.
+  //   private_dm     — direct message; conversational like email,
+  //                    but no greeting/sign-off (DMs read like chat)
   const lines = [];
   if (channel === "note") {
     lines.push(
@@ -508,6 +507,18 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext 
     lines.push(
       `You draft a short outbound reply to a lead who came in via ${brandName}'s website. The workspace user will paste this into another tool (their CRM, their email client) so keep it minimal.`,
       `Tone: ${tone}. 1–3 sentences. No greeting, no sign-off — just the reply text itself.`,
+    );
+  } else if (channel === "public_comment") {
+    // Public-surface reply (FB/IG comment). Whatever you write
+    // here is visible to every viewer of the parent post.
+    lines.push(
+      `You draft a short public reply on behalf of ${brandName} to a comment on its social post. This reply will be visible to every viewer of the post — including people who are not the original commenter.`,
+      `Tone: ${tone}. 1–2 sentences max. Never include the commenter's email, phone, address, or any private detail; offer to continue privately via DM or email if a specific question needs a longer answer.`,
+    );
+  } else if (channel === "private_dm") {
+    lines.push(
+      `You draft a private direct message on behalf of ${brandName} to a contact via social DM (Facebook Messenger or Instagram Direct). The lead messaged the page directly; only they will see this reply.`,
+      `Tone: ${tone}. 1–3 sentences. DMs read like chat — no formal greeting, no sign-off. Mention the lead by first name if known.`,
     );
   } else {
     // email (default)
@@ -530,6 +541,12 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext 
     lines.push("- Address the lead by first name if their name is provided.");
   } else if (channel === "note") {
     lines.push("- Refer to the lead by name (or email/phone if no name) — never address them directly.");
+  } else if (channel === "private_dm") {
+    lines.push("- Address the lead by first name if their name is provided.");
+  } else if (channel === "public_comment") {
+    lines.push("- Address the commenter by first name only if their name is provided AND it's already public on the comment.");
+    lines.push("- Never repeat or include the commenter's email, phone, address, or any contact detail in a public reply.");
+    lines.push("- If the question can't be answered safely in public, invite them to continue via DM or email.");
   }
 
   if (hasSource) {
@@ -571,6 +588,14 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext 
   } else if (channel === "reply") {
     lines.push(
       "- Land on a concrete next step but keep it tight — no greeting, no closing.",
+    );
+  } else if (channel === "public_comment") {
+    lines.push(
+      "- End with either a concrete answer, or an invitation to continue in DM/email if private detail is needed.",
+    );
+  } else if (channel === "private_dm") {
+    lines.push(
+      "- End with a concrete next step. No closing line — DMs end where the message ends.",
     );
   } else {
     // note
@@ -659,6 +684,10 @@ function buildAiReplyUserPrompt({ contact, lastInbound, history, sourceContext, 
   lines.push("");
   if (channel === "note") {
     lines.push("Write a single internal note for the team. JSON only.");
+  } else if (channel === "public_comment") {
+    lines.push("Draft a single short public reply. JSON only.");
+  } else if (channel === "private_dm") {
+    lines.push("Draft a single direct message. JSON only.");
   } else {
     lines.push("Draft a single reply. JSON only.");
   }

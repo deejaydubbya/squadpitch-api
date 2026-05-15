@@ -160,7 +160,11 @@ describe("getAvailableReplyActions — Facebook conversation", () => {
     expect(comment).toBeTruthy();
     expect(comment.available).toBe(false);
     expect(comment.requiresConfig).toBe(true);
-    expect(comment.reason).toMatch(/Facebook/i);
+    // After spinstr10 the resolver surfaces the specific missing
+    // scopes via the providerCapabilities matrix instead of a
+    // generic "Facebook isn't connected" message.
+    expect(comment.reason).toMatch(/Meta App Review/i);
+    expect(comment.reason).toMatch(/pages_manage_engagement/);
 
     const dm = findAction(actions, "REPLY_DM");
     expect(dm).toBeTruthy();
