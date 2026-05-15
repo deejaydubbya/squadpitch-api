@@ -272,7 +272,7 @@ export async function generateAiReply(
   clientId,
   conversationId,
   userId,
-  { tone = "professional" } = {},
+  { tone = "professional", channel = "email" } = {},
 ) {
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, clientId },
@@ -309,13 +309,19 @@ export async function generateAiReply(
   // property page got a generic "please specify" reply.
   const sourceContext = await loadAiReplyContext(conversation);
 
-  const systemPrompt = buildAiReplySystemPrompt({ ctx, tone, sourceContext });
+  const systemPrompt = buildAiReplySystemPrompt({
+    ctx,
+    tone,
+    channel,
+    sourceContext,
+  });
   const userPrompt = buildAiReplyUserPrompt({
     conversation,
     contact: conversation.contact,
     lastInbound,
     history: conversation.messages.reverse(),
     sourceContext,
+    channel,
   });
 
   const result = await generateStructuredContent({
@@ -358,7 +364,7 @@ export async function generateAiReply(
     model: result.model,
     promptTokens: result.usage?.prompt_tokens ?? 0,
     completionTokens: result.usage?.completion_tokens ?? 0,
-    metadata: { source: "inbox_reply", conversationId, tone },
+    metadata: { source: "inbox_reply", conversationId, tone, channel },
   });
 
   return suggestion;
@@ -461,7 +467,7 @@ export async function loadAiReplyContext(conversation) {
 
 // ── Prompt builders ────────────────────────────────────────────────────
 
-function buildAiReplySystemPrompt({ ctx, tone, sourceContext }) {
+function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext }) {
   const brandName = ctx.client?.name ?? "the business";
   const voice = ctx.voice ?? null;
   const brand = ctx.brand ?? null;
@@ -469,10 +475,34 @@ function buildAiReplySystemPrompt({ ctx, tone, sourceContext }) {
     sourceContext?.page || sourceContext?.campaign || sourceContext?.dataItem,
   );
 
-  const lines = [
-    `You write a single reply on behalf of ${brandName} to a lead who came in via the website.`,
-    `Tone: ${tone}. Keep it short (1–3 sentences), warm, specific, sales-appropriate, and never invent facts.`,
-  ];
+  // Channel framing. Three surfaces:
+  //   email   — real outbound email; the workspace user will click
+  //             Send. Needs a warm greeting and natural reply prose.
+  //   reply   — logged-external; the user is pasting this into
+  //             another tool (their CRM, their personal Gmail).
+  //             Skip the greeting/sign-off so they can adapt it.
+  //   note    — internal team note. Third-person ("Lead asked about
+  //             pricing; they came in from <page>…"). No greeting,
+  //             no first-person on behalf of the brand.
+  const lines = [];
+  if (channel === "note") {
+    lines.push(
+      `You write a short internal note (1–3 sentences) for the ${brandName} team about a lead who came in via the website. The note will be visible only to the team, never sent to the lead.`,
+      `Tone: ${tone}. Write in the third person, no greeting, no sign-off. Focus on what the lead asked and any facts the team needs to follow up well.`,
+    );
+  } else if (channel === "reply") {
+    lines.push(
+      `You draft a short outbound reply to a lead who came in via ${brandName}'s website. The workspace user will paste this into another tool (their CRM, their email client) so keep it minimal.`,
+      `Tone: ${tone}. 1–3 sentences. No greeting, no sign-off — just the reply text itself.`,
+    );
+  } else {
+    // email (default)
+    lines.push(
+      `You write a single email reply on behalf of ${brandName} to a lead who came in via the website.`,
+      `Tone: ${tone}. Keep it short (1–3 sentences), warm, specific, sales-appropriate, and never invent facts.`,
+    );
+  }
+
   if (brand?.tagline) lines.push(`Brand tagline: ${brand.tagline}`);
   if (brand?.valueProposition)
     lines.push(`Value proposition: ${brand.valueProposition}`);
@@ -482,7 +512,11 @@ function buildAiReplySystemPrompt({ ctx, tone, sourceContext }) {
   lines.push("");
   lines.push("Output rules:");
   lines.push("- Respond ONLY with JSON matching the supplied schema.");
-  lines.push("- Address the lead by first name if their name is provided.");
+  if (channel === "email") {
+    lines.push("- Address the lead by first name if their name is provided.");
+  } else if (channel === "note") {
+    lines.push("- Refer to the lead by name (or email/phone if no name) — never address them directly.");
+  }
 
   if (hasSource) {
     // The core fix for context-blind replies: when the lead came in
@@ -492,28 +526,48 @@ function buildAiReplySystemPrompt({ ctx, tone, sourceContext }) {
     lines.push(
       "- The lead arrived from a specific source page or campaign. Treat their question as referring to that source unless the message clearly references something else.",
     );
-    lines.push(
-      "- If the source facts below contain the answer, state it directly. If a specific fact is missing, say you will check and follow up — never ask the lead to clarify which property/page they meant.",
-    );
+    if (channel === "note") {
+      lines.push(
+        "- Summarize what's known from the source facts so the team doesn't have to dig — quote the price, address, etc. directly.",
+      );
+      lines.push(
+        "- If a fact the lead asked about is missing, flag it clearly so the team knows what to confirm.",
+      );
+    } else {
+      lines.push(
+        "- If the source facts below contain the answer, state it directly. If a specific fact is missing, say you will check and follow up — never ask the lead to clarify which property/page they meant.",
+      );
+    }
     lines.push(
       "- Never invent a price, address, square footage, or any other property detail. If it isn't in the source facts, treat it as unknown.",
     );
-  } else {
+  } else if (channel !== "note") {
     lines.push(
       "- Acknowledge the specific page/topic they came from when known.",
     );
   }
 
-  lines.push(
-    "- End with a concrete next step (answering a question, sending details, offering a showing or call).",
-  );
-  lines.push(
-    "- Don't sign off with anything more than a first name; we'll add the workspace's preferred sign-off.",
-  );
+  if (channel === "email") {
+    lines.push(
+      "- End with a concrete next step (answering a question, sending details, offering a showing or call).",
+    );
+    lines.push(
+      "- Don't sign off with anything more than a first name; we'll add the workspace's preferred sign-off.",
+    );
+  } else if (channel === "reply") {
+    lines.push(
+      "- Land on a concrete next step but keep it tight — no greeting, no closing.",
+    );
+  } else {
+    // note
+    lines.push(
+      "- End with a one-line suggested next action for the team (e.g. \"Confirm price and reply with showing times\").",
+    );
+  }
   return lines.join("\n");
 }
 
-function buildAiReplyUserPrompt({ contact, lastInbound, history, sourceContext }) {
+function buildAiReplyUserPrompt({ contact, lastInbound, history, sourceContext, channel = "email" }) {
   const { page, campaign, submission, dataItem } = sourceContext ?? {};
 
   const lines = [
@@ -589,7 +643,11 @@ function buildAiReplyUserPrompt({ contact, lastInbound, history, sourceContext }
   }
 
   lines.push("");
-  lines.push("Draft a single reply. JSON only.");
+  if (channel === "note") {
+    lines.push("Write a single internal note for the team. JSON only.");
+  } else {
+    lines.push("Draft a single reply. JSON only.");
+  }
   return lines.join("\n");
 }
 

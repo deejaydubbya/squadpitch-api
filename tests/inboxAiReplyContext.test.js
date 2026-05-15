@@ -310,3 +310,119 @@ describe("generateAiReply — source context grounding", () => {
     });
   });
 });
+
+// ── Channel-aware grounding (spinstr06) ────────────────────────────────
+//
+// The composer has three surfaces (Send email / Log reply / Internal
+// note); the AI suggester needs to know which because the right
+// shape of output differs:
+//   email — "Hi <name>, ..." with a sign-off-ready next step
+//   reply — terse paste-into-another-tool; no greeting/sign-off
+//   note  — third-person team note about the lead
+//
+// These tests pin the system prompt rules per channel against the
+// captured prompt.
+
+describe("generateAiReply — channel framing", () => {
+  beforeEach(() => {
+    captured = {};
+    fixtures = {
+      prisma: buildPrismaMock({ conversation: makeConversation() }),
+    };
+  });
+
+  it("email channel frames the draft as a real outbound email reply with greeting", async () => {
+    await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
+      tone: "professional",
+      channel: "email",
+    });
+    expect(captured.systemPrompt).toMatch(/single email reply/i);
+    expect(captured.systemPrompt).toMatch(/Address the lead by first name/i);
+    expect(captured.systemPrompt).toMatch(
+      /End with a concrete next step/i,
+    );
+  });
+
+  it("note channel produces a third-person team note (no greeting)", async () => {
+    await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
+      tone: "professional",
+      channel: "note",
+    });
+    // Third-person framing + explicit no-greeting rule.
+    expect(captured.systemPrompt).toMatch(/internal note/i);
+    expect(captured.systemPrompt).toMatch(/third person/i);
+    expect(captured.systemPrompt).toMatch(
+      /never address them directly/i,
+    );
+    // The "Hi <first name>" rule is suppressed for notes.
+    expect(captured.systemPrompt).not.toMatch(/Address the lead by first name/i);
+    // The user prompt closer flips to the note version.
+    expect(captured.userPrompt).toMatch(/internal note for the team/i);
+  });
+
+  it("reply (logged-external) channel skips the greeting/sign-off", async () => {
+    await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
+      tone: "concise",
+      channel: "reply",
+    });
+    expect(captured.systemPrompt).toMatch(
+      /paste this into another tool/i,
+    );
+    expect(captured.systemPrompt).toMatch(/No greeting, no sign-off/i);
+  });
+
+  it("defaults to email framing when no channel is provided (back-compat)", async () => {
+    await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
+      tone: "professional",
+    });
+    expect(captured.systemPrompt).toMatch(/single email reply/i);
+  });
+
+  it("note + source context summarizes facts for the team rather than the lead", async () => {
+    // Same property-page fixture as the price-question test above
+    // — but the note framing should reorient the rules toward the
+    // team rather than addressing the lead.
+    const conversation = makeConversation({
+      pageId: "page-note",
+      sourceFormSubmissionId: null,
+    });
+    const page = {
+      id: "page-note",
+      title: "508 King George Court",
+      slug: "508-king-george-court",
+      description: null,
+      sourceType: "PROPERTY",
+      sourceId: "data-note",
+      pageGoal: "LISTING",
+      seoDescription: null,
+      blocksJson: [],
+    };
+    const dataItem = {
+      id: "data-note",
+      type: "PROPERTY",
+      title: "508 King George Court",
+      summary: null,
+      dataJson: { price: 365000, bedrooms: 4 },
+      tags: [],
+    };
+    fixtures = { prisma: buildPrismaMock({ conversation, page, dataItem }) };
+
+    await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
+      tone: "professional",
+      channel: "note",
+    });
+
+    // Note-specific source rule replaces the "say you'll check"
+    // language with team-facing guidance.
+    expect(captured.systemPrompt).toMatch(
+      /Summarize what's known from the source facts/i,
+    );
+    expect(captured.systemPrompt).toMatch(
+      /one-line suggested next action for the team/i,
+    );
+    // Anti-hallucination rule still applies.
+    expect(captured.systemPrompt).toMatch(/never invent a price/i);
+    // Facts still reach the user prompt.
+    expect(captured.userPrompt).toContain("Price: 365000");
+  });
+});

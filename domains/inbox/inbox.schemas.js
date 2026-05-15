@@ -46,8 +46,17 @@ export const ManualMessageSchema = z.object({
   fromSuggestionId: z.string().max(64).optional(),
 });
 
+// channel hints what surface the workspace user is drafting toward.
+// "email"   — outbound email; full greeting + sign-off-ready
+// "reply"   — logged-external (paste into another tool); brief, no greeting
+// "note"    — internal team note about the lead; third-person, no greeting,
+//             references the lead by name/email
+// Defaults to "email" because that's the only real outbound channel
+// today; older clients that don't send the field still get sensible
+// output.
 export const AiReplyRequestSchema = z.object({
   tone: z.enum(["professional", "friendly", "concise"]).optional().default("professional"),
+  channel: z.enum(["email", "reply", "note"]).optional().default("email"),
 });
 
 // Inbox outbound email — first real send channel (Postmark).
