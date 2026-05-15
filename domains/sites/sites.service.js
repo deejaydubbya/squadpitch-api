@@ -28,6 +28,28 @@ function getBaseDomain() {
 }
 
 /**
+ * Public-facing base domain for [client].squadpitchsites.com URLs.
+ * Exported so other domains (e.g. ads exports) can render real
+ * URLs that match the public runtime's routing.
+ */
+export function getPublicSitesBaseDomain() {
+  return getBaseDomain();
+}
+
+/**
+ * Compose a public SquadSites page URL from a client slug + page
+ * slug. Returns null when either piece is missing; callers should
+ * surface a useful error rather than emit a partial URL.
+ */
+export function buildPublicSitePageUrl({ clientSlug, pageSlug } = {}) {
+  if (typeof clientSlug !== "string" || clientSlug.trim().length === 0) return null;
+  if (typeof pageSlug !== "string" || pageSlug.trim().length === 0) return null;
+  const cleanClient = clientSlug.trim().toLowerCase();
+  const cleanPage = pageSlug.trim().replace(/^\/+/, "");
+  return `https://${cleanClient}.${getBaseDomain()}/${cleanPage}`;
+}
+
+/**
  * Extract the client slug from a `[client].squadpitchsites.com`
  * hostname. Custom-domain resolution (Phase E) would also live
  * here, looking up a Domain table — for now we only support the

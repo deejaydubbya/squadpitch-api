@@ -12,6 +12,7 @@ import { prisma } from "../../prisma.js";
 import { loadClientGenerationContext } from "../studio/generation/clientOrchestrator.js";
 import { generateStructuredContent } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
+import { buildPublicSitePageUrl } from "../sites/sites.service.js";
 
 // ── List + detail ──────────────────────────────────────────────────────
 
@@ -54,7 +55,65 @@ export async function getPackage(clientId, packageId) {
   // whitelisted — never expose page blocksJson or data item dataJson
   // raw, the AI prompt builder handles that separately.
   const sourceSummary = await resolveSourceSummary(row);
-  return { ...row, sourceSummary };
+  // For SITE_PAGE destinations, resolve the public URL so the
+  // detail editor can show what the export will produce. Warnings
+  // surface here too — the UI uses them to show "page must be
+  // published" before the user even clicks Export.
+  const destinationPreview = await resolveDestinationPreview(row);
+  return { ...row, sourceSummary, destinationPreview };
+}
+
+// Returns { resolvedUrl, warning } for the UI. Mirrors the export
+// service's rules but never throws — warnings are surfaced as text
+// instead so the user can fix them inline.
+async function resolveDestinationPreview(pkg) {
+  if (!pkg.destination) return null;
+  const dest = pkg.destination;
+  if (dest.kind === "EXTERNAL_URL") {
+    return { resolvedUrl: dest.externalUrl ?? null, warning: null };
+  }
+  if (dest.kind === "SOCIAL_PROFILE") {
+    return { resolvedUrl: dest.socialProfile ?? null, warning: null };
+  }
+  if (dest.kind !== "SITE_PAGE") return null;
+  if (!dest.sitePageId) {
+    return {
+      resolvedUrl: null,
+      warning: "Pick a SquadSite page for this destination.",
+    };
+  }
+  const page = await prisma.sitePage.findUnique({
+    where: { id: dest.sitePageId },
+    select: { id: true, slug: true, status: true, clientId: true, title: true },
+  });
+  if (!page || page.clientId !== pkg.clientId) {
+    // 404-equivalent — never leak existence across tenants in the warning text.
+    return {
+      resolvedUrl: null,
+      warning: "Selected SquadSite page is unavailable. Pick a different page.",
+    };
+  }
+  if (page.status !== "PUBLISHED") {
+    return {
+      resolvedUrl: null,
+      warning: `Page "${page.title}" must be published before export.`,
+    };
+  }
+  const client = await prisma.client.findUnique({
+    where: { id: pkg.clientId },
+    select: { slug: true },
+  });
+  const url = buildPublicSitePageUrl({
+    clientSlug: client?.slug,
+    pageSlug: page.slug,
+  });
+  if (!url) {
+    return {
+      resolvedUrl: null,
+      warning: "Workspace has no public slug yet — contact support.",
+    };
+  }
+  return { resolvedUrl: url, warning: null };
 }
 
 async function resolveSourceSummary(pkg) {

@@ -13,6 +13,7 @@
 // upstream by the service's readiness checks.
 
 import { prisma } from "../../prisma.js";
+import { buildPublicSitePageUrl } from "../sites/sites.service.js";
 
 export class ExportError extends Error {
   constructor(message, { status = 400, code = "EXPORT_FAILED" } = {}) {
@@ -78,7 +79,11 @@ export async function exportPackage(clientId, packageId, userId, { format = "jso
   }
 
   const sourceSummary = await resolveSourceSummaryForExport(pkg);
-  const destinationUrl = buildDestinationUrl(pkg.destination);
+  // For SITE_PAGE destinations we resolve a real public URL up
+  // front. If the page doesn't exist, belongs to another workspace,
+  // or isn't PUBLISHED, we fail the export here — never emit a
+  // squadsite:// placeholder or a URL the lead can't click.
+  const destinationUrl = await buildDestinationUrl(pkg.destination, pkg.clientId);
   const mediaList = await resolveMediaList(pkg.creatives);
 
   const bundle = {
@@ -238,12 +243,16 @@ async function resolveMediaList(creatives) {
   return out;
 }
 
-function buildDestinationUrl(destination) {
+async function buildDestinationUrl(destination, clientId) {
   if (!destination) return null;
   let base = null;
-  if (destination.kind === "EXTERNAL_URL") base = destination.externalUrl ?? null;
-  else if (destination.kind === "SITE_PAGE") base = destination.sitePageId ? `squadsite://page/${destination.sitePageId}` : null;
-  else if (destination.kind === "SOCIAL_PROFILE") base = destination.socialProfile ?? null;
+  if (destination.kind === "EXTERNAL_URL") {
+    base = destination.externalUrl ?? null;
+  } else if (destination.kind === "SOCIAL_PROFILE") {
+    base = destination.socialProfile ?? null;
+  } else if (destination.kind === "SITE_PAGE") {
+    base = await resolveSitePageDestinationUrl(destination.sitePageId, clientId);
+  }
   if (!base) return null;
 
   const utm = destination.utmJson;
@@ -254,10 +263,64 @@ function buildDestinationUrl(destination) {
     if (typeof v === "string" && v.trim()) params.set(`utm_${k}`, v.trim());
   }
   if ([...params.keys()].length === 0) return base;
-  // Only append UTMs to a real URL — internal squadsite:// scheme
-  // shouldn't carry them in the export.
+  // Only append UTMs to a real http(s) URL. Social-profile values
+  // (e.g. "instagram:smithrealty") are not URLs and shouldn't
+  // carry query params.
   if (!base.startsWith("http")) return base;
   return base.includes("?") ? `${base}&${params.toString()}` : `${base}?${params.toString()}`;
+}
+
+// Looks up the SitePage + the owning Client's slug, validates the
+// page is in the same workspace as the AdPackage AND is PUBLISHED,
+// and returns the public https URL. Throws ExportError when any
+// preconditions fail — we never emit a placeholder.
+async function resolveSitePageDestinationUrl(sitePageId, clientId) {
+  if (!sitePageId) {
+    throw new ExportError(
+      "SITE_PAGE destination has no sitePageId configured",
+      { status: 400, code: "DESTINATION_MISSING_SITE_PAGE" },
+    );
+  }
+  const page = await prisma.sitePage.findUnique({
+    where: { id: sitePageId },
+    select: { id: true, slug: true, status: true, clientId: true },
+  });
+  if (!page) {
+    throw new ExportError(
+      "Destination SquadSite page not found",
+      { status: 404, code: "SITE_PAGE_NOT_FOUND" },
+    );
+  }
+  // Cross-workspace defense — never resolve a page from a different
+  // workspace, even if the FK was previously written. Same 404 we
+  // return for missing so we don't leak existence across tenants.
+  if (page.clientId !== clientId) {
+    throw new ExportError(
+      "Destination SquadSite page not found",
+      { status: 404, code: "SITE_PAGE_NOT_FOUND" },
+    );
+  }
+  if (page.status !== "PUBLISHED") {
+    throw new ExportError(
+      "Destination SquadSite page must be published before export",
+      { status: 400, code: "SITE_PAGE_NOT_PUBLISHED" },
+    );
+  }
+  const client = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { slug: true },
+  });
+  const url = buildPublicSitePageUrl({
+    clientSlug: client?.slug,
+    pageSlug: page.slug,
+  });
+  if (!url) {
+    throw new ExportError(
+      "Workspace has no public slug configured — cannot build destination URL",
+      { status: 400, code: "WORKSPACE_SLUG_MISSING" },
+    );
+  }
+  return url;
 }
 
 function renderMarkdown(bundle) {
