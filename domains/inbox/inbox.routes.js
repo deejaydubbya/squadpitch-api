@@ -9,6 +9,7 @@ import express from "express";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { requireClientOwner } from "../studio/ownership.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
+import { writeAudit } from "../../lib/auditLog.js";
 import {
   getServiceStatus,
   isProviderBudgetExceeded,
@@ -20,6 +21,7 @@ import {
   ManualMessageSchema,
   AiReplyRequestSchema,
   SendEmailSchema,
+  UpdateContactSchema,
 } from "./inbox.schemas.js";
 import * as service from "./inbox.service.js";
 import { sendInboxEmail } from "./inbox.outbound.email.service.js";
@@ -214,6 +216,42 @@ inboxRouter.post(
         parsed.data,
       );
       res.status(201).json({ suggestion });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Contact mutation (CRM-lite) ────────────────────────────────────────
+//
+// Workspace-scoped — requireClientOwner gates on :id, and the
+// service layer scopes the contact lookup by clientId in defense
+// in depth. Every successful mutation writes an AuditLog row with
+// a before/after diff for the keys the caller actually changed.
+inboxRouter.patch(
+  `${BASE}/workspaces/:id/contacts/:contactId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpdateContactSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const { contact, diff } = await service.updateContact(
+        req.params.id,
+        req.params.contactId,
+        parsed.data,
+      );
+      // Audit only when something actually changed. A no-op PATCH
+      // (e.g. setting status to its current value) shouldn't pad
+      // the audit table.
+      if (Object.keys(diff).length > 0) {
+        await writeAudit(req, {
+          action: "contact.update",
+          resourceType: "Contact",
+          resourceId: contact.id,
+          metadata: { clientId: req.params.id, diff },
+        });
+      }
+      res.json({ contact });
     } catch (err) {
       handleServiceError(res, err, next);
     }

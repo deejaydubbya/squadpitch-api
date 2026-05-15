@@ -58,3 +58,37 @@ export const SendEmailSchema = z.object({
   subject: z.string().max(300).optional(),
   fromSuggestionId: z.string().max(64).optional(),
 });
+
+// CRM-lite contact mutation. Every field is optional; the refine
+// catches the no-op { } body. Email is validated as an email when
+// non-null, but null is permitted so workspace users can clear a
+// stale address (the service-layer still enforces that at least
+// one of email/phone remains non-null on the resulting row).
+//
+// tags is REPLACE semantics — caller sends the full desired set.
+// Keeps the API verb simple (one PATCH does it all) and avoids
+// races between concurrent add/remove ops on the same row.
+export const ContactStatusEnum = z.enum([
+  "NEW",
+  "ENGAGED",
+  "QUALIFIED",
+  "CONVERTED",
+  "ARCHIVED",
+]);
+
+const trimToNull = (v) =>
+  typeof v === "string" && v.trim().length === 0 ? null : v;
+
+export const UpdateContactSchema = z
+  .object({
+    status: ContactStatusEnum.optional(),
+    name: z.preprocess(trimToNull, z.string().max(240).nullable()).optional(),
+    email: z
+      .preprocess(trimToNull, z.string().email().max(320).nullable())
+      .optional(),
+    phone: z.preprocess(trimToNull, z.string().max(64).nullable()).optional(),
+    tags: z.array(z.string().min(1).max(64)).max(24).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "At least one field must be provided",
+  });

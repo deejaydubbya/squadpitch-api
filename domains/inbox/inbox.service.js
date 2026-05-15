@@ -753,3 +753,104 @@ export async function getInboxStats(clientId) {
   ]);
   return { unreadCount, openCount, spamCount, totalCount };
 }
+
+// ── Contact mutation (CRM-lite) ─────────────────────────────────────────
+//
+// Workspace user edits to a Contact row: status, identity (name /
+// email / phone), and tags. Tenant-scoped — every lookup filters by
+// clientId so a forgotten route guard can't cross workspaces.
+//
+// Partial PATCH semantics: undefined keys stay untouched, null on
+// nullable fields explicitly clears the value. The schema layer
+// trims whitespace and turns blank strings into null.
+
+const CONTACT_AUDITABLE_KEYS = ["status", "name", "email", "phone", "tags"];
+
+/**
+ * Apply a partial update to a Contact. Tenant-isolated by clientId.
+ *
+ * Errors thrown (each carries .status + .code):
+ *   404 CONTACT_NOT_FOUND     — no contact with this id in this workspace
+ *   400 IDENTITY_REQUIRED     — the change would leave the row with
+ *                                no email AND no phone (we never allow
+ *                                an identity-less contact)
+ *   409 IDENTITY_CONFLICT     — another contact in this workspace
+ *                                already uses the email or phone
+ *
+ * Returns the freshly-updated Contact row.
+ */
+export async function updateContact(clientId, contactId, patch) {
+  const existing = await prisma.contact.findFirst({
+    where: { id: contactId, clientId },
+  });
+  if (!existing) {
+    const err = new Error("Contact not found");
+    err.status = 404;
+    err.code = "CONTACT_NOT_FOUND";
+    throw err;
+  }
+
+  // Build the prospective new identity state so we can enforce the
+  // "at least one of email/phone is non-null" rule without doing
+  // two round-trips. undefined means "no change", null means "clear".
+  const nextEmail = patch.email === undefined ? existing.email : patch.email;
+  const nextPhone = patch.phone === undefined ? existing.phone : patch.phone;
+  if (!nextEmail && !nextPhone) {
+    const err = new Error("Contact must keep at least one of email or phone");
+    err.status = 400;
+    err.code = "IDENTITY_REQUIRED";
+    throw err;
+  }
+
+  // Only include keys the caller actually provided. Letting
+  // `undefined` through to Prisma is fine (it ignores them), but
+  // building an explicit `data` keeps the audit diff legible.
+  const data = {};
+  for (const key of CONTACT_AUDITABLE_KEYS) {
+    if (patch[key] !== undefined) data[key] = patch[key];
+  }
+
+  let updated;
+  try {
+    updated = await prisma.contact.update({
+      where: { id: existing.id },
+      data,
+    });
+  } catch (e) {
+    // Composite unique on (clientId, email) or (clientId, phone).
+    // Surface a 409 so the UI can prompt the user to merge or pick
+    // a different value — better than a bare 500.
+    if (e?.code === "P2002") {
+      const target = Array.isArray(e?.meta?.target) ? e.meta.target.join(",") : "";
+      const field = target.includes("email")
+        ? "email"
+        : target.includes("phone")
+          ? "phone"
+          : "identity";
+      const err = new Error(
+        `Another contact in this workspace already has that ${field}.`,
+      );
+      err.status = 409;
+      err.code = "IDENTITY_CONFLICT";
+      err.field = field;
+      throw err;
+    }
+    throw e;
+  }
+
+  // Audit diff: before / after for every key the caller touched.
+  // Skips fields that didn't change (status set to its current value)
+  // so the audit table doesn't fill with no-op rows.
+  const diff = {};
+  for (const key of CONTACT_AUDITABLE_KEYS) {
+    if (patch[key] === undefined) continue;
+    if (Array.isArray(existing[key]) || Array.isArray(updated[key])) {
+      const a = JSON.stringify(existing[key] ?? []);
+      const b = JSON.stringify(updated[key] ?? []);
+      if (a !== b) diff[key] = { from: existing[key] ?? [], to: updated[key] ?? [] };
+    } else if (existing[key] !== updated[key]) {
+      diff[key] = { from: existing[key] ?? null, to: updated[key] ?? null };
+    }
+  }
+  return { contact: updated, diff };
+}
