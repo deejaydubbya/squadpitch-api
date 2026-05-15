@@ -755,32 +755,60 @@ studioRouter.post(
   }
 );
 
-studioRouter.get(`${BASE}/business-data/:itemId`, async (req, res, next) => {
-  try {
-    const item = await dataService.getDataItem(req.params.itemId);
-    if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
-    res.json(dataService.formatDataItem(item));
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.patch(`${BASE}/business-data/:itemId`, async (req, res, next) => {
-  try {
-    const parsed = UpdateDataItemSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const item = await dataService.updateDataItem(req.params.itemId, parsed.data);
-    res.json(dataService.formatDataItem(item));
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.post(
-  `${BASE}/business-data/:itemId/archive`,
+// Workspace-scoped business-data item routes. Replaces the legacy
+// /business-data/:itemId routes which had no ownership check —
+// any authenticated user could read/modify/delete any workspace's
+// items by guessing cuid ids. Every handler now runs
+// requireClientOwner (auth → owner of :id matches) AND the service
+// layer scopes every query by clientId (defense in depth).
+//
+// The "Item not found" response intentionally covers both "doesn't
+// exist" and "exists in a different workspace" so we don't leak
+// existence across tenants.
+studioRouter.get(
+  `${BASE}/workspaces/:id/business-data/:itemId`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
-      const item = await dataService.archiveDataItem(req.params.itemId);
+      const item = await dataService.getDataItem(req.params.id, req.params.itemId);
+      if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
+      res.json(dataService.formatDataItem(item));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.patch(
+  `${BASE}/workspaces/:id/business-data/:itemId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpdateDataItemSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const item = await dataService.updateDataItem(
+        req.params.id,
+        req.params.itemId,
+        parsed.data,
+      );
+      if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
+      res.json(dataService.formatDataItem(item));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/business-data/:itemId/archive`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const item = await dataService.archiveDataItem(
+        req.params.id,
+        req.params.itemId,
+      );
+      if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
       res.json(dataService.formatDataItem(item));
     } catch (err) {
       next(err);
@@ -789,10 +817,15 @@ studioRouter.post(
 );
 
 studioRouter.delete(
-  `${BASE}/business-data/:itemId`,
+  `${BASE}/workspaces/:id/business-data/:itemId`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
-      await dataService.deleteDataItem(req.params.itemId);
+      const ok = await dataService.deleteDataItem(
+        req.params.id,
+        req.params.itemId,
+      );
+      if (!ok) return sendError(res, 404, "NOT_FOUND", "Data item not found");
       res.json({ ok: true });
     } catch (err) {
       next(err);
@@ -843,12 +876,17 @@ studioRouter.get(
   }
 );
 
+// Workspace-scoped — replaces the legacy unscoped variant.
+// Service-layer findFirst is keyed on (id, clientId), so an
+// id-guess from another workspace returns no opportunities.
 studioRouter.get(
-  `${BASE}/business-data/:itemId/opportunities`,
+  `${BASE}/workspaces/:id/business-data/:itemId/opportunities`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const channel = req.query.channel || undefined;
       const opportunities = await opportunityService.getOpportunitiesForItem(
+        req.params.id,
         req.params.itemId,
         { channel }
       );

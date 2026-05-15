@@ -127,14 +127,25 @@ export async function listDataItems(
   });
 }
 
-export async function getDataItem(id) {
-  return prisma.workspaceDataItem.findUnique({
-    where: { id },
+// Workspace-scoped item lookup. Every caller must pass the clientId
+// that the request was authenticated against — defense in depth on
+// top of requireClientOwner + assertDataItemInClient at the route
+// layer. findFirst with the composite filter means a stolen item id
+// from another workspace returns null rather than the row.
+export async function getDataItem(clientId, id) {
+  if (!clientId) {
+    throw new Error("getDataItem requires clientId — fix the caller");
+  }
+  return prisma.workspaceDataItem.findFirst({
+    where: { id, clientId },
     include: { performance: true },
   });
 }
 
-export async function updateDataItem(id, patch) {
+export async function updateDataItem(clientId, id, patch) {
+  if (!clientId) {
+    throw new Error("updateDataItem requires clientId — fix the caller");
+  }
   const data = {};
   if (patch.title !== undefined) data.title = patch.title;
   if (patch.summary !== undefined) data.summary = patch.summary;
@@ -145,18 +156,40 @@ export async function updateDataItem(id, patch) {
   if (patch.expiresAt !== undefined)
     data.expiresAt = patch.expiresAt ? new Date(patch.expiresAt) : null;
 
-  return prisma.workspaceDataItem.update({ where: { id }, data });
+  // updateMany so the clientId scope is part of the WHERE clause.
+  // Returns { count } — we re-fetch via getDataItem to keep the
+  // existing API response shape.
+  const result = await prisma.workspaceDataItem.updateMany({
+    where: { id, clientId },
+    data,
+  });
+  if (result.count === 0) return null;
+  return getDataItem(clientId, id);
 }
 
-export async function archiveDataItem(id) {
-  return prisma.workspaceDataItem.update({
-    where: { id },
+export async function archiveDataItem(clientId, id) {
+  if (!clientId) {
+    throw new Error("archiveDataItem requires clientId — fix the caller");
+  }
+  const result = await prisma.workspaceDataItem.updateMany({
+    where: { id, clientId },
     data: { status: "ARCHIVED" },
   });
+  if (result.count === 0) return null;
+  return getDataItem(clientId, id);
 }
 
-export async function deleteDataItem(id) {
-  return prisma.workspaceDataItem.delete({ where: { id } });
+export async function deleteDataItem(clientId, id) {
+  if (!clientId) {
+    throw new Error("deleteDataItem requires clientId — fix the caller");
+  }
+  // deleteMany so the composite where clause is honored. Returns 0
+  // when the item belongs to a different workspace — the route
+  // layer translates that to 404.
+  const result = await prisma.workspaceDataItem.deleteMany({
+    where: { id, clientId },
+  });
+  return result.count > 0;
 }
 
 export async function incrementDataItemUsage(id) {

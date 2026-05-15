@@ -132,9 +132,14 @@ export async function getContentOpportunities(
   return opportunities.slice(0, limit);
 }
 
-export async function getOpportunitiesForItem(itemId, { channel } = {}) {
-  const item = await prisma.workspaceDataItem.findUnique({
-    where: { id: itemId },
+// Workspace-scoped to prevent cross-tenant id-guessing. Both args
+// are required — see the route layer for the auth chain.
+export async function getOpportunitiesForItem(clientId, itemId, { channel } = {}) {
+  if (!clientId) {
+    throw new Error("getOpportunitiesForItem requires clientId — fix the caller");
+  }
+  const item = await prisma.workspaceDataItem.findFirst({
+    where: { id: itemId, clientId },
   });
   if (!item) return [];
 
