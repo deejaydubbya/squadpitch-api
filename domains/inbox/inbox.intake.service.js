@@ -12,6 +12,7 @@
 // of that function — the rest of the service stays the same.
 
 import { prisma } from "../../prisma.js";
+import { enqueueNotification } from "../notifications/notification.service.js";
 
 /**
  * Process a single FormSubmission row into the Inbox graph.
@@ -77,11 +78,92 @@ export async function intakeFormSubmission(submission) {
     submission,
   });
 
+  // Notify the workspace owner about the new lead. Fire-and-forget
+  // by design — notification failures must NEVER block the intake
+  // (the request would 500 to the public form and the lead would
+  // never land in the inbox). enqueueNotification has its own
+  // top-level try/catch, but we wrap with an extra .catch as a
+  // belt-and-braces guard for the user lookup step.
+  notifyNewLead({ submission, conversation, contact }).catch((err) => {
+    console.error("[INBOX_INTAKE] notify_new_lead_failed:", {
+      conversationId: conversation.id,
+      submissionId: submission.id,
+      err: err?.message ?? err,
+    });
+  });
+
   return {
     conversationId: conversation.id,
     contactId: contact.id,
     status: "created",
   };
+}
+
+// ── New-lead notification ──────────────────────────────────────────────
+
+async function notifyNewLead({ submission, conversation, contact }) {
+  // Resolve the workspace owner. Client.createdBy holds the Auth0
+  // sub of the user who created the workspace; the notification
+  // system keys off User.id, so we look that up. Solo workspaces
+  // for MVP — multi-user fan-out is a future change.
+  const client = await prisma.client.findUnique({
+    where: { id: submission.clientId },
+    select: { createdBy: true },
+  });
+  if (!client?.createdBy) return;
+
+  const ownerUser = await prisma.user.findUnique({
+    where: { auth0Sub: client.createdBy },
+    select: { id: true },
+  });
+  if (!ownerUser) return;
+
+  // Source-page lookup is best-effort. If the page was deleted
+  // since the form submitted, fall back to "your form".
+  let sourcePageTitle = null;
+  if (submission.pageId) {
+    const page = await prisma.sitePage
+      .findUnique({
+        where: { id: submission.pageId },
+        select: { title: true },
+      })
+      .catch(() => null);
+    sourcePageTitle = page?.title ?? null;
+  }
+  let formName = null;
+  if (submission.formId) {
+    const form = await prisma.form
+      .findUnique({
+        where: { id: submission.formId },
+        select: { name: true },
+      })
+      .catch(() => null);
+    formName = form?.name ?? null;
+  }
+
+  // Contact preview: prefer the contact's name; fall back to a
+  // single channel (email OR phone). The full identity lives in
+  // the Inbox conversation — the bell only needs enough to make
+  // the link click-worthy.
+  const contactPreview =
+    contact?.name ||
+    contact?.email ||
+    contact?.phone ||
+    null;
+
+  await enqueueNotification({
+    userId: ownerUser.id,
+    eventType: "NEW_LEAD",
+    payload: {
+      clientId: submission.clientId,
+      conversationId: conversation.id,
+      contactPreview,
+      sourcePageTitle,
+      formName,
+    },
+    resourceType: "conversation",
+    resourceId: conversation.id,
+  });
 }
 
 // ── Contact upsert ─────────────────────────────────────────────────────

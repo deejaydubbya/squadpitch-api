@@ -5,13 +5,14 @@ import { env } from "../../config/env.js";
 
 const APP = env.APP_URL || "https://squadpitch-web.fly.dev";
 
-// The 5 events that also trigger bell notifications.
+// Events that also trigger bell notifications.
 export const NOTIFICATION_EVENTS = new Set([
   "POST_PUBLISHED",
   "POST_FAILED",
   "USAGE_LIMIT_NEARING",
   "CONNECTION_EXPIRED",
   "BATCH_COMPLETE",
+  "NEW_LEAD",
 ]);
 
 // All activity event types.
@@ -83,6 +84,21 @@ export const activityTemplates = {
       description: `${count} ${count === 1 ? "draft" : "drafts"} generated.`,
       icon: "layers",
       linkUrl: `${APP}/workspaces/${clientId}/library`,
+    };
+  },
+
+  NEW_LEAD({ clientId, conversationId, contactPreview, sourcePageTitle, formName }) {
+    const source = sourcePageTitle || formName || "your form";
+    const desc = contactPreview
+      ? `New lead from ${source} (${contactPreview}).`
+      : `New lead from ${source}.`;
+    return {
+      title: "New lead",
+      description: desc,
+      icon: "user-plus",
+      linkUrl: conversationId
+        ? `${APP}/workspaces/${clientId}/inbox?c=${conversationId}`
+        : `${APP}/workspaces/${clientId}/inbox`,
     };
   },
 

@@ -47,4 +47,21 @@ export const inAppTemplates = {
       linkUrl: `${APP}/workspaces/${clientId}/library`,
     };
   },
+
+  NEW_LEAD({ clientId, conversationId, contactPreview, sourcePageTitle, formName }) {
+    // Title: "New lead from <page or form>". Message: best-effort
+    // contact preview + optional page name. Link goes straight to
+    // the inbox detail. Contact identity is intentionally limited
+    // to a single channel (email OR phone, whichever was on the
+    // submission) — full PII lives in the Inbox, not the bell.
+    const source = sourcePageTitle || formName || "your form";
+    const preview = contactPreview ? ` from ${contactPreview}` : "";
+    return {
+      title: "New lead",
+      message: `${source}${preview}`,
+      linkUrl: conversationId
+        ? `${APP}/workspaces/${clientId}/inbox?c=${conversationId}`
+        : `${APP}/workspaces/${clientId}/inbox`,
+    };
+  },
 };

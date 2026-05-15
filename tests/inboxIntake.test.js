@@ -7,6 +7,7 @@
 // so the suite stays fast (no DB boot).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFile } from "node:fs/promises";
 
 const CLIENT_ID = "client-x";
 const SUBMISSION_ID = "sub-1";
@@ -153,6 +154,30 @@ function createPrismaMock(initialState = {}) {
         return row;
       }),
     },
+    // Used by the NEW_LEAD notification path. Returns lookups
+    // configurable via state.{clients,users,pages,forms} so tests
+    // can opt in to specific scenarios; defaults to null which
+    // means the notification path no-ops cleanly.
+    client: {
+      findUnique: vi.fn(async ({ where }) =>
+        state.clients?.get?.(where.id) ?? null,
+      ),
+    },
+    user: {
+      findUnique: vi.fn(async ({ where }) =>
+        state.users?.get?.(where.auth0Sub) ?? null,
+      ),
+    },
+    sitePage: {
+      findUnique: vi.fn(async ({ where }) =>
+        state.pages?.get?.(where.id) ?? null,
+      ),
+    },
+    form: {
+      findUnique: vi.fn(async ({ where }) =>
+        state.forms?.get?.(where.id) ?? null,
+      ),
+    },
   };
 }
 
@@ -164,6 +189,13 @@ vi.mock("../prisma.js", () => ({
   },
 }));
 
+// Mock the notification.service so we can spy on the NEW_LEAD
+// payload without booting BullMQ or the real notification fan-out.
+const enqueueNotificationSpy = vi.fn();
+vi.mock("../domains/notifications/notification.service.js", () => ({
+  enqueueNotification: (...args) => enqueueNotificationSpy(...args),
+}));
+
 const { intakeFormSubmission } = await import(
   "../domains/inbox/inbox.intake.service.js"
 );
@@ -171,6 +203,7 @@ const { intakeFormSubmission } = await import(
 describe("intakeFormSubmission", () => {
   beforeEach(() => {
     prismaMock = createPrismaMock();
+    enqueueNotificationSpy.mockClear();
   });
 
   it("creates Contact + Conversation + initial Message for a fresh submission", async () => {
@@ -580,6 +613,122 @@ describe("intakeFormSubmission", () => {
     const row = prismaMock.state.auditLogs[0];
     expect(row.metadata.addedAlternateEmails).toEqual([]);
     expect(row.metadata.addedAlternatePhones).toEqual(["15552222222"]);
+  });
+
+  // ── NEW_LEAD notification (spinstr05) ──
+
+  // The notify-new-lead path is fire-and-forget. Tests need to
+  // let the microtask queue drain before asserting on the spy.
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  function seedClientAndOwner(state, { clientId = CLIENT_ID, auth0Sub = "auth0|owner-1", userId = "user-1" } = {}) {
+    state.clients ??= new Map();
+    state.users ??= new Map();
+    state.clients.set(clientId, { createdBy: auth0Sub });
+    state.users.set(auth0Sub, { id: userId });
+  }
+
+  it("fires NEW_LEAD notification with conversationId, page/form context, and a contactPreview", async () => {
+    seedClientAndOwner(prismaMock.state);
+    prismaMock.state.pages = new Map([[PAGE_ID, { title: "Pricing Inquiry" }]]);
+    prismaMock.state.forms = new Map([[FORM_ID, { name: "Contact form" }]]);
+
+    const result = await intakeFormSubmission(makeSubmission());
+    await flush();
+
+    expect(result.status).toBe("created");
+    expect(enqueueNotificationSpy).toHaveBeenCalledTimes(1);
+    const call = enqueueNotificationSpy.mock.calls[0][0];
+    expect(call.userId).toBe("user-1");
+    expect(call.eventType).toBe("NEW_LEAD");
+    expect(call.resourceType).toBe("conversation");
+    expect(call.resourceId).toBe(result.conversationId);
+    expect(call.payload).toMatchObject({
+      clientId: CLIENT_ID,
+      conversationId: result.conversationId,
+      sourcePageTitle: "Pricing Inquiry",
+      formName: "Contact form",
+    });
+    // Contact preview falls through name → email → phone.
+    // Fixture has name "Alice Smith".
+    expect(call.payload.contactPreview).toBe("Alice Smith");
+  });
+
+  it("does NOT fire NEW_LEAD when intake is a no-op replay (already_processed)", async () => {
+    seedClientAndOwner(prismaMock.state);
+    await intakeFormSubmission(makeSubmission());
+    // notifyNewLead is fire-and-forget — let its microtasks drain
+    // before clearing the spy, otherwise the first call's pending
+    // notification spuriously lands after mockClear.
+    await flush();
+    enqueueNotificationSpy.mockClear();
+
+    // Re-run with the same submission id — Conversation already
+    // exists, so intake short-circuits to "already_processed".
+    const second = await intakeFormSubmission(makeSubmission());
+    await flush();
+
+    expect(second.status).toBe("already_processed");
+    expect(enqueueNotificationSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire NEW_LEAD when intake skips for missing identity", async () => {
+    seedClientAndOwner(prismaMock.state);
+    const result = await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-noid",
+        contactEmail: null,
+        contactPhone: null,
+        dataJson: { message: "no contact info" },
+      }),
+    );
+    await flush();
+
+    expect(result.status).toBe("skipped");
+    expect(enqueueNotificationSpy).not.toHaveBeenCalled();
+  });
+
+  it("notification linkUrl points to /inbox?c=<conversationId> via the inApp template", async () => {
+    // Importing the template module here keeps the link-building
+    // contract pinned: any future template change that drops
+    // conversationId from the URL will fail this test.
+    const { inAppTemplates } = await import(
+      "../domains/notifications/inAppTemplates.js"
+    );
+    const tmpl = inAppTemplates.NEW_LEAD({
+      clientId: "client-x",
+      conversationId: "conv-xyz",
+      contactPreview: "alice@example.com",
+      sourcePageTitle: "Pricing",
+      formName: null,
+    });
+    expect(tmpl.linkUrl).toMatch(/\/workspaces\/client-x\/inbox\?c=conv-xyz$/);
+    expect(tmpl.title).toBe("New lead");
+    // Contact preview shows up in the message body.
+    expect(tmpl.message).toContain("alice@example.com");
+    expect(tmpl.message).toContain("Pricing");
+  });
+
+  it("NEW_LEAD is in the notification system's VALID_EVENTS set", async () => {
+    // Pin the registration. If a future cleanup removes NEW_LEAD
+    // from VALID_EVENTS, enqueueNotification would log a warning
+    // and silently drop the call — this test guards that.
+    const src = await readFile(
+      "domains/notifications/notification.service.js",
+      "utf8",
+    );
+    expect(src).toMatch(/NEW_LEAD/);
+    expect(src).toMatch(/VALID_EVENTS\s*=\s*new\s*Set\(\[[\s\S]*?"NEW_LEAD"/);
+  });
+
+  it("does not fire NEW_LEAD if Client.createdBy is missing (orphaned workspace)", async () => {
+    // No client seeded — Client.findUnique returns null. Intake
+    // still succeeds, but the notification path quietly no-ops.
+    const result = await intakeFormSubmission(makeSubmission());
+    await flush();
+
+    expect(result.status).toBe("created");
+    expect(enqueueNotificationSpy).not.toHaveBeenCalled();
   });
 
   // ── Detail payload exposes alternates ──

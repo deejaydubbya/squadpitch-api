@@ -351,7 +351,27 @@ export async function listSubmissions(clientId, { status, formId, limit, cursor 
     },
   });
   const nextCursor = rows.length > limit ? rows.pop().id : null;
-  return { submissions: rows, nextCursor };
+
+  // Deep-link to Inbox: each submission maps 1:1 to a Conversation
+  // via the unique sourceFormSubmissionId. Single batched lookup so
+  // the page renders "View in inbox" without N+1 round-trips. The
+  // intake service may have skipped submissions with no usable
+  // identity — those rows return inboxConversationId: null.
+  const ids = rows.map((r) => r.id);
+  const convs = ids.length
+    ? await prisma.conversation.findMany({
+        where: { clientId, sourceFormSubmissionId: { in: ids } },
+        select: { id: true, sourceFormSubmissionId: true },
+      })
+    : [];
+  const convBySubmission = new Map(
+    convs.map((c) => [c.sourceFormSubmissionId, c.id]),
+  );
+  const submissions = rows.map((r) => ({
+    ...r,
+    inboxConversationId: convBySubmission.get(r.id) ?? null,
+  }));
+  return { submissions, nextCursor };
 }
 
 export async function updateSubmissionStatus(clientId, submissionId, status) {
