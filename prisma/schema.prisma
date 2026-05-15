@@ -184,33 +184,34 @@ model Client {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  brandProfile      BrandProfile?
-  voiceProfile      VoiceProfile?
-  mediaProfile      MediaProfile?
-  brandPersona      BrandPersona?
-  contentPreferences ContentPreferences?
-  campaigns         Campaign[]
-  site              Site?
-  channelSettings   ChannelSettings[]
-  drafts            Draft[]
-  moderationLogs    ModerationLog[]
-  connections       ChannelConnection[]
-  mediaAssets       MediaAsset[]
-  assetFolders      AssetFolder[]
-  postMetrics           PostMetrics[]
-  postMetricSnapshots   PostMetricSnapshot[]
-  rawMetrics        RawMetric[]
-  normalizedMetrics NormalizedMetric[]
-  postInsights      PostInsight[]
-  workspaceAnalytics WorkspaceAnalytics?
-  analyticsSnapshots AnalyticsSnapshot[]
-  dataSources        WorkspaceDataSource[]
-  dataItems          WorkspaceDataItem[]
+  brandProfile         BrandProfile?
+  voiceProfile         VoiceProfile?
+  mediaProfile         MediaProfile?
+  brandPersona         BrandPersona?
+  contentPreferences   ContentPreferences?
+  campaigns            Campaign[]
+  site                 Site?
+  channelSettings      ChannelSettings[]
+  drafts               Draft[]
+  moderationLogs       ModerationLog[]
+  connections          ChannelConnection[]
+  mediaAssets          MediaAsset[]
+  assetFolders         AssetFolder[]
+  postMetrics          PostMetrics[]
+  postMetricSnapshots  PostMetricSnapshot[]
+  rawMetrics           RawMetric[]
+  normalizedMetrics    NormalizedMetric[]
+  postInsights         PostInsight[]
+  workspaceAnalytics   WorkspaceAnalytics?
+  analyticsSnapshots   AnalyticsSnapshot[]
+  dataSources          WorkspaceDataSource[]
+  dataItems            WorkspaceDataItem[]
   techStackConnections WorkspaceTechStackConnection[]
   trackableLinks       TrackableLink[]
   conversionEvents     ConversionEvent[]
   contacts             Contact[]
   conversations        Conversation[]
+  adPackages           AdPackage[]
 
   @@index([status])
   @@map("clients")
@@ -277,14 +278,14 @@ model ContentPreferences {
   // All nullable / array-default so existing rows stay valid
   // without backfill. String-typed enums (not Prisma enums) so
   // adding option values stays a code-only change.
-  defaultContentMode       String?   // 'campaign' | 'single_post'
-  defaultSource            String?   // 'property' | 'data_item' | 'idea'
-  preferredContentGoals    String[]  @default([])  // 'growth' | 'engagement' | 'sales'
-  defaultCtaPreference     String?   // 'dm_me' | 'schedule_consult' | 'visit_website' | 'call_now' | 'custom'
+  defaultContentMode       String? // 'campaign' | 'single_post'
+  defaultSource            String? // 'property' | 'data_item' | 'idea'
+  preferredContentGoals    String[]  @default([]) // 'growth' | 'engagement' | 'sales'
+  defaultCtaPreference     String? // 'dm_me' | 'schedule_consult' | 'visit_website' | 'call_now' | 'custom'
   defaultCtaCustom         String?
-  defaultCampaignLength    Int?      // 3 | 5 | 7
-  preferredPostingDays     String[]  @default([])  // 'mon' | 'tue' | ... | 'sun'
-  preferredPostingTime     String?   // "HH:mm" — interpreted in Client.timezone
+  defaultCampaignLength    Int? // 3 | 5 | 7
+  preferredPostingDays     String[]  @default([]) // 'mon' | 'tue' | ... | 'sun'
+  preferredPostingTime     String? // "HH:mm" — interpreted in Client.timezone
   updatedAt                DateTime  @updatedAt
   client                   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
@@ -316,33 +317,35 @@ model Campaign {
   // equal to the existing Draft.campaignId string (e.g.
   // "camp_1759939200000_a3b9z2"), so legacy and new ids coexist.
   // The column itself is just TEXT and accepts either format.
-  id                String          @id @default(cuid())
-  clientId          String
-  name              String
-  campaignType      String                              // free-form, matches Draft.campaignType
-  /* Source attribution. Plans 02/04 persisted these into
-     Draft.warnings as key:value tags; promoting them to typed
-     columns lets Sites / Ads / Inbox read source attribution
-     without parsing warnings. Existing Draft.warnings writes are
-     preserved in this phase. */
-  sourceType        String?                             // 'property' | 'data_item' | 'idea'
-  sourceDataItemId  String?
-  sourceTitle       String?
-  campaignIdea      String?         @db.Text
-  status            CampaignStatus  @default(DRAFT)
-  startsAt          DateTime?
-  endsAt            DateTime?
-  metadataJson      Json?
+  id               String         @id @default(cuid())
+  clientId         String
+  name             String
+  campaignType     String // free-form, matches Draft.campaignType
+  /**
+   * Source attribution. Plans 02/04 persisted these into
+   * Draft.warnings as key:value tags; promoting them to typed
+   * columns lets Sites / Ads / Inbox read source attribution
+   * without parsing warnings. Existing Draft.warnings writes are
+   * preserved in this phase.
+   */
+  sourceType       String? // 'property' | 'data_item' | 'idea'
+  sourceDataItemId String?
+  sourceTitle      String?
+  campaignIdea     String?        @db.Text
+  status           CampaignStatus @default(DRAFT)
+  startsAt         DateTime?
+  endsAt           DateTime?
+  metadataJson     Json?
   // Nullable so backfill never fails on a missing first-draft
   // createdBy. New campaigns set this to the acting user id.
-  createdBy         String?
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
+  createdBy        String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 
-  client            Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  sourceDataItem    WorkspaceDataItem? @relation("CampaignSourceDataItem", fields: [sourceDataItemId], references: [id], onDelete: SetNull)
-  drafts            Draft[]
-  sitePages         SitePage[]
+  client         Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  sourceDataItem WorkspaceDataItem? @relation("CampaignSourceDataItem", fields: [sourceDataItemId], references: [id], onDelete: SetNull)
+  drafts         Draft[]
+  sitePages      SitePage[]
 
   @@index([clientId, status])
   @@index([clientId, createdAt])
@@ -419,49 +422,49 @@ model Site {
   createdAt        DateTime   @default(now())
   updatedAt        DateTime   @updatedAt
 
-  client           Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  pages            SitePage[]
-  forms            LeadForm[]
+  client Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  pages  SitePage[]
+  forms  LeadForm[]
 
   @@index([clientId, status])
   @@map("sites")
 }
 
 model SitePage {
-  id              String     @id @default(cuid())
-  siteId          String
-  clientId        String                                    // denormalized for fast public lookup
-  slug            String                                    // URL path segment
-  campaignId      String?
+  id             String          @id @default(cuid())
+  siteId         String
+  clientId       String // denormalized for fast public lookup
+  slug           String // URL path segment
+  campaignId     String?
   // Source-aware metadata. campaignId stays for the FK relation;
   // sourceType + sourceId generalize to non-campaign origins so
   // a page generated from a property/data_item/idea can still
   // record its lineage. When sourceType=CAMPAIGN we also set
   // sourceId=campaignId so a single index covers all cases.
-  sourceType      SiteSourceType?
-  sourceId        String?
-  pageGoal        SitePageGoal?
+  sourceType     SiteSourceType?
+  sourceId       String?
+  pageGoal       SitePageGoal?
   // SEO directive — honored by the public runtime to emit
   // <meta name="robots" content="noindex,nofollow"> without
   // blocking the page render. Useful for unlisted /
   // share-by-link-only pages.
-  noIndex         Boolean    @default(false)
-  title           String
-  description     String?
-  status          PageStatus @default(DRAFT)
-  blocksJson      Json                                      // [{ type, ...config }]
-  heroImageId     String?
-  seoTitle        String?
-  seoDescription  String?
-  ogImageId       String?
-  revalidateSec   Int        @default(60)                   // per-page ISR window
-  publishedAt     DateTime?
-  createdBy       String
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  noIndex        Boolean         @default(false)
+  title          String
+  description    String?
+  status         PageStatus      @default(DRAFT)
+  blocksJson     Json // [{ type, ...config }]
+  heroImageId    String?
+  seoTitle       String?
+  seoDescription String?
+  ogImageId      String?
+  revalidateSec  Int             @default(60) // per-page ISR window
+  publishedAt    DateTime?
+  createdBy      String
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
-  site            Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  campaign        Campaign?  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  campaign Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
   @@unique([clientId, slug])
   @@index([clientId, status])
@@ -473,41 +476,41 @@ model SitePage {
 model LeadForm {
   id            String   @id @default(cuid())
   siteId        String
-  clientId      String                                      // denormalized
+  clientId      String // denormalized
   name          String
-  fieldsJson    Json                                        // [{ key, label, type, required, options? }]
-  successAction Json                                        // { type: 'message' | 'redirect', message?, url? }
+  fieldsJson    Json // [{ key, label, type, required, options? }]
+  successAction Json // { type: 'message' | 'redirect', message?, url? }
   notifyEmail   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  site          Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  submissions   FormSubmission[]
+  site        Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  submissions FormSubmission[]
 
   @@index([clientId])
   @@map("lead_forms")
 }
 
 model FormSubmission {
-  id            String           @id @default(cuid())
-  formId        String
-  clientId      String                                      // denormalized for query speed + retention
-  campaignId    String?
-  pageId        String?
-  dataJson      Json
+  id           String           @id @default(cuid())
+  formId       String
+  clientId     String // denormalized for query speed + retention
+  campaignId   String?
+  pageId       String?
+  dataJson     Json
   // Extracted from dataJson for query speed + future Inbox
   // contact lookup. Best-effort — may be null if the form has
   // no email/phone field.
-  contactEmail  String?
-  contactPhone  String?
+  contactEmail String?
+  contactPhone String?
   // SHA-256(ip + RUNTIME_IP_SALT). Never store the raw IP.
-  ipHash        String?
-  userAgent     String?                                     // truncated to 500 chars at write time
-  referer       String?
-  status        SubmissionStatus @default(NEW)
-  createdAt     DateTime         @default(now())
+  ipHash       String?
+  userAgent    String? // truncated to 500 chars at write time
+  referer      String?
+  status       SubmissionStatus @default(NEW)
+  createdAt    DateTime         @default(now())
 
-  form          LeadForm         @relation(fields: [formId], references: [id], onDelete: Cascade)
+  form LeadForm @relation(fields: [formId], references: [id], onDelete: Cascade)
 
   @@index([clientId, status])
   @@index([formId, createdAt])
@@ -570,15 +573,15 @@ enum MessageChannel {
 }
 
 model Contact {
-  id                  String   @id @default(cuid())
-  clientId            String
+  id       String @id @default(cuid())
+  clientId String
 
   // Identity. At least one of email/phone must be non-null —
   // enforced at the service layer, not Prisma (which would require
   // a check constraint that doesn't round-trip cleanly).
-  email               String?
-  phone               String?
-  name                String?
+  email String?
+  phone String?
+  name  String?
 
   firstSeenVia        ContactSource @default(FORM)
   firstSeenFormId     String?
@@ -587,15 +590,15 @@ model Contact {
 
   // Append-only metadata captured at first sight + any subsequent
   // form fields. Service merges new entries; never overwrites.
-  enrichmentJson      Json?
+  enrichmentJson Json?
 
   // Workspace-managed labels. Distinct from per-conversation tags
   // (deferred). Plain Postgres text[] for MVP.
-  tags                String[]
-  status              ContactStatus @default(NEW)
+  tags   String[]
+  status ContactStatus @default(NEW)
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   client        Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
   conversations Conversation[]
@@ -609,40 +612,40 @@ model Contact {
 }
 
 model Conversation {
-  id          String   @id @default(cuid())
-  clientId    String
-  contactId   String
+  id        String @id @default(cuid())
+  clientId  String
+  contactId String
 
-  sourceType  ConversationSource @default(FORM)
+  sourceType             ConversationSource @default(FORM)
   // 1:1 with the originating FormSubmission — unique constraint
   // is the idempotency key for the intake service. Re-running
   // intake on an already-converted submission is a safe no-op.
-  sourceFormSubmissionId String? @unique
-  pageId      String?
-  campaignId  String?
+  sourceFormSubmissionId String?            @unique
+  pageId                 String?
+  campaignId             String?
 
-  status      ConversationStatus @default(OPEN)
-  spam        Boolean  @default(false)
+  status ConversationStatus @default(OPEN)
+  spam   Boolean            @default(false)
 
   // Inbox sort + unread badging. workspaceReadAt < lastMessageAt
   // && lastMessageFrom == CONTACT == unread.
-  lastMessageAt    DateTime
-  lastMessageFrom  ConversationParty
-  workspaceReadAt  DateTime?
+  lastMessageAt   DateTime
+  lastMessageFrom ConversationParty
+  workspaceReadAt DateTime?
 
   // Assignee (future multi-user — currently solo workspaces leave
   // this null). String, not FK, so it can hold either User.id or
   // an Auth0 sub depending on the caller's convention.
-  assignedUserId   String?
+  assignedUserId String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  client      Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  contact     Contact               @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  messages    Message[]
-  notes       ConversationNote[]
-  aiReplies   AIReplySuggestion[]
+  client    Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  contact   Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  messages  Message[]
+  notes     ConversationNote[]
+  aiReplies AIReplySuggestion[]
 
   @@index([clientId, status, lastMessageAt])
   @@index([contactId])
@@ -651,21 +654,21 @@ model Conversation {
 }
 
 model Message {
-  id              String   @id @default(cuid())
-  conversationId  String
+  id             String @id @default(cuid())
+  conversationId String
 
   // CONTACT  — inbound from the lead
   // WORKSPACE — outbound from the agent (manual log for MVP)
   // SYSTEM   — automated event note ("Conversation opened", etc.)
-  party           ConversationParty
-  channel         MessageChannel?
+  party   ConversationParty
+  channel MessageChannel?
 
-  body            String   @db.Text
+  body String @db.Text
 
   // Original structured payload. For FORM_SUBMISSION messages this
   // is the form's dataJson (label→value pairs) so the UI can render
   // a key/value strip alongside the body.
-  payloadJson     Json?
+  payloadJson Json?
 
   // External provider id for outbound channels (Postmark, Twilio).
   // Unused for MVP since outbound delivery is deferred.
@@ -673,14 +676,14 @@ model Message {
 
   // The user who composed an outbound/system message. Null for
   // inbound CONTACT messages.
-  authorUserId    String?
+  authorUserId String?
 
   // Provenance: which AI suggestion was accepted, if any.
   fromSuggestionId String?
 
-  createdAt       DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt])
   @@map("messages")
@@ -693,39 +696,268 @@ model ConversationNote {
   body           String   @db.Text
   createdAt      DateTime @default(now())
 
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt])
   @@map("conversation_notes")
 }
 
 model AIReplySuggestion {
-  id             String   @id @default(cuid())
+  id             String @id @default(cuid())
   conversationId String
 
   // The message this suggestion was generated to respond to.
   // If the contact replies again the dashboard can mark older
   // suggestions stale.
-  forMessageId   String
+  forMessageId String
 
-  body           String   @db.Text
-  tone           String?
-  model          String
-  promptTokens     Int @default(0)
-  completionTokens Int @default(0)
+  body             String  @db.Text
+  tone             String?
+  model            String
+  promptTokens     Int     @default(0)
+  completionTokens Int     @default(0)
 
   // When the workspace user clicked "use this" — the resulting
   // outbound Message stamps fromSuggestionId, and we mark this
   // row acceptedAt. Used for "how often is the AI useful"
   // analytics later.
-  acceptedAt     DateTime?
+  acceptedAt DateTime?
 
-  createdAt      DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt])
   @@map("ai_reply_suggestions")
+}
+
+// ── SquadAds ───────────────────────────────────────────────────────────
+//
+// MVP is export-only: AdPackage is the workspace artifact users
+// generate, save, and download. We never call Meta Marketing API,
+// Google Ads API, or any other ad-platform API — every "publish"
+// affordance is replaced with "Export." The names are deliberately
+// "AdPackage" (not "AdCampaign") to keep them distinct from the
+// first-class Campaign model that already exists for the content
+// pipeline.
+
+enum AdObjective {
+  AWARENESS
+  TRAFFIC
+  LEADS
+  ENGAGEMENT
+  EVENT
+}
+
+enum AdPackageStatus {
+  DRAFT
+  READY
+  EXPORTED
+  ARCHIVED
+}
+
+// Meta's Special Ad Categories — restrict targeting on age, gender,
+// ZIP, and detailed targeting. We auto-tag HOUSING for real-estate
+// workspaces and PROPERTY-sourced packages; users can manually
+// pick the others if their content requires it.
+enum AdSpecialCategory {
+  NONE
+  HOUSING
+  EMPLOYMENT
+  CREDIT
+  SOCIAL_ISSUES
+}
+
+enum AdDestinationKind {
+  SITE_PAGE
+  EXTERNAL_URL
+  SOCIAL_PROFILE
+}
+
+// What kind of workspace artifact seeded the package. Mirrors the
+// SiteSourceType pattern so source-context loaders can be shared.
+enum AdSourceType {
+  CAMPAIGN
+  SITE_PAGE
+  DRAFT
+  PROPERTY
+  CONTENT_ASSET
+  IDEA
+}
+
+model AdPackage {
+  id              String            @id @default(cuid())
+  clientId        String
+  name            String
+  objective       AdObjective
+  status          AdPackageStatus   @default(DRAFT)
+  specialCategory AdSpecialCategory @default(NONE)
+
+  // Source attribution — mirrors SitePage.sourceType/sourceId.
+  // sourceId nullable for IDEA (free-form text only).
+  sourceType AdSourceType
+  sourceId   String?
+  sourceIdea String?      @db.Text
+
+  // Generation provenance — same bookkeeping shape as
+  // AIReplySuggestion so future spend analytics is consistent.
+  generatedByModel String?
+  promptTokens     Int     @default(0)
+  completionTokens Int     @default(0)
+
+  // Append-only export history.
+  // [{ format, url, generatedAt, generatedBy }]
+  exportsJson Json @default("[]")
+
+  // Mandatory user review trail before status can flip to READY.
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  reviewNotes      String?   @db.Text
+
+  // Free-form workspace metadata (used today for the
+  // requiresBudgetReview flag the export gate consults).
+  metadataJson Json?
+
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client      Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  creatives   AdCreative[]
+  audience    AdAudience?
+  budget      AdBudget?
+  destination AdDestination?
+
+  @@index([clientId, status, updatedAt])
+  @@index([clientId, sourceType, sourceId])
+  @@map("ad_packages")
+}
+
+model AdCreative {
+  id           String @id @default(cuid())
+  adPackageId  String
+  // 1..N A/B variants. The unique constraint on (adPackageId,
+  // variantIndex) keeps the export bundle ordering stable.
+  variantIndex Int
+
+  // Optional channel hint so the export PDF can label "Recommended
+  // for Instagram Reels" etc. Reuses the existing organic Channel
+  // enum; ad publishing is deferred so no new channel values needed.
+  channel Channel?
+
+  headline    String  @db.Text
+  primaryText String  @db.Text
+  description String? @db.Text
+  cta         String? // "Learn More" | "Sign Up" | "Get Quote" | etc.
+
+  // MediaAsset reuse — no new image storage.
+  primaryAssetId String?
+  primaryAsset   MediaAsset? @relation("AdCreativePrimaryAsset", fields: [primaryAssetId], references: [id], onDelete: SetNull)
+
+  // Carousel / additional creative — array of MediaAsset ids.
+  // Not FK-enforced because Prisma can't model a relation list off
+  // a JSON column; service layer is responsible for asset lookups.
+  additionalAssetIdsJson Json @default("[]")
+
+  // AI-generated rationale shown in the UI and included in the
+  // export so the paid-media team understands the angle.
+  rationale String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adPackage AdPackage @relation(fields: [adPackageId], references: [id], onDelete: Cascade)
+
+  @@unique([adPackageId, variantIndex])
+  @@index([adPackageId])
+  @@map("ad_creatives")
+}
+
+model AdAudience {
+  id          String @id @default(cuid())
+  adPackageId String @unique // 1:1
+
+  // [{ kind: 'country' | 'region' | 'city' | 'postal', value: '...' }]
+  locationsJson Json @default("[]")
+
+  // Demographics — forcibly cleared at service layer when
+  // specialCategory != NONE per Fair Housing / Meta SAC rules.
+  ageMin      Int?
+  ageMax      Int?
+  gendersJson Json @default("[\"all\"]")
+
+  interestsJson           Json @default("[]")
+  // [{ kind: 'lookalike' | 'retargeting' | 'engaged_recent', description }]
+  customAudienceHintsJson Json @default("[]")
+  // ISO codes: ['en', 'es']
+  languagesJson           Json @default("[]")
+
+  // Denormalized so the export bundle's compliance disclaimer can
+  // be generated without re-resolving the workspace's industry.
+  housingRestricted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adPackage AdPackage @relation(fields: [adPackageId], references: [id], onDelete: Cascade)
+
+  @@map("ad_audiences")
+}
+
+model AdBudget {
+  id          String @id @default(cuid())
+  adPackageId String @unique // 1:1
+
+  // Cents — matches billing-table convention to avoid float drift.
+  // Service enforces "exactly one of dailyBudgetCents / totalBudgetCents".
+  dailyBudgetCents Int?
+  totalBudgetCents Int?
+  currency         String @default("USD")
+  durationDays     Int?
+
+  startsAt DateTime?
+  endsAt   DateTime?
+
+  // What the AI suggested vs. what the user kept — diff lets us
+  // measure suggestion acceptance later.
+  suggestedDailyBudgetCents Int?
+  suggestedTotalBudgetCents Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adPackage AdPackage @relation(fields: [adPackageId], references: [id], onDelete: Cascade)
+
+  @@map("ad_budgets")
+}
+
+model AdDestination {
+  id          String @id @default(cuid())
+  adPackageId String @unique // 1:1
+
+  kind AdDestinationKind
+
+  // Discriminated union — exactly one is non-null based on kind.
+  // Service enforces; DB allows nulls to keep the schema simple.
+  sitePageId    String?
+  externalUrl   String?
+  socialProfile String? // e.g. "instagram:smithrealty"
+
+  // UTM params appended to the destination URL on export.
+  // { source, medium, campaign, content, term }
+  utmJson Json?
+
+  // Pixel/conversion ids the user pasted in — preserved in the
+  // export bundle's README so the paid-media team can re-apply
+  // them in the ad platform.
+  pixelIdsJson Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adPackage AdPackage @relation(fields: [adPackageId], references: [id], onDelete: Cascade)
+
+  @@map("ad_destinations")
 }
 
 model MediaProfile {
@@ -748,33 +980,33 @@ model MediaProfile {
 // ── Brand Persona ─────────────────────────────────────────────────────
 
 model BrandPersona {
-  clientId            String                @id
-  userId              String?
-  personaType         PersonaType           @default(AGENT)
-  name                String?
-  status              PersonaTrainingStatus @default(DRAFT)
-  trainingImages      Json                  @default("[]")
-  imageCount          Int                   @default(0)
-  visualStyle         String?
-  usageSettings       Json                  @default("{}")
-  trainingProgress    Int?                  @default(0)
-  previewImages       Json?
-  styleProfile        Json?                 // Brand Style Profile (colors, fonts, prompt modifiers)
+  clientId         String                @id
+  userId           String?
+  personaType      PersonaType           @default(AGENT)
+  name             String?
+  status           PersonaTrainingStatus @default(DRAFT)
+  trainingImages   Json                  @default("[]")
+  imageCount       Int                   @default(0)
+  visualStyle      String?
+  usageSettings    Json                  @default("{}")
+  trainingProgress Int?                  @default(0)
+  previewImages    Json?
+  styleProfile     Json? // Brand Style Profile (colors, fonts, prompt modifiers)
 
   // Provider integration (fal.ai LoRA training)
-  provider            String?               @default("fal")
-  providerTrainingId  String?
-  providerModelId     String?
-  triggerPhrase       String?
-  errorMessage        String?               @db.Text
+  provider           String? @default("fal")
+  providerTrainingId String?
+  providerModelId    String?
+  triggerPhrase      String?
+  errorMessage       String? @db.Text
 
   // Consent
-  consentAt           DateTime?
+  consentAt DateTime?
 
-  updatedBy           String?
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
-  client              Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@map("brand_personas")
 }
@@ -801,78 +1033,78 @@ model ChannelSettings {
 // ── Draft ──────────────────────────────────────────────────────────────
 
 model Draft {
-  id                   String      @id @default(cuid())
-  clientId             String
-  kind                 DraftKind
-  status               DraftStatus @default(DRAFT)
-  channel              Channel
-  bucketKey            String?
+  id        String      @id @default(cuid())
+  clientId  String
+  kind      DraftKind
+  status    DraftStatus @default(DRAFT)
+  channel   Channel
+  bucketKey String?
 
-  generationGuidance   String      @db.Text
-  modelUsed            String?
-  promptVersion        Int         @default(1)
+  generationGuidance String  @db.Text
+  modelUsed          String?
+  promptVersion      Int     @default(1)
 
-  body                 String      @db.Text
-  hooks                String[]
-  hashtags             String[]
-  cta                  String?
-  variations           Json?
-  scoredHooks          Json?
-  altText              String?     @db.Text
-  imageGuidance        String?     @db.Text
-  videoGuidance        String?     @db.Text
-  mediaPlan            Json?
-  warnings             String[]
+  body          String   @db.Text
+  hooks         String[]
+  hashtags      String[]
+  cta           String?
+  variations    Json?
+  scoredHooks   Json?
+  altText       String?  @db.Text
+  imageGuidance String?  @db.Text
+  videoGuidance String?  @db.Text
+  mediaPlan     Json?
+  warnings      String[]
 
   // Campaign fields — nullable for non-campaign drafts
-  campaignId           String?
-  campaignName         String?
-  campaignType         String?
-  campaignDay          Int?
-  campaignOrder        Int?
-  campaignTotal        Int?
+  campaignId    String?
+  campaignName  String?
+  campaignType  String?
+  campaignDay   Int?
+  campaignOrder Int?
+  campaignTotal Int?
 
   mediaUrl             String?
   mediaType            String?
   externalPostId       String?
   externalPostUrl      String?
-  publishError         String?     @db.Text
-  publishAttempts      Int         @default(0)
+  publishError         String?   @db.Text
+  publishAttempts      Int       @default(0)
   lastPublishAttemptAt DateTime?
-  idempotencyKey       String?     @unique
+  idempotencyKey       String?   @unique
   publishSource        String?
 
-  performanceRating    String?
-  ratedAt              DateTime?
+  performanceRating String?
+  ratedAt           DateTime?
 
-  createdBy            String
-  approvedBy           String?
-  approvedAt           DateTime?
-  rejectedReason       String?
-  scheduledFor         DateTime?
-  publishedAt          DateTime?
+  createdBy      String
+  approvedBy     String?
+  approvedAt     DateTime?
+  rejectedReason String?
+  scheduledFor   DateTime?
+  publishedAt    DateTime?
 
-  createdAt            DateTime    @default(now())
-  updatedAt            DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  client               Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client           Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   // Draft.campaignId became a real FK in Phase 4 of the Campaign
   // model promotion. The historical `camp_<ts>_<rand>` strings and
   // the new cuid-based ids both live in this column — Campaign.id
   // is TEXT and accepts either. SetNull preserves publishing
   // history if a campaign is later archived/deleted.
-  campaign             Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  moderationLogs       ModerationLog[]
-  mediaAssets          MediaAsset[]
-  draftAssets          DraftAsset[]
-  metrics              PostMetrics?
-  metricSnapshots      PostMetricSnapshot[]
-  rawMetric            RawMetric[]
-  normalizedMetric     NormalizedMetric?
-  postInsight          PostInsight?
-  contentSources       GeneratedContentSource[]
-  trackableLinks       TrackableLink[]
-  conversionEvents     ConversionEvent[]
+  campaign         Campaign?                @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  moderationLogs   ModerationLog[]
+  mediaAssets      MediaAsset[]
+  draftAssets      DraftAsset[]
+  metrics          PostMetrics?
+  metricSnapshots  PostMetricSnapshot[]
+  rawMetric        RawMetric[]
+  normalizedMetric NormalizedMetric?
+  postInsight      PostInsight?
+  contentSources   GeneratedContentSource[]
+  trackableLinks   TrackableLink[]
+  conversionEvents ConversionEvent[]
 
   @@index([clientId, status])
   @@index([clientId, channel])
@@ -902,7 +1134,7 @@ model ChannelConnection {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  client            Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@unique([clientId, channel])
   @@index([channel, status])
@@ -930,56 +1162,60 @@ model ModerationLog {
 // ── Media Asset ────────────────────────────────────────────────────────
 
 model MediaAsset {
-  id                String           @id @default(cuid())
-  clientId          String
-  source            MediaAssetSource
-  status            MediaAssetStatus @default(READY)
-  progressStage     String?
+  id            String           @id @default(cuid())
+  clientId      String
+  source        MediaAssetSource
+  status        MediaAssetStatus @default(READY)
+  progressStage String?
 
-  url               String?
-  publicId          String?
-  width             Int?
-  height            Int?
-  bytes             Int?
-  mimeType          String?
-  assetType         String           @default("image")
-  thumbnailUrl      String?
-  videoDurationSec  Int?
+  url              String?
+  publicId         String?
+  width            Int?
+  height           Int?
+  bytes            Int?
+  mimeType         String?
+  assetType        String  @default("image")
+  thumbnailUrl     String?
+  videoDurationSec Int?
 
-  filename          String?
-  altText           String?          @db.Text
-  caption           String?
+  filename String?
+  altText  String? @db.Text
+  caption  String?
 
-  folderId          String?
-  folder            AssetFolder?     @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  tags              String[]         @default([])
+  folderId String?
+  folder   AssetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  tags     String[]     @default([])
 
-  draftId           String?
-  draft             Draft?           @relation(fields: [draftId], references: [id], onDelete: SetNull)
-  displayOrder      Int              @default(0)
+  draftId      String?
+  draft        Draft?  @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  displayOrder Int     @default(0)
 
   falModelId        String?
-  renderedPrompt    String?          @db.Text
-  negativePrompt    String?          @db.Text
+  renderedPrompt    String? @db.Text
+  negativePrompt    String? @db.Text
   loraSnapshot      String?
   loraScaleSnapshot Float?
-  personaSnapshot   String?           // Name of persona used (if any)
+  personaSnapshot   String? // Name of persona used (if any)
   seed              BigInt?
 
   // Screenshot-import enhancement metadata (spinstr97)
-  isEnhanced        Boolean          @default(false)
-  qualityScore      Float?
-  qualityLabel      String?          // "good" | "fair" | "low"
-  externalJobId     String?
-  durationMs        Int?
-  errorMessage      String?          @db.Text
+  isEnhanced    Boolean @default(false)
+  qualityScore  Float?
+  qualityLabel  String? // "good" | "fair" | "low"
+  externalJobId String?
+  durationMs    Int?
+  errorMessage  String? @db.Text
 
-  createdBy         String
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  client            Client           @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  draftAssets       DraftAsset[]
+  client               Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draftAssets          DraftAsset[]
+  // Back-relation for AdCreative.primaryAsset. The relation is
+  // named because future fields may also reference MediaAsset and
+  // we want each FK clearly attributed.
+  adCreativesAsPrimary AdCreative[] @relation("AdCreativePrimaryAsset")
 
   @@index([clientId, status])
   @@index([clientId, source])
@@ -991,14 +1227,14 @@ model MediaAsset {
 // ── Asset Folders ─────────────────────────────────────────────────────
 
 model AssetFolder {
-  id        String       @id @default(cuid())
+  id        String   @id @default(cuid())
   clientId  String
   name      String
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  client    Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  assets    MediaAsset[]
+  client Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  assets MediaAsset[]
 
   @@unique([clientId, name])
   @@index([clientId])
@@ -1011,12 +1247,12 @@ model DraftAsset {
   id         String   @id @default(cuid())
   draftId    String
   assetId    String
-  role       String?  // "primary", "thumbnail", or null
+  role       String? // "primary", "thumbnail", or null
   orderIndex Int      @default(0)
   createdAt  DateTime @default(now())
 
-  draft      Draft      @relation(fields: [draftId], references: [id], onDelete: Cascade)
-  asset      MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  draft Draft      @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  asset MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   @@unique([draftId, assetId])
   @@index([assetId])
@@ -1050,14 +1286,14 @@ enum SubscriptionStatus {
 }
 
 model Subscription {
-  id                   String             @id @default(cuid())
-  userId               String             @unique
-  stripeCustomerId     String             @unique
-  stripeSubscriptionId String?            @unique
-  tier                 PlanTier           @default(STARTER)
-  status               SubscriptionStatus @default(ACTIVE)
-  currentPeriodEnd     DateTime?
-  cancelAtPeriodEnd    Boolean            @default(false)
+  id                     String             @id @default(cuid())
+  userId                 String             @unique
+  stripeCustomerId       String             @unique
+  stripeSubscriptionId   String?            @unique
+  tier                   PlanTier           @default(STARTER)
+  status                 SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean            @default(false)
   // Stripe webhook ordering guard. Older events (delayed retries, network
   // re-orderings) must not overwrite newer subscription state.
   // `lastStripeEventCreated` is the unix-second timestamp of the most
@@ -1066,8 +1302,8 @@ model Subscription {
   // event id and skip cleanly.
   lastStripeEventCreated Int?
   lastStripeEventId      String?
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 
   @@map("subscriptions")
 }
@@ -1110,27 +1346,27 @@ model AiUsageLog {
 // ── Post Metrics ───────────────────────────────────────────────────────
 
 model PostMetrics {
-  id             String   @id @default(cuid())
-  draftId        String   @unique
-  clientId       String
-  channel        Channel
+  id       String  @id @default(cuid())
+  draftId  String  @unique
+  clientId String
+  channel  Channel
 
-  impressions    Int      @default(0)
-  reach          Int      @default(0)
-  engagement     Int      @default(0)
-  clicks         Int      @default(0)
-  saves          Int      @default(0)
-  shares         Int      @default(0)
-  comments       Int      @default(0)
-  likes          Int      @default(0)
+  impressions    Int    @default(0)
+  reach          Int    @default(0)
+  engagement     Int    @default(0)
+  clicks         Int    @default(0)
+  saves          Int    @default(0)
+  shares         Int    @default(0)
+  comments       Int    @default(0)
+  likes          Int    @default(0)
   engagementRate Float?
 
-  lastSyncedAt   DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  draft          Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
-  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft  Draft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@index([clientId, channel])
   @@index([clientId, lastSyncedAt])
@@ -1138,26 +1374,26 @@ model PostMetrics {
 }
 
 model PostMetricSnapshot {
-  id             String   @id @default(cuid())
-  draftId        String
-  clientId       String
-  channel        Channel
-  snapshotAt     DateTime
+  id         String   @id @default(cuid())
+  draftId    String
+  clientId   String
+  channel    Channel
+  snapshotAt DateTime
 
-  impressions    Int      @default(0)
-  reach          Int      @default(0)
-  engagements    Int      @default(0)
-  clicks         Int      @default(0)
-  saves          Int      @default(0)
-  shares         Int      @default(0)
-  comments       Int      @default(0)
-  likes          Int      @default(0)
+  impressions    Int    @default(0)
+  reach          Int    @default(0)
+  engagements    Int    @default(0)
+  clicks         Int    @default(0)
+  saves          Int    @default(0)
+  shares         Int    @default(0)
+  comments       Int    @default(0)
+  likes          Int    @default(0)
   engagementRate Float?
 
-  createdAt      DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  draft          Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
-  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft  Draft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@unique([draftId, snapshotAt])
   @@index([draftId, snapshotAt])
@@ -1201,11 +1437,11 @@ model NotificationLog {
   id                String   @id @default(cuid())
   userId            String
   eventType         String
-  channel           String   // "email" | "sms"
+  channel           String // "email" | "sms"
   status            String   @default("queued") // queued | sent | failed | skipped
-  provider          String?  // "postmark" | "twilio"
+  provider          String? // "postmark" | "twilio"
   providerMessageId String?
-  resourceType      String?  // "draft" | "connection" | "usage" etc.
+  resourceType      String? // "draft" | "connection" | "usage" etc.
   resourceId        String?
   errorMessage      String?  @db.Text
   createdAt         DateTime @default(now())
@@ -1282,7 +1518,7 @@ model OutboundWebhook {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  deliveryLogs     WebhookDeliveryLog[]
+  deliveryLogs WebhookDeliveryLog[]
 
   @@index([userId])
   @@map("outbound_webhooks")
@@ -1302,7 +1538,7 @@ model WebhookDeliveryLog {
   replayOfId     String?
   createdAt      DateTime  @default(now())
 
-  webhook        OutboundWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  webhook OutboundWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId, createdAt])
   @@index([replayOfId])
@@ -1314,7 +1550,7 @@ model WebhookDeliveryLog {
 model Integration {
   id        String   @id @default(cuid())
   userId    String
-  type      String   // "slack" | "webhook" | "notion" | "google_sheets"
+  type      String // "slack" | "webhook" | "notion" | "google_sheets"
   name      String
   config    Json     @default("{}")
   isActive  Boolean  @default(true)
@@ -1354,8 +1590,8 @@ model RawMetric {
   fetchedAt      DateTime @default(now())
   createdAt      DateTime @default(now())
 
-  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  draft          Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft  Draft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([draftId])
@@ -1376,8 +1612,8 @@ model NormalizedMetric {
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
-  client                 Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  draft                  Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft  Draft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
 
   @@index([clientId, channel])
   @@map("normalized_metrics")
@@ -1400,8 +1636,8 @@ model PostInsight {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  client             Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  draft              Draft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft  Draft  @relation(fields: [draftId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@map("post_insights")
@@ -1432,18 +1668,18 @@ model WorkspaceAnalytics {
 }
 
 model AnalyticsSnapshot {
-  id                  String   @id @default(cuid())
-  clientId            String
-  snapshotDate        DateTime @db.Date
-  avgQualityScore     Float?
-  avgObservedScore    Float?
-  avgCompositeScore   Float?
-  avgEngagementRate   Float?
-  totalPosts          Int      @default(0)
-  totalReach          Int      @default(0)
-  totalEngagements    Int      @default(0)
-  createdAt           DateTime @default(now())
-  client              Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  id                String   @id @default(cuid())
+  clientId          String
+  snapshotDate      DateTime @db.Date
+  avgQualityScore   Float?
+  avgObservedScore  Float?
+  avgCompositeScore Float?
+  avgEngagementRate Float?
+  totalPosts        Int      @default(0)
+  totalReach        Int      @default(0)
+  totalEngagements  Int      @default(0)
+  createdAt         DateTime @default(now())
+  client            Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@unique([clientId, snapshotDate])
   @@index([clientId, snapshotDate])
@@ -1461,7 +1697,7 @@ model WorkspaceDataSource {
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
-  client    Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client    Client              @relation(fields: [clientId], references: [id], onDelete: Cascade)
   dataItems WorkspaceDataItem[]
 
   @@index([clientId])
@@ -1497,17 +1733,17 @@ model WorkspaceDataItem {
 }
 
 model ContentBlueprint {
-  id                String            @id @default(cuid())
-  slug              String            @unique
-  name              String
-  description       String            @db.Text
-  category          BlueprintCategory
-  promptTemplate    String            @db.Text
-  applicableTypes   DataItemType[]
+  id                 String            @id @default(cuid())
+  slug               String            @unique
+  name               String
+  description        String            @db.Text
+  category           BlueprintCategory
+  promptTemplate     String            @db.Text
+  applicableTypes    DataItemType[]
   applicableChannels Channel[]
-  isActive          Boolean           @default(true)
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  isActive           Boolean           @default(true)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
   contentSources GeneratedContentSource[]
   performance    BlueprintPerformance?
@@ -1534,17 +1770,17 @@ model GeneratedContentSource {
 }
 
 model DataItemPerformance {
-  id             String   @id @default(cuid())
-  dataItemId     String   @unique
-  totalDrafts    Int      @default(0)
-  totalPublished Int      @default(0)
-  avgEngagement        Float?
-  avgQualityScore      Float?
-  avgObservedScore     Float?
-  avgCompositeScore    Float?
-  lastCalculated DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                String   @id @default(cuid())
+  dataItemId        String   @unique
+  totalDrafts       Int      @default(0)
+  totalPublished    Int      @default(0)
+  avgEngagement     Float?
+  avgQualityScore   Float?
+  avgObservedScore  Float?
+  avgCompositeScore Float?
+  lastCalculated    DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   dataItem WorkspaceDataItem @relation(fields: [dataItemId], references: [id], onDelete: Cascade)
 
@@ -1552,17 +1788,17 @@ model DataItemPerformance {
 }
 
 model BlueprintPerformance {
-  id             String   @id @default(cuid())
-  blueprintId    String   @unique
-  totalDrafts    Int      @default(0)
-  totalPublished Int      @default(0)
-  avgEngagement        Float?
-  avgQualityScore      Float?
-  avgObservedScore     Float?
-  avgCompositeScore    Float?
-  lastCalculated DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                String   @id @default(cuid())
+  blueprintId       String   @unique
+  totalDrafts       Int      @default(0)
+  totalPublished    Int      @default(0)
+  avgEngagement     Float?
+  avgQualityScore   Float?
+  avgObservedScore  Float?
+  avgCompositeScore Float?
+  lastCalculated    DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   blueprint ContentBlueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
 
@@ -1592,11 +1828,11 @@ model WorkspaceTechStackConnection {
 // ── Conversion Analytics ────────────────────────────────────────────
 
 model TrackableLink {
-  id             String    @id @default(cuid())
+  id             String   @id @default(cuid())
   clientId       String
   draftId        String?
-  shortCode      String    @unique
-  destinationUrl String    @db.Text
+  shortCode      String   @unique
+  destinationUrl String   @db.Text
   label          String?
   channel        Channel?
   utmSource      String?
@@ -1604,15 +1840,15 @@ model TrackableLink {
   utmCampaign    String?
   utmTerm        String?
   utmContent     String?
-  isActive       Boolean   @default(true)
-  clickCount     Int       @default(0)
+  isActive       Boolean  @default(true)
+  clickCount     Int      @default(0)
   createdBy      String
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  client         Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  draft          Draft?    @relation(fields: [draftId], references: [id], onDelete: SetNull)
-  events         ConversionEvent[]
+  client Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft  Draft?            @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  events ConversionEvent[]
 
   @@index([clientId])
   @@index([draftId])
@@ -1626,16 +1862,16 @@ model ConversionEvent {
   trackableLinkId String?
   type            ConversionEventType
   label           String?
-  referrerUrl     String?   @db.Text
+  referrerUrl     String?             @db.Text
   userAgentHash   String?
   ipHash          String?
   country         String?
   metadata        Json?
-  createdAt       DateTime  @default(now())
+  createdAt       DateTime            @default(now())
 
-  client          Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  draft           Draft?          @relation(fields: [draftId], references: [id], onDelete: SetNull)
-  trackableLink   TrackableLink?  @relation(fields: [trackableLinkId], references: [id], onDelete: SetNull)
+  client        Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draft         Draft?         @relation(fields: [draftId], references: [id], onDelete: SetNull)
+  trackableLink TrackableLink? @relation(fields: [trackableLinkId], references: [id], onDelete: SetNull)
 
   @@index([clientId, type])
   @@index([clientId, createdAt])
@@ -1647,40 +1883,40 @@ model ConversionEvent {
 // ── External Service Registry ─────────────────────────────────────────
 
 model ExternalService {
-  id              String    @id @default(cuid())
-  key             String    @unique // e.g. "openai", "fal", "auth0", "stripe"
-  name            String // Display name
-  category        String // "ai", "infrastructure", "auth", "billing", "messaging", "data"
-  purpose         String    @db.Text // What this service does for Squadpitch
-  status          String    @default("healthy") // "healthy", "watch", "near_limit", "critical", "down"
-  criticality     String    @default("standard") // "critical", "high", "standard", "low"
-  environment     String    @default("production") // "production", "staging", "development"
-  consoleUrl      String?   @db.Text
-  docsUrl         String?   @db.Text
-  notes           String?   @db.Text
-  usedByFeatures  String?   @db.Text // Comma-separated feature list
-  recoveryNotes   String?   @db.Text
-  fallbackInfo    String?   @db.Text
+  id             String  @id @default(cuid())
+  key            String  @unique // e.g. "openai", "fal", "auth0", "stripe"
+  name           String // Display name
+  category       String // "ai", "infrastructure", "auth", "billing", "messaging", "data"
+  purpose        String  @db.Text // What this service does for Squadpitch
+  status         String  @default("healthy") // "healthy", "watch", "near_limit", "critical", "down"
+  criticality    String  @default("standard") // "critical", "high", "standard", "low"
+  environment    String  @default("production") // "production", "staging", "development"
+  consoleUrl     String? @db.Text
+  docsUrl        String? @db.Text
+  notes          String? @db.Text
+  usedByFeatures String? @db.Text // Comma-separated feature list
+  recoveryNotes  String? @db.Text
+  fallbackInfo   String? @db.Text
 
   // Subscription / billing
-  planName        String? // e.g. "Pro", "Team", "Pay-as-you-go"
-  billingCycle    String? // "monthly", "annual", "usage"
-  renewalDate     DateTime?
+  planName         String? // e.g. "Pro", "Team", "Pay-as-you-go"
+  billingCycle     String? // "monthly", "annual", "usage"
+  renewalDate      DateTime?
   monthlyCostCents Int?
 
   // Usage / quota
-  hardLimit       Float? // Absolute max
-  softLimit       Float? // Warning threshold
-  currentUsage    Float?
-  usageUnit       String? // "requests", "tokens", "gb", "emails", "dollars"
-  usageSource     String    @default("manual") // "manual", "api", "derived"
-  percentUsed     Float? // Cached 0-100
+  hardLimit    Float? // Absolute max
+  softLimit    Float? // Warning threshold
+  currentUsage Float?
+  usageUnit    String? // "requests", "tokens", "gb", "emails", "dollars"
+  usageSource  String  @default("manual") // "manual", "api", "derived"
+  percentUsed  Float? // Cached 0-100
 
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  usageSnapshots  ExternalServiceUsageSnapshot[]
+  usageSnapshots ExternalServiceUsageSnapshot[]
 
   @@index([category])
   @@index([status])
@@ -1697,7 +1933,7 @@ model ExternalServiceUsageSnapshot {
   source      String   @default("manual") // "manual", "api", "derived"
   snapshotAt  DateTime @default(now())
 
-  service     ExternalService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  service ExternalService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   @@index([serviceId, snapshotAt])
   @@map("external_service_usage_snapshots")
@@ -1706,24 +1942,24 @@ model ExternalServiceUsageSnapshot {
 // ── Beta Operations ───────────────────────────────────────────────────
 
 model BetaTester {
-  id             String    @id @default(cuid())
-  userId         String // auth0Sub or User.id
-  email          String
-  name           String?
-  workspaceId    String? // Primary workspace for testing
-  status         String    @default("active") // "active", "invited", "paused", "churned"
-  cohort         String? // e.g. "alpha", "beta-1", "launch"
-  tags           String[] // e.g. ["high-touch", "paid", "real-estate", "power-user"]
-  priority       String    @default("normal") // "high", "normal", "low"
-  joinedAt       DateTime  @default(now())
-  notes          String?   @db.Text // Internal notes
-  contactNotes   String?   @db.Text // Follow-up / contact info
-  featureFlags   Json? // Snapshot of enabled features/betas
-  lastActiveAt   DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id           String    @id @default(cuid())
+  userId       String // auth0Sub or User.id
+  email        String
+  name         String?
+  workspaceId  String? // Primary workspace for testing
+  status       String    @default("active") // "active", "invited", "paused", "churned"
+  cohort       String? // e.g. "alpha", "beta-1", "launch"
+  tags         String[] // e.g. ["high-touch", "paid", "real-estate", "power-user"]
+  priority     String    @default("normal") // "high", "normal", "low"
+  joinedAt     DateTime  @default(now())
+  notes        String?   @db.Text // Internal notes
+  contactNotes String?   @db.Text // Follow-up / contact info
+  featureFlags Json? // Snapshot of enabled features/betas
+  lastActiveAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  feedback       BetaFeedback[]
+  feedback BetaFeedback[]
 
   @@unique([userId])
   @@index([status])
@@ -1755,7 +1991,7 @@ model BetaFeedback {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  tester            BetaTester? @relation(fields: [testerId], references: [id], onDelete: SetNull)
+  tester BetaTester? @relation(fields: [testerId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([testerId])
@@ -1768,21 +2004,21 @@ model BetaFeedback {
 // ── Feature Flags ───────────────────────────────────────────────────────
 
 model FeatureFlag {
-  id                String    @id @default(cuid())
-  key               String    @unique // e.g. "video_gen_beta", "new_onboarding_flow"
+  id                String   @id @default(cuid())
+  key               String   @unique // e.g. "video_gen_beta", "new_onboarding_flow"
   name              String // Human-readable name
-  description       String?   @db.Text
-  category          String    @default("feature") // "feature", "rollout", "ops", "experiment"
-  enabled           Boolean   @default(false)
-  scope             String    @default("global") // "global", "targeted"
-  targetType        String?   // "workspace", "user", "cohort" — null if global
-  targetIds         String[]  // IDs of targeted workspaces, users, or cohort names
-  rolloutPercentage Int?      // 0–100 for gradual rollouts (null = binary on/off)
-  notes             String?   @db.Text // Internal notes / change log
-  createdBy         String?   // admin who created
-  updatedBy         String?   // admin who last modified
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  description       String?  @db.Text
+  category          String   @default("feature") // "feature", "rollout", "ops", "experiment"
+  enabled           Boolean  @default(false)
+  scope             String   @default("global") // "global", "targeted"
+  targetType        String? // "workspace", "user", "cohort" — null if global
+  targetIds         String[] // IDs of targeted workspaces, users, or cohort names
+  rolloutPercentage Int? // 0–100 for gradual rollouts (null = binary on/off)
+  notes             String?  @db.Text // Internal notes / change log
+  createdBy         String? // admin who created
+  updatedBy         String? // admin who last modified
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@index([key])
   @@index([category])
@@ -1803,14 +2039,14 @@ model FeatureFlag {
 
 model AuditLog {
   id           String   @id @default(cuid())
-  actorSub     String   // Auth0 sub of the admin/developer who acted
-  actorEmail   String?  // Snapshot of email at action time (for reads after a user is renamed/deleted)
+  actorSub     String // Auth0 sub of the admin/developer who acted
+  actorEmail   String? // Snapshot of email at action time (for reads after a user is renamed/deleted)
   actorRoles   String[] // Snapshot of roles at action time
-  action       String   // e.g. "flag.toggle", "service.delete", "tester.update"
-  resourceType String   // "FeatureFlag" | "ExternalService" | "BetaTester" | "BetaFeedback" | …
-  resourceId   String?  // ID of the touched record (null for bulk actions)
-  route        String?  // HTTP method + path, e.g. "PATCH /api/v1/internal/config/flags/abc"
-  metadata     Json?    // Action-specific context (before/after diff, reason, etc.) — secrets redacted
+  action       String // e.g. "flag.toggle", "service.delete", "tester.update"
+  resourceType String // "FeatureFlag" | "ExternalService" | "BetaTester" | "BetaFeedback" | …
+  resourceId   String? // ID of the touched record (null for bulk actions)
+  route        String? // HTTP method + path, e.g. "PATCH /api/v1/internal/config/flags/abc"
+  metadata     Json? // Action-specific context (before/after diff, reason, etc.) — secrets redacted
   ip           String?
   userAgent    String?  @db.Text
   createdAt    DateTime @default(now())

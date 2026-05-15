@@ -19,6 +19,7 @@ import { metaThreadsWebhookRouter } from "./domains/integrations/metaThreadsWebh
 import { publicSitesRouter } from "./domains/sites/public.routes.js";
 import { sitesDashboardRouter } from "./domains/sites/sites.dashboard.routes.js";
 import { inboxRouter } from "./domains/inbox/inbox.routes.js";
+import { adsRouter } from "./domains/ads/ads.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
 import { webhookRouter } from "./domains/notifications/webhook.routes.js";
 import { integrationRouter } from "./domains/integrations/integration.routes.js";
@@ -173,6 +174,10 @@ app.use(sitesDashboardRouter);
 
 // SquadInbox dashboard surface. Same auth pattern.
 app.use(inboxRouter);
+
+// SquadAds dashboard surface. Export-only MVP — no calls to any
+// ad-platform API. Same auth pattern as Inbox.
+app.use(adsRouter);
 
 // Billing domain (webhook handler verifies via Stripe signature, not Bearer token)
 app.use(billingRouter);
