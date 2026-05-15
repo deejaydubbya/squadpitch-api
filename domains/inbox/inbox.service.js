@@ -289,31 +289,22 @@ export async function generateAiReply(
   // workspace's voice.
   const ctx = await loadClientGenerationContext(clientId);
 
-  // Page + campaign metadata (light-weight — just names) so the
-  // reply can reference what the lead was looking at.
-  const [page, campaign] = await Promise.all([
-    conversation.pageId
-      ? prisma.sitePage.findUnique({
-          where: { id: conversation.pageId },
-          select: { title: true, description: true },
-        })
-      : null,
-    conversation.campaignId
-      ? prisma.campaign.findUnique({
-          where: { id: conversation.campaignId },
-          select: { name: true, campaignType: true },
-        })
-      : null,
-  ]);
+  // Source context — page (with content blocks + lineage),
+  // campaign (with source data item link), originating
+  // FormSubmission, and the underlying WorkspaceDataItem when
+  // the page/campaign is sourced from a property or other data
+  // asset. This is the fix for the "which home?" bug: previously
+  // the model only saw the page title, so a price-question on a
+  // property page got a generic "please specify" reply.
+  const sourceContext = await loadAiReplyContext(conversation);
 
-  const systemPrompt = buildAiReplySystemPrompt({ ctx, tone });
+  const systemPrompt = buildAiReplySystemPrompt({ ctx, tone, sourceContext });
   const userPrompt = buildAiReplyUserPrompt({
     conversation,
     contact: conversation.contact,
     lastInbound,
     history: conversation.messages.reverse(),
-    page,
-    campaign,
+    sourceContext,
   });
 
   const result = await generateStructuredContent({
@@ -362,56 +353,351 @@ export async function generateAiReply(
   return suggestion;
 }
 
-function buildAiReplySystemPrompt({ ctx, tone }) {
+// ── Source context loader ──────────────────────────────────────────────
+//
+// Pulls every piece of context a salesperson would need to answer
+// the lead's first question without asking the lead to repeat
+// what the page already told them. Each lookup is independent so
+// a missing relation (page deleted, no campaign, generic non-
+// property data item) degrades silently to null.
+export async function loadAiReplyContext(conversation) {
+  const { pageId, campaignId, sourceFormSubmissionId } = conversation;
+
+  const [page, campaign, submission] = await Promise.all([
+    pageId
+      ? prisma.sitePage.findUnique({
+          where: { id: pageId },
+          // blocksJson carries the actual content the lead saw on
+          // the page — hero headlines, key_details items, paragraph
+          // bodies, contact info. That IS the source of truth for
+          // facts the lead might be asking about.
+          select: {
+            id: true,
+            title: true,
+            slug: true,
+            description: true,
+            sourceType: true,
+            sourceId: true,
+            pageGoal: true,
+            seoDescription: true,
+            blocksJson: true,
+          },
+        })
+      : null,
+    campaignId
+      ? prisma.campaign.findUnique({
+          where: { id: campaignId },
+          select: {
+            id: true,
+            name: true,
+            campaignType: true,
+            status: true,
+            // Campaign source columns use lowercase strings
+            // (property/data_item/idea) — different from
+            // SitePage.sourceType which uses uppercase enum values.
+            sourceType: true,
+            sourceDataItemId: true,
+            sourceTitle: true,
+            campaignIdea: true,
+          },
+        })
+      : null,
+    sourceFormSubmissionId
+      ? prisma.formSubmission.findUnique({
+          where: { id: sourceFormSubmissionId },
+          select: {
+            id: true,
+            dataJson: true,
+            createdAt: true,
+            form: { select: { id: true, name: true } },
+          },
+        })
+      : null,
+  ]);
+
+  // Resolve the underlying WorkspaceDataItem when the page or
+  // campaign is sourced from one. Page lineage wins because the
+  // page is what the lead actually saw; campaign is a fallback for
+  // conversations that came in via a campaign without a dedicated
+  // landing page.
+  let dataItemId = null;
+  if (page) {
+    if (page.sourceType === "PROPERTY" || page.sourceType === "DATA_ITEM") {
+      dataItemId = page.sourceId;
+    }
+  }
+  if (!dataItemId && campaign) {
+    if (campaign.sourceType === "property" || campaign.sourceType === "data_item") {
+      dataItemId = campaign.sourceDataItemId;
+    }
+  }
+  const dataItem = dataItemId
+    ? await prisma.workspaceDataItem.findUnique({
+        where: { id: dataItemId },
+        select: {
+          id: true,
+          type: true,
+          title: true,
+          summary: true,
+          dataJson: true,
+          tags: true,
+        },
+      })
+    : null;
+
+  return { page, campaign, submission, dataItem };
+}
+
+// ── Prompt builders ────────────────────────────────────────────────────
+
+function buildAiReplySystemPrompt({ ctx, tone, sourceContext }) {
   const brandName = ctx.client?.name ?? "the business";
   const voice = ctx.voice ?? null;
   const brand = ctx.brand ?? null;
+  const hasSource = Boolean(
+    sourceContext?.page || sourceContext?.campaign || sourceContext?.dataItem,
+  );
+
   const lines = [
     `You write a single reply on behalf of ${brandName} to a lead who came in via the website.`,
-    `Tone: ${tone}. Keep it short (1–3 sentences), warm, specific, and never make up facts.`,
+    `Tone: ${tone}. Keep it short (1–3 sentences), warm, specific, sales-appropriate, and never invent facts.`,
   ];
   if (brand?.tagline) lines.push(`Brand tagline: ${brand.tagline}`);
   if (brand?.valueProposition)
     lines.push(`Value proposition: ${brand.valueProposition}`);
   if (voice?.tone) lines.push(`Voice tone: ${voice.tone}`);
   if (voice?.style) lines.push(`Voice style: ${voice.style}`);
+
   lines.push("");
   lines.push("Output rules:");
   lines.push("- Respond ONLY with JSON matching the supplied schema.");
-  lines.push("- Address the lead by name if their name is provided.");
-  lines.push("- Acknowledge the specific page/topic they came from when known.");
-  lines.push("- End with a concrete next step (a question, an offer, a meeting).");
-  lines.push("- Don't sign off with anything more than a first name; we'll add the workspace's preferred sign-off.");
+  lines.push("- Address the lead by first name if their name is provided.");
+
+  if (hasSource) {
+    // The core fix for context-blind replies: when the lead came in
+    // from a specific page/property/campaign, their question almost
+    // always refers to THAT thing — not some hypothetical other
+    // listing. Don't ask "which home?" when the page tells you.
+    lines.push(
+      "- The lead arrived from a specific source page or campaign. Treat their question as referring to that source unless the message clearly references something else.",
+    );
+    lines.push(
+      "- If the source facts below contain the answer, state it directly. If a specific fact is missing, say you will check and follow up — never ask the lead to clarify which property/page they meant.",
+    );
+    lines.push(
+      "- Never invent a price, address, square footage, or any other property detail. If it isn't in the source facts, treat it as unknown.",
+    );
+  } else {
+    lines.push(
+      "- Acknowledge the specific page/topic they came from when known.",
+    );
+  }
+
+  lines.push(
+    "- End with a concrete next step (answering a question, sending details, offering a showing or call).",
+  );
+  lines.push(
+    "- Don't sign off with anything more than a first name; we'll add the workspace's preferred sign-off.",
+  );
   return lines.join("\n");
 }
 
-function buildAiReplyUserPrompt({ contact, lastInbound, history, page, campaign }) {
+function buildAiReplyUserPrompt({ contact, lastInbound, history, sourceContext }) {
+  const { page, campaign, submission, dataItem } = sourceContext ?? {};
+
   const lines = [
-    "# Lead context",
+    "# Lead",
     "",
     `**Name:** ${contact.name ?? "(not provided)"}`,
     `**Email:** ${contact.email ?? "(not provided)"}`,
     `**Phone:** ${contact.phone ?? "(not provided)"}`,
     `**Status:** ${contact.status}`,
   ];
+
   if (page) {
-    lines.push("", `**Came from page:** ${page.title}`);
-    if (page.description) lines.push(`Page description: ${page.description}`);
+    lines.push("", "# Source page");
+    lines.push(`**Title:** ${page.title}`);
+    if (page.pageGoal) lines.push(`**Page goal:** ${page.pageGoal}`);
+    if (page.description) lines.push(`**Page description:** ${page.description}`);
+    else if (page.seoDescription)
+      lines.push(`**Page description:** ${page.seoDescription}`);
+
+    // Render the key facts visible on the page itself — these are
+    // exactly what the lead would have read before submitting.
+    const pageFacts = collectPageFacts(page.blocksJson);
+    if (pageFacts.length > 0) {
+      lines.push("", "**Facts shown on the page:**");
+      for (const fact of pageFacts) lines.push(`- ${fact}`);
+    }
   }
+
   if (campaign) {
-    lines.push("", `**Linked campaign:** ${campaign.name} (${campaign.campaignType})`);
+    lines.push("", "# Source campaign");
+    lines.push(`**Name:** ${campaign.name}`);
+    lines.push(`**Type:** ${campaign.campaignType}`);
+    if (campaign.sourceTitle)
+      lines.push(`**Campaign topic:** ${campaign.sourceTitle}`);
+    if (campaign.campaignIdea)
+      lines.push(`**Campaign idea:** ${truncate(campaign.campaignIdea, 400)}`);
   }
+
+  if (dataItem) {
+    lines.push("", "# Underlying source data");
+    lines.push(`**Type:** ${dataItem.type}`);
+    if (dataItem.title) lines.push(`**Title:** ${dataItem.title}`);
+    if (dataItem.summary)
+      lines.push(`**Summary:** ${truncate(dataItem.summary, 400)}`);
+    const dataFacts = collectDataItemFacts(dataItem.dataJson);
+    if (dataFacts.length > 0) {
+      lines.push("", "**Known facts (use these directly when answering):**");
+      for (const fact of dataFacts) lines.push(`- ${fact}`);
+    } else {
+      lines.push(
+        "",
+        "_(No structured facts on file. If the lead asks for a specific number — price, sqft, etc. — say you'll confirm and follow up rather than asking them to specify.)_",
+      );
+    }
+  }
+
+  if (submission?.dataJson && typeof submission.dataJson === "object") {
+    const subFacts = collectSubmissionFacts(submission.dataJson);
+    if (subFacts.length > 0) {
+      lines.push("", "# Form answers from the lead");
+      for (const f of subFacts) lines.push(`- ${f}`);
+    }
+  }
+
   lines.push("", "# Their latest message");
   lines.push("", lastInbound.body || "(no body — form submission only)");
+
   if (Array.isArray(history) && history.length > 1) {
     lines.push("", "# Earlier in the thread");
     for (const m of history.slice(0, -1)) {
       lines.push(`- [${m.party}] ${truncate(m.body, 240)}`);
     }
   }
+
   lines.push("");
   lines.push("Draft a single reply. JSON only.");
   return lines.join("\n");
+}
+
+// ── Prompt assembly helpers ────────────────────────────────────────────
+
+// Pull "Label: value" facts out of the page's structured blocks so
+// the model can see the same numbers the lead saw. We focus on
+// blocks that carry user-readable copy; ignore image/gallery blocks.
+function collectPageFacts(blocksJson) {
+  if (!Array.isArray(blocksJson)) return [];
+  const facts = [];
+  for (const block of blocksJson) {
+    if (!block || typeof block !== "object") continue;
+    if (block.type === "hero") {
+      if (block.headline) facts.push(`Headline: ${truncate(block.headline, 240)}`);
+      if (block.subheadline)
+        facts.push(`Subheadline: ${truncate(block.subheadline, 240)}`);
+    } else if (block.type === "key_details") {
+      if (Array.isArray(block.items)) {
+        for (const item of block.items) {
+          if (item?.label && item?.value)
+            facts.push(`${item.label}: ${truncate(String(item.value), 200)}`);
+        }
+      }
+    } else if (block.type === "paragraph") {
+      if (block.body) facts.push(`Body: ${truncate(block.body, 400)}`);
+    } else if (block.type === "contact") {
+      if (block.phone) facts.push(`Contact phone: ${block.phone}`);
+      if (block.email) facts.push(`Contact email: ${block.email}`);
+      if (block.address) facts.push(`Address: ${block.address}`);
+    } else if (block.type === "cta") {
+      if (block.label) facts.push(`Call to action: ${block.label}`);
+    } else if (block.type === "faq") {
+      if (Array.isArray(block.items)) {
+        for (const item of block.items) {
+          if (item?.question && item?.answer)
+            facts.push(`FAQ — ${item.question} → ${truncate(item.answer, 240)}`);
+        }
+      }
+    }
+  }
+  return facts;
+}
+
+// Pull whitelisted property/data fields from WorkspaceDataItem.dataJson.
+// Real estate is the primary listing case; the generic branch below
+// also surfaces any string/number/boolean field with a short value
+// so non-property data items (offers, events, services) still get
+// useful coverage.
+const PROPERTY_FACT_FIELDS = [
+  ["address", "Address"],
+  ["street", "Street"],
+  ["city", "City"],
+  ["state", "State"],
+  ["zip", "ZIP"],
+  ["price", "Price"],
+  ["propertyType", "Property type"],
+  ["bedrooms", "Bedrooms"],
+  ["bathrooms", "Bathrooms"],
+  ["sqft", "Sq ft"],
+  ["lotSize", "Lot size"],
+  ["yearBuilt", "Year built"],
+  ["garage", "Garage"],
+  ["mlsNumber", "MLS #"],
+  ["status", "Listing status"],
+  ["description", "Description"],
+  ["highlights", "Highlights"],
+  ["agentName", "Listing agent"],
+  ["brokerage", "Brokerage"],
+  ["listingUrl", "Listing URL"],
+];
+
+function collectDataItemFacts(dataJson) {
+  if (!dataJson || typeof dataJson !== "object") return [];
+  const facts = [];
+  const seen = new Set();
+  // Property/listing whitelist first — keeps the most useful facts
+  // up top regardless of dataJson key order.
+  for (const [key, label] of PROPERTY_FACT_FIELDS) {
+    const v = dataJson[key];
+    if (v === null || v === undefined || v === "") continue;
+    const str = typeof v === "string" ? v.trim() : String(v);
+    if (!str) continue;
+    facts.push(`${label}: ${truncate(str, 400)}`);
+    seen.add(key);
+  }
+  // Generic fallback for any other top-level fields the data item
+  // happens to carry. Bounded to 8 extras so an unusually wide
+  // dataJson doesn't blow up the prompt.
+  let extras = 0;
+  for (const [key, value] of Object.entries(dataJson)) {
+    if (seen.has(key)) continue;
+    if (extras >= 8) break;
+    if (value === null || value === undefined || value === "") continue;
+    if (typeof value === "object") continue; // skip nested
+    facts.push(`${humanizePromptKey(key)}: ${truncate(String(value), 240)}`);
+    extras += 1;
+  }
+  return facts;
+}
+
+function collectSubmissionFacts(dataJson) {
+  if (!dataJson || typeof dataJson !== "object") return [];
+  const facts = [];
+  for (const [key, value] of Object.entries(dataJson)) {
+    if (value === null || value === undefined || value === "") continue;
+    if (typeof value === "object") continue;
+    const str = String(value).trim();
+    if (!str) continue;
+    facts.push(`${humanizePromptKey(key)}: ${truncate(str, 400)}`);
+  }
+  return facts;
+}
+
+function humanizePromptKey(key) {
+  return String(key)
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/^./, (c) => c.toUpperCase());
 }
 
 function trimString(s, max) {
