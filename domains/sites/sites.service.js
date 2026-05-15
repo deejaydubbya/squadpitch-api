@@ -297,7 +297,24 @@ export async function createFormSubmission({
   // MVP keeps this inline; a future Redis-backed worker would
   // slot in by changing this single call to enqueue a job.
   intakeFormSubmission(submission).catch((err) => {
-    console.warn("[inbox.intake] failed for submission %s: %s", submission.id, err?.message ?? err);
+    // Full diagnostic — message + Prisma error code + stack — so
+    // ops can root-cause why an intake threw. The user-facing form
+    // submission already returned 200, but the Inbox surface won't
+    // show this conversation; a silent failure here is invisible.
+    console.error("[inbox.intake] FAILED — submission lost from Inbox surface:", {
+      submissionId: submission.id,
+      clientId: submission.clientId,
+      formId: submission.formId,
+      pageId: submission.pageId,
+      contactEmail: submission.contactEmail,
+      contactPhone: submission.contactPhone ? "<set>" : null, // don't log phone
+      errorName: err?.name,
+      errorMessage: err?.message,
+      // Prisma errors carry .code (e.g. P2002 unique constraint).
+      prismaCode: err?.code,
+      prismaMeta: err?.meta,
+      stack: err?.stack?.split("\n").slice(0, 8).join("\n"),
+    });
   });
 
   return submission;
