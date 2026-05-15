@@ -81,7 +81,46 @@ function createPrismaMock(initialState = {}) {
         }
         return null;
       }),
+      // Used by the safe-merge phone/email collision check on update.
+      // Returns the first matching contact other than the one being
+      // updated, or null if there isn't one.
+      findFirst: vi.fn(async ({ where }) => {
+        for (const c of state.contacts.values()) {
+          if (where.clientId && c.clientId !== where.clientId) continue;
+          if (where.id?.not && c.id === where.id.not) continue;
+          if (where.email !== undefined && c.email !== where.email) continue;
+          if (where.phone !== undefined && c.phone !== where.phone) continue;
+          return c;
+        }
+        return null;
+      }),
       create: vi.fn(async ({ data }) => {
+        // Simulate the Postgres unique constraint enforcement so
+        // the intake's collision handling is actually exercised.
+        if (data.email) {
+          for (const c of state.contacts.values()) {
+            if (c.clientId === data.clientId && c.email === data.email) {
+              const e = new Error(
+                "Unique constraint failed on the fields: (`clientId`,`email`)",
+              );
+              e.code = "P2002";
+              e.meta = { modelName: "Contact", target: ["clientId", "email"] };
+              throw e;
+            }
+          }
+        }
+        if (data.phone) {
+          for (const c of state.contacts.values()) {
+            if (c.clientId === data.clientId && c.phone === data.phone) {
+              const e = new Error(
+                "Unique constraint failed on the fields: (`clientId`,`phone`)",
+              );
+              e.code = "P2002";
+              e.meta = { modelName: "Contact", target: ["clientId", "phone"] };
+              throw e;
+            }
+          }
+        }
         const id = `contact-${++contactCounter}`;
         const row = { id, ...data };
         state.contacts.set(id, row);
@@ -250,5 +289,96 @@ describe("intakeFormSubmission", () => {
     // conversation" per the createConversationIfMissing comment.
     expect(prismaMock.state.conversations.size).toBe(2);
     expect(prismaMock.state.messages).toHaveLength(2);
+  });
+
+  // Regression for the prod bug surfaced 2026-05-15: a new
+  // submission with a NEW email but a phone that already belongs to
+  // a DIFFERENT contact in the workspace was P2002'ing on
+  // (clientId, phone) and silently dropping the lead from Inbox.
+  it("falls back to phone-key lookup when email doesn't match (cross-key resolution)", async () => {
+    // Seed: existing contact in the workspace with no email and a
+    // specific phone.
+    const phoneOnlySub = makeSubmission({
+      id: "sub-existing",
+      contactEmail: null,
+      contactPhone: "+15551234567",
+      dataJson: { phone: "+15551234567", name: "Phone-only first" },
+    });
+    await intakeFormSubmission(phoneOnlySub);
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const existingId = [...prismaMock.state.contacts.values()][0].id;
+
+    // New submission: brand-new email, but SAME phone. Old intake
+    // would try contact.create() and P2002 here.
+    const sameDifferentEmail = makeSubmission({
+      id: "sub-new-email",
+      contactEmail: "newperson@example.com",
+      contactPhone: "+15551234567",
+      dataJson: {
+        email: "newperson@example.com",
+        phone: "+15551234567",
+        name: "Same phone different email",
+      },
+    });
+    const result = await intakeFormSubmission(sameDifferentEmail);
+
+    // Intake succeeds and merges into the existing contact.
+    expect(result.status).toBe("created");
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const merged = [...prismaMock.state.contacts.values()][0];
+    expect(merged.id).toBe(existingId);
+    // Phone is preserved (it was already the existing phone), and
+    // the previously-null email is now filled in.
+    expect(merged.phone).toBe("+15551234567");
+    expect(merged.email).toBe("newperson@example.com");
+    // Still creates the second conversation + initial message.
+    expect(prismaMock.state.conversations.size).toBe(2);
+    expect(prismaMock.state.messages).toHaveLength(2);
+  });
+
+  it("does not overwrite an existing email when a different one arrives for the same phone", async () => {
+    // Existing contact with both email + phone set.
+    const firstSub = makeSubmission({
+      contactEmail: "owner@example.com",
+      contactPhone: "+15551234567",
+      dataJson: { email: "owner@example.com", phone: "+15551234567", name: "Owner" },
+    });
+    await intakeFormSubmission(firstSub);
+
+    // New submission: SAME phone, DIFFERENT email. The intake
+    // should not change the existing email (identity preservation).
+    const otherSub = makeSubmission({
+      id: "sub-other",
+      contactEmail: "shared@example.com",
+      contactPhone: "+15551234567",
+      dataJson: { email: "shared@example.com", phone: "+15551234567" },
+    });
+    const result = await intakeFormSubmission(otherSub);
+    expect(result.status).toBe("created");
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const merged = [...prismaMock.state.contacts.values()][0];
+    expect(merged.email).toBe("owner@example.com"); // not overwritten
+    expect(merged.phone).toBe("+15551234567");
+  });
+
+  it("does not overwrite an existing phone when a different one arrives for the same email", async () => {
+    const firstSub = makeSubmission({
+      contactEmail: "person@example.com",
+      contactPhone: "+15551111111",
+      dataJson: { email: "person@example.com", phone: "+15551111111", name: "P" },
+    });
+    await intakeFormSubmission(firstSub);
+
+    const otherSub = makeSubmission({
+      id: "sub-other-phone",
+      contactEmail: "person@example.com",
+      contactPhone: "+15552222222",
+      dataJson: { email: "person@example.com", phone: "+15552222222" },
+    });
+    const result = await intakeFormSubmission(otherSub);
+    expect(result.status).toBe("created");
+    const merged = [...prismaMock.state.contacts.values()][0];
+    expect(merged.email).toBe("person@example.com");
+    expect(merged.phone).toBe("+15551111111"); // not overwritten
   });
 });

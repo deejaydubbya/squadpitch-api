@@ -83,13 +83,28 @@ export async function intakeFormSubmission(submission) {
 // ── Contact upsert ─────────────────────────────────────────────────────
 
 async function upsertContact({ clientId, email, phone, submission }) {
-  // Prefer email as the identity key (more stable than phone).
-  // Fallback to phone when there's no email.
-  const lookupKey = email
-    ? { clientId_email: { clientId, email } }
-    : { clientId_phone: { clientId, phone } };
-
-  const existing = await prisma.contact.findUnique({ where: lookupKey });
+  // Identity resolution. Contact has TWO unique constraints in
+  // this workspace — (clientId, email) AND (clientId, phone) — and
+  // a single new submission can collide on either. Previous version
+  // only looked up by email and then unconditionally created on
+  // miss, which P2002'd when another contact had the same phone.
+  //
+  // New rule: try email first (more stable identity), then phone.
+  // Once we have a match, do a safe-merge update that NEVER
+  // overwrites an existing identity field — only fills in nulls,
+  // and even then verifies the new value isn't already claimed by
+  // another contact in the workspace.
+  let existing = null;
+  if (email) {
+    existing = await prisma.contact.findUnique({
+      where: { clientId_email: { clientId, email } },
+    });
+  }
+  if (!existing && phone) {
+    existing = await prisma.contact.findUnique({
+      where: { clientId_phone: { clientId, phone } },
+    });
+  }
 
   // Inferred name from the dataJson — best-effort. The intake
   // service doesn't try to be smart about this; the Inbox UI
@@ -114,24 +129,43 @@ async function upsertContact({ clientId, email, phone, submission }) {
   };
 
   if (existing) {
-    // Append the new submission to the enrichment history.
     const merged = mergeEnrichment(existing.enrichmentJson, enrichmentMerge);
+    const data = {
+      enrichmentJson: merged,
+      // Repeat lead — flip to ENGAGED unless the user already
+      // promoted them further.
+      status: existing.status === "NEW" ? "ENGAGED" : existing.status,
+    };
+    if (!existing.name && inferredName) data.name = inferredName;
+    // Fill in a missing email — but only if no OTHER contact in
+    // this workspace already claims it (would P2002 otherwise).
+    if (!existing.email && email) {
+      const taken = await prisma.contact.findFirst({
+        where: { clientId, email, id: { not: existing.id } },
+        select: { id: true },
+      });
+      if (!taken) data.email = email;
+    }
+    // Same check for phone.
+    if (!existing.phone && phone) {
+      const taken = await prisma.contact.findFirst({
+        where: { clientId, phone, id: { not: existing.id } },
+        select: { id: true },
+      });
+      if (!taken) data.phone = phone;
+    }
     return prisma.contact.update({
       where: { id: existing.id },
-      data: {
-        // Fill in missing identity fields if we now have them.
-        email: existing.email ?? email ?? null,
-        phone: existing.phone ?? phone ?? null,
-        name: existing.name ?? inferredName,
-        enrichmentJson: merged,
-        // Repeat lead — flip to ENGAGED unless the user already
-        // promoted them further.
-        status:
-          existing.status === "NEW" ? "ENGAGED" : existing.status,
-      },
+      data,
     });
   }
 
+  // Neither key matched an existing contact. Safe to create.
+  // A concurrent submission could still race us between the
+  // findUniques above and this insert; if it does, P2002 bubbles
+  // up to the intake caller and gets logged as a "lost" submission.
+  // Future hardening: catch P2002 here and retry upsertContact
+  // once.
   return prisma.contact.create({
     data: {
       clientId,
