@@ -291,6 +291,89 @@ describe("inbound — conversation id extraction", () => {
   });
 });
 
+describe("inbound — RFC threading capture (spinstr407)", () => {
+  beforeEach(() => {
+    envOverrides = {};
+    state = {
+      prisma: buildPrismaMock({
+        conversations: [
+          { id: "conv-abc", clientId: "client-1", status: "OPEN", spam: false },
+        ],
+      }),
+    };
+  });
+
+  it("stores the inbound Postmark MessageID as externalMessageId + providerMessageId + payloadJson.messageId", async () => {
+    await service.processInboundEmail(basePayload());
+    const msg = state.prisma.state.msgs[0];
+    expect(msg.externalMessageId).toBe(
+      "<external-postmark-id-123@postmarkapp.com>",
+    );
+    expect(msg.providerMessageId).toBe(
+      "<external-postmark-id-123@postmarkapp.com>",
+    );
+    expect(msg.payloadJson.messageId).toBe(
+      "<external-postmark-id-123@postmarkapp.com>",
+    );
+  });
+
+  it("captures In-Reply-To from the Headers array into payloadJson", async () => {
+    await service.processInboundEmail(
+      basePayload({
+        Headers: [
+          { Name: "In-Reply-To", Value: "<prior-out-1@mail.squadpitch.com>" },
+        ],
+      }),
+    );
+    const msg = state.prisma.state.msgs[0];
+    expect(msg.payloadJson.inReplyTo).toBe(
+      "<prior-out-1@mail.squadpitch.com>",
+    );
+  });
+
+  it("captures References from the Headers array into payloadJson", async () => {
+    await service.processInboundEmail(
+      basePayload({
+        Headers: [
+          {
+            Name: "References",
+            Value: "<root@mail.squadpitch.com> <middle@external> <prior-out@mail.squadpitch.com>",
+          },
+        ],
+      }),
+    );
+    const msg = state.prisma.state.msgs[0];
+    expect(msg.payloadJson.references).toMatch(/<root@mail\.squadpitch\.com>/);
+    expect(msg.payloadJson.references).toMatch(
+      /<prior-out@mail\.squadpitch\.com>/,
+    );
+  });
+
+  it("header name matching is case-insensitive", async () => {
+    await service.processInboundEmail(
+      basePayload({
+        Headers: [
+          { Name: "in-reply-to", Value: "<lowercase@example.com>" },
+          { Name: "REFERENCES", Value: "<uppercase@example.com>" },
+        ],
+      }),
+    );
+    const msg = state.prisma.state.msgs[0];
+    expect(msg.payloadJson.inReplyTo).toBe("<lowercase@example.com>");
+    expect(msg.payloadJson.references).toBe("<uppercase@example.com>");
+  });
+
+  it("omits threading fields when the inbound payload has no Headers entries for them", async () => {
+    await service.processInboundEmail(
+      basePayload({ Headers: [{ Name: "Date", Value: "Wed, 15 May 2026 20:00:00 +0000" }] }),
+    );
+    const msg = state.prisma.state.msgs[0];
+    // payloadJson should not contain inReplyTo or references keys.
+    expect("inReplyTo" in msg.payloadJson).toBe(false);
+    expect("references" in msg.payloadJson).toBe(false);
+  });
+});
+
 describe("inbound — body parsing", () => {
   beforeEach(() => {
     envOverrides = {};

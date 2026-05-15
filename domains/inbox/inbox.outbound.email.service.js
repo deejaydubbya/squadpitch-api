@@ -118,6 +118,64 @@ export function buildMessageId(env_, conversationId, messageId) {
   return `<conv-${conversationId}-msg-${messageId}@${domain}>`;
 }
 
+// References-header size cap. RFC 5322 has no hard maximum, but
+// most providers (Postmark included) reject headers >~8 KB total.
+// Each Message-ID we emit is around 60 bytes including the angle
+// brackets and space delimiter. Capping at ~25 keeps headers well
+// under 2 KB while preserving meaningful threading. When the
+// chain grows longer we keep the FIRST id (the thread origin —
+// per RFC convention) plus the most recent N-1.
+const MAX_REFERENCES = 25;
+
+/**
+ * Build the In-Reply-To + References headers for an outbound
+ * Postmark send. Returns an array of { Name, Value } header
+ * entries ready to spread into a Postmark Headers array.
+ *
+ *   - Empty when there are no prior EMAIL messages with an RFC
+ *     Message-ID (i.e. this is the FIRST outbound in a thread).
+ *   - In-Reply-To always points at the SINGLE most recent prior
+ *     RFC Message-ID — that's what email clients use to nest
+ *     individual replies.
+ *   - References carries the FULL chain in chronological order,
+ *     capped at MAX_REFERENCES. Clients use this for thread
+ *     grouping when In-Reply-To doesn't resolve.
+ *
+ * Internal notes (ConversationNote) and AI suggestions
+ * (AIReplySuggestion) are intentionally not in priorEmailMessages
+ * — the caller queries only channel=EMAIL Messages.
+ */
+export function buildThreadingHeaders(priorEmailMessages) {
+  if (!Array.isArray(priorEmailMessages) || priorEmailMessages.length === 0) {
+    return [];
+  }
+  // Defensive: drop anything without an externalMessageId; sort
+  // ascending so the most recent is last.
+  const sorted = priorEmailMessages
+    .filter((m) => typeof m?.externalMessageId === "string" && m.externalMessageId.length > 0)
+    .slice()
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  if (sorted.length === 0) return [];
+
+  const latest = sorted[sorted.length - 1];
+
+  // Cap References: keep the original (first) message-id plus the
+  // most recent (MAX_REFERENCES - 1) so the thread root is always
+  // preserved even on very long chains. Some clients fall back to
+  // References[0] when In-Reply-To doesn't match.
+  let referenceIds = sorted.map((m) => m.externalMessageId);
+  if (referenceIds.length > MAX_REFERENCES) {
+    const head = referenceIds[0];
+    const tail = referenceIds.slice(-(MAX_REFERENCES - 1));
+    referenceIds = [head, ...tail];
+  }
+
+  return [
+    { Name: "In-Reply-To", Value: latest.externalMessageId },
+    { Name: "References", Value: referenceIds.join(" ") },
+  ];
+}
+
 export function buildSubject({ override, clientName }) {
   if (typeof override === "string" && override.trim().length > 0) {
     return override.trim().slice(0, 998);
@@ -388,7 +446,7 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
   // Internal notes and AI suggestions are NEVER pulled here —
   // those stay workspace-private. Same goes for older WORKSPACE
   // messages (the lead already received those).
-  const [client, latestContactMessage, sourcePage, sourceCampaign] =
+  const [client, latestContactMessage, sourcePage, sourceCampaign, priorEmailMessages] =
     await Promise.all([
       prisma.client
         .findUnique({ where: { id: clientId }, select: { name: true } })
@@ -419,6 +477,21 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
             })
             .catch(() => null)
         : Promise.resolve(null),
+      // Prior EMAIL messages with an RFC Message-ID — drives the
+      // In-Reply-To + References headers so email clients group
+      // every outbound + inbound message into one thread. Scoped
+      // strictly to channel=EMAIL so ConversationNotes and AI
+      // suggestions never enter the threading graph.
+      prisma.message.findMany({
+        where: {
+          conversationId,
+          channel: "EMAIL",
+          externalMessageId: { not: null },
+        },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, externalMessageId: true, createdAt: true },
+        take: 25,
+      }),
     ]);
 
   // Step 1: create the Message row in SENDING state BEFORE the
@@ -443,6 +516,15 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
   const messageIdHeader = buildMessageId(env, conversationId, messageRow.id);
   const subjectLine = buildSubject({ override: subject, clientName: client?.name });
 
+  // RFC threading headers (In-Reply-To + References). For the
+  // FIRST outbound email in a conversation, priorEmailMessages is
+  // empty → no headers added → recipient's email client treats it
+  // as a new thread. For SUBSEQUENT emails, we point In-Reply-To
+  // at the most recent prior EMAIL message and roll the full
+  // chain into References, capped so we don't overrun Postmark's
+  // header-size limit.
+  const threadingHeaders = buildThreadingHeaders(priorEmailMessages ?? []);
+
   // Compose the outbound body: user's reply + a quoted context
   // section showing the latest CONTACT message and (when it's a
   // FORM_SUBMISSION) the source page / campaign. Internal notes
@@ -464,7 +546,12 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
     MessageStream: env.POSTMARK_MESSAGE_STREAM || "outbound",
     // Postmark sets its own Message-ID when omitted, but providing
     // our own gives us deterministic threading on future replies.
-    Headers: [{ Name: "Message-ID", Value: messageIdHeader }],
+    // In-Reply-To + References pin this message into the existing
+    // RFC thread (when we have prior messages to reference).
+    Headers: [
+      { Name: "Message-ID", Value: messageIdHeader },
+      ...threadingHeaders,
+    ],
     ...(replyToHeader ? { ReplyTo: replyToHeader } : {}),
   };
 

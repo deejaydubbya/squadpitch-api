@@ -97,6 +97,25 @@ function buildPrismaMock({ conversations, contacts, clients }) {
         }
         return matches[0] ?? null;
       }),
+      // Used by sendInboxEmail to gather prior EMAIL messages with
+      // an RFC Message-ID, for In-Reply-To + References headers.
+      findMany: vi.fn(async ({ where, orderBy, take }) => {
+        let matches = messages.filter((m) => {
+          if (where?.conversationId && m.conversationId !== where.conversationId) return false;
+          if (where?.channel && m.channel !== where.channel) return false;
+          if (where?.externalMessageId?.not === null) {
+            if (m.externalMessageId == null) return false;
+          }
+          return true;
+        });
+        if (orderBy?.createdAt === "asc") {
+          matches = matches.slice().sort(
+            (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+          );
+        }
+        if (typeof take === "number") matches = matches.slice(0, take);
+        return matches;
+      }),
       create: vi.fn(async ({ data }) => {
         const id = `msg-${++messageCounter}`;
         const row = { id, createdAt: new Date(), ...data };
@@ -634,6 +653,256 @@ describe("outbound email context block — composeOutboundBody", () => {
     // The lead's public question made it into the quote; the
     // internal-note table was never even touched.
     expect(captured.TextBody).toContain("> Public question from the lead.");
+  });
+});
+
+// ── RFC threading (spinstr407) ──────────────────────────────────────────
+
+describe("buildThreadingHeaders — pure helper", () => {
+  it("returns [] when there are no prior EMAIL messages", () => {
+    expect(outbound.buildThreadingHeaders([])).toEqual([]);
+    expect(outbound.buildThreadingHeaders(null)).toEqual([]);
+    expect(outbound.buildThreadingHeaders(undefined)).toEqual([]);
+  });
+
+  it("ignores messages without an externalMessageId", () => {
+    expect(
+      outbound.buildThreadingHeaders([
+        { id: "m1", externalMessageId: null, createdAt: new Date("2026-05-15T10:00:00Z") },
+        { id: "m2", externalMessageId: "", createdAt: new Date("2026-05-15T11:00:00Z") },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("sets In-Reply-To to the most recent prior ID and References to the chronological chain", () => {
+    const headers = outbound.buildThreadingHeaders([
+      { id: "m1", externalMessageId: "<id-1@d>", createdAt: new Date("2026-05-15T10:00:00Z") },
+      { id: "m2", externalMessageId: "<id-2@d>", createdAt: new Date("2026-05-15T11:00:00Z") },
+      { id: "m3", externalMessageId: "<id-3@d>", createdAt: new Date("2026-05-15T12:00:00Z") },
+    ]);
+    const irt = headers.find((h) => h.Name === "In-Reply-To");
+    const refs = headers.find((h) => h.Name === "References");
+    expect(irt.Value).toBe("<id-3@d>");
+    expect(refs.Value).toBe("<id-1@d> <id-2@d> <id-3@d>");
+  });
+
+  it("caps References at 25, preserving the thread root (first) and the most recent tail", () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      id: `m${i}`,
+      externalMessageId: `<id-${i}@d>`,
+      createdAt: new Date(`2026-05-15T10:${String(i).padStart(2, "0")}:00Z`),
+    }));
+    const headers = outbound.buildThreadingHeaders(many);
+    const refs = headers.find((h) => h.Name === "References");
+    const ids = refs.Value.split(" ");
+    expect(ids.length).toBe(25);
+    expect(ids[0]).toBe("<id-0@d>"); // thread root preserved
+    expect(ids[ids.length - 1]).toBe("<id-39@d>"); // most recent at the tail
+  });
+
+  it("tolerates unsorted input by sorting on createdAt ascending", () => {
+    const headers = outbound.buildThreadingHeaders([
+      { id: "later", externalMessageId: "<later@d>", createdAt: new Date("2026-05-15T12:00:00Z") },
+      { id: "earlier", externalMessageId: "<earlier@d>", createdAt: new Date("2026-05-15T10:00:00Z") },
+    ]);
+    const irt = headers.find((h) => h.Name === "In-Reply-To");
+    const refs = headers.find((h) => h.Name === "References");
+    expect(irt.Value).toBe("<later@d>");
+    expect(refs.Value).toBe("<earlier@d> <later@d>");
+  });
+});
+
+describe("sendInboxEmail — RFC threading headers end-to-end", () => {
+  beforeEach(() => {
+    envOverrides = {};
+    state = { prisma: baseFixture() };
+    rateLimitImpl = vi.fn(async () => ({ allowed: true, remaining: 49, retryAfterSec: 0 }));
+  });
+
+  it("first outbound carries Message-ID but no In-Reply-To / References", async () => {
+    const captured = {};
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async (payload) => {
+        Object.assign(captured, payload);
+        return { ErrorCode: 0, MessageID: "stub-1" };
+      }),
+    });
+
+    await outbound.sendInboxEmail("client-a", "conv-a", "auth0|u1", { body: "First reply" });
+
+    const headerNames = (captured.Headers ?? []).map((h) => h.Name);
+    expect(headerNames).toContain("Message-ID");
+    expect(headerNames).not.toContain("In-Reply-To");
+    expect(headerNames).not.toContain("References");
+
+    // The persisted Message row carries the externalMessageId we sent.
+    const persisted = state.prisma.state.messages.find((m) => m.party === "WORKSPACE");
+    expect(persisted.externalMessageId).toMatch(/^<conv-conv-a-msg-.*>$/);
+    expect(persisted.deliveryStatus).toBe("SENT");
+  });
+
+  it("second outbound includes In-Reply-To pointing at the prior outbound's Message-ID", async () => {
+    // First send to seed a prior EMAIL message with an externalMessageId.
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async () => ({ ErrorCode: 0, MessageID: "stub-1" })),
+    });
+    await outbound.sendInboxEmail("client-a", "conv-a", "auth0|u1", { body: "First reply" });
+    const firstSent = state.prisma.state.messages.find((m) => m.party === "WORKSPACE");
+    const firstRfcId = firstSent.externalMessageId;
+    expect(firstRfcId).toBeTruthy();
+
+    // Second send — capture the headers.
+    const captured = {};
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async (payload) => {
+        Object.assign(captured, payload);
+        return { ErrorCode: 0, MessageID: "stub-2" };
+      }),
+    });
+    await outbound.sendInboxEmail("client-a", "conv-a", "auth0|u1", { body: "Following up" });
+
+    const irt = captured.Headers.find((h) => h.Name === "In-Reply-To");
+    const refs = captured.Headers.find((h) => h.Name === "References");
+    expect(irt.Value).toBe(firstRfcId);
+    // References should contain the prior ID (chronological order).
+    expect(refs.Value.split(" ")).toContain(firstRfcId);
+  });
+
+  it("third outbound builds References from both the prior outbound AND a prior CONTACT (inbound) message", async () => {
+    // Seed: prior outbound EMAIL message + prior CONTACT EMAIL message
+    // (e.g. lead replied between our two sends).
+    state.prisma.state.messages.push({
+      id: "msg-outbound-1",
+      conversationId: "conv-a",
+      party: "WORKSPACE",
+      channel: "EMAIL",
+      body: "First",
+      externalMessageId: "<conv-conv-a-msg-outbound-1@mail.squadpitch.com>",
+      createdAt: new Date("2026-05-15T10:00:00Z"),
+    });
+    state.prisma.state.messages.push({
+      id: "msg-inbound-1",
+      conversationId: "conv-a",
+      party: "CONTACT",
+      channel: "EMAIL",
+      body: "Reply from lead",
+      externalMessageId: "<inbound-postmark-msg-1@postmarkapp.com>",
+      createdAt: new Date("2026-05-15T11:00:00Z"),
+    });
+
+    const captured = {};
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async (payload) => {
+        Object.assign(captured, payload);
+        return { ErrorCode: 0, MessageID: "stub-3" };
+      }),
+    });
+    await outbound.sendInboxEmail("client-a", "conv-a", "auth0|u1", { body: "Replying back" });
+
+    const irt = captured.Headers.find((h) => h.Name === "In-Reply-To");
+    const refs = captured.Headers.find((h) => h.Name === "References");
+    // In-Reply-To points at the MOST RECENT prior — which is the
+    // inbound lead reply.
+    expect(irt.Value).toBe("<inbound-postmark-msg-1@postmarkapp.com>");
+    // References lists both in chronological order.
+    expect(refs.Value).toBe(
+      "<conv-conv-a-msg-outbound-1@mail.squadpitch.com> <inbound-postmark-msg-1@postmarkapp.com>",
+    );
+  });
+
+  it("does not include ConversationNote or AIReplySuggestion in threading", async () => {
+    // Seed: a prior EMAIL outbound + a separate non-EMAIL message
+    // (FORM_SUBMISSION) + verify the latter doesn't end up in
+    // threading. ConversationNotes and AI suggestions live in
+    // different tables entirely, so the channel=EMAIL filter on
+    // the message.findMany call is the relevant guard.
+    state.prisma.state.messages.push({
+      id: "msg-form",
+      conversationId: "conv-a",
+      party: "CONTACT",
+      channel: "FORM_SUBMISSION",
+      body: "Form submitted",
+      // Form-submission messages don't get an RFC Message-ID, but
+      // even if a bug did set one we'd want it filtered out.
+      externalMessageId: "<should-not-be-used@form>",
+      createdAt: new Date("2026-05-15T09:00:00Z"),
+    });
+    state.prisma.state.messages.push({
+      id: "msg-email-1",
+      conversationId: "conv-a",
+      party: "WORKSPACE",
+      channel: "EMAIL",
+      body: "Real email",
+      externalMessageId: "<real-email-1@mail.squadpitch.com>",
+      createdAt: new Date("2026-05-15T10:00:00Z"),
+    });
+
+    const captured = {};
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async (payload) => {
+        Object.assign(captured, payload);
+        return { ErrorCode: 0, MessageID: "stub" };
+      }),
+    });
+    await outbound.sendInboxEmail("client-a", "conv-a", "auth0|u1", { body: "Reply" });
+
+    const refs = captured.Headers.find((h) => h.Name === "References");
+    expect(refs.Value).toBe("<real-email-1@mail.squadpitch.com>");
+    expect(refs.Value).not.toContain("<should-not-be-used@form>");
+  });
+
+  it("subject stays stable across the thread (no Re: stacking)", async () => {
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async () => ({ ErrorCode: 0, MessageID: "stub" })),
+    });
+    const captures = [];
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async (payload) => {
+        captures.push(payload.Subject);
+        return { ErrorCode: 0, MessageID: "stub" };
+      }),
+    });
+    // Send four messages without supplying a Subject override.
+    for (let i = 0; i < 4; i++) {
+      await outbound.sendInboxEmail("client-a", "conv-a", "auth0|u1", { body: `msg ${i}` });
+    }
+    // All four subjects identical (no growing "Re: Re: Re:" stack).
+    expect(new Set(captures).size).toBe(1);
+    expect(captures[0]).toMatch(/^Re: Your inquiry/);
+  });
+
+  it("falls back safely when prior EMAIL message has no Message-ID (no headers, send still succeeds)", async () => {
+    // Seed an EMAIL message that somehow lacks an externalMessageId
+    // (e.g. an old row from before threading was wired).
+    state.prisma.state.messages.push({
+      id: "msg-legacy",
+      conversationId: "conv-a",
+      party: "WORKSPACE",
+      channel: "EMAIL",
+      body: "legacy",
+      externalMessageId: null,
+      createdAt: new Date("2026-05-15T10:00:00Z"),
+    });
+
+    const captured = {};
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async (payload) => {
+        Object.assign(captured, payload);
+        return { ErrorCode: 0, MessageID: "stub" };
+      }),
+    });
+    const sent = await outbound.sendInboxEmail("client-a", "conv-a", "auth0|u1", {
+      body: "After a legacy message",
+    });
+
+    // Send completed cleanly.
+    expect(sent.deliveryStatus).toBe("SENT");
+    // No In-Reply-To / References — the legacy message had no ID
+    // to reference. Message-ID header is still present.
+    const headerNames = captured.Headers.map((h) => h.Name);
+    expect(headerNames).toContain("Message-ID");
+    expect(headerNames).not.toContain("In-Reply-To");
+    expect(headerNames).not.toContain("References");
   });
 });
 

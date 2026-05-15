@@ -142,6 +142,11 @@ export function stripQuotedReply(text) {
  * MIME headers, or anything that could carry hostile script. We
  * keep just enough metadata for the UI to render "From: <name>"
  * and "Attached: <name.ext>".
+ *
+ * Threading headers (Message-ID / In-Reply-To / References) are
+ * pulled out specifically so future outbound sends can include
+ * them in the RFC threading chain, and so a future debug surface
+ * can show why a particular reply did (or didn't) thread.
  */
 export function sanitizePayload(payload) {
   const out = {
@@ -156,6 +161,16 @@ export function sanitizePayload(payload) {
           ? payload.MessageId.slice(0, 240)
           : null,
   };
+
+  // Pull RFC threading headers out of Postmark's Headers array
+  // (case-insensitive name match). Postmark surfaces them when
+  // present; absence is fine (the lead's first email won't have
+  // In-Reply-To, top-level outbound has no References, etc).
+  const inReplyTo = findHeaderValue(payload?.Headers, "In-Reply-To");
+  if (inReplyTo) out.inReplyTo = inReplyTo.slice(0, 998);
+  const references = findHeaderValue(payload?.Headers, "References");
+  if (references) out.references = references.slice(0, 4000);
+
   if (Array.isArray(payload?.Attachments) && payload.Attachments.length > 0) {
     out.attachments = payload.Attachments.slice(0, 20).map((a) => ({
       name: typeof a?.Name === "string" ? a.Name.slice(0, 240) : null,
@@ -168,6 +183,21 @@ export function sanitizePayload(payload) {
     }));
   }
   return out;
+}
+
+// Postmark surfaces unprocessed MIME headers as an array of
+// { Name, Value } objects. Header names are case-insensitive
+// per RFC 5322 — we normalize lowercase for matching.
+function findHeaderValue(headers, targetName) {
+  if (!Array.isArray(headers)) return null;
+  const want = String(targetName).toLowerCase();
+  for (const h of headers) {
+    if (h && typeof h.Name === "string" && h.Name.toLowerCase() === want) {
+      const v = h.Value;
+      if (typeof v === "string" && v.trim().length > 0) return v.trim();
+    }
+  }
+  return null;
 }
 
 function parseDateOrNow(dateStr) {
