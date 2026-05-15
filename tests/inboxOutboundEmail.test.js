@@ -301,6 +301,58 @@ describe("sendInboxEmail — provider failure paths", () => {
     expect(msg.deliveryStatus).toBe("FAILED");
     expect(msg.errorReason).toMatch(/Network timeout/);
   });
+
+  it("maps a Postmark 4xx with ErrorCode 412 (pending-approval) to PROVIDER_FAILED with user-actionable copy", async () => {
+    // Postmark SDK throws an ApiInputError-shaped object for 4xx
+    // responses. Mirror the shape we saw in prod.
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async () => {
+        const e = new Error(
+          "While your account is pending approval, all recipient addresses must share the same domain as the 'From' address.",
+        );
+        e.name = "ApiInputError";
+        e.code = 412;
+        e.statusCode = 422;
+        throw e;
+      }),
+    });
+    let caught;
+    try {
+      await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", { body: "hi" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeTruthy();
+    expect(caught.status).toBe(502);
+    expect(caught.code).toBe("PROVIDER_FAILED");
+    expect(caught.postmarkErrorCode).toBe(412);
+    expect(caught.message).toMatch(/sandbox/i);
+    expect(caught.message).toMatch(/Postmark dashboard/);
+
+    const msg = state.prisma.state.messages[0];
+    expect(msg.deliveryStatus).toBe("FAILED");
+    expect(msg.errorReason).toMatch(/^412:/);
+  });
+
+  it("maps Postmark ErrorCode 406 (inactive recipient) to a targeted user message", async () => {
+    outbound.__setPostmarkClientForTest({
+      sendEmail: vi.fn(async () => {
+        const e = new Error("Inactive recipient");
+        e.name = "ApiInputError";
+        e.code = 406;
+        e.statusCode = 422;
+        throw e;
+      }),
+    });
+    let caught;
+    try {
+      await outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", { body: "hi" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught.code).toBe("PROVIDER_FAILED");
+    expect(caught.message).toMatch(/inactive/i);
+  });
 });
 
 describe("emailCapabilityFor — UI-facing capability snapshot", () => {

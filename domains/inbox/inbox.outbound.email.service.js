@@ -126,6 +126,47 @@ export function buildSubject({ override, clientName }) {
   return name ? `Re: Your inquiry to ${name}` : "Re: Your inquiry";
 }
 
+// Translate Postmark's raw ErrorCode + message into something a
+// workspace owner can actually act on. The list is small on
+// purpose — we only translate codes where the verbatim Postmark
+// language is misleading or where the fix is non-obvious. Anything
+// else falls through to the raw message, which Postmark writes
+// pretty well.
+//
+// Reference: https://postmarkapp.com/developer/api/overview#error-codes
+export function buildPostmarkUserMessage(errorCode, rawMessage) {
+  // 412 — account / sender pending approval. The message Postmark
+  // returns mentions "pending approval" and "share the same domain
+  // as the 'From' address" — accurate but doesn't say WHERE to fix
+  // it. Point them at the dashboard.
+  if (errorCode === 412) {
+    return (
+      "Email can't be sent yet: your Postmark account is still in the " +
+      "sandbox (\"Request Approval\") state, so it only accepts " +
+      "recipients on your own verified domain. Approve the account in " +
+      "the Postmark dashboard and try again."
+    );
+  }
+  // 406 — inactive recipient (bounced before, spam-complained, etc.)
+  if (errorCode === 406) {
+    return "This recipient is inactive in Postmark (previous bounce or spam complaint). It can't receive new mail until reactivated.";
+  }
+  // 422 — invalid sender signature / domain not verified
+  if (errorCode === 422) {
+    return "The From address isn't verified in Postmark yet. Confirm the sender signature / domain DKIM + Return-Path records.";
+  }
+  // 405 — message is too large
+  if (errorCode === 405) {
+    return "This message is too large for Postmark. Trim attachments or body length.";
+  }
+  // 300 — invalid email address
+  if (errorCode === 300) {
+    return "Postmark rejected the recipient address as invalid.";
+  }
+  // Default: pass through Postmark's own message — usually clear.
+  return rawMessage || "Email provider rejected the message.";
+}
+
 // Convert a plain-text body into a very simple HTML body. Newlines
 // become <br>. We don't try to render markdown; the composer is
 // plain-text today.
@@ -270,11 +311,23 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
   try {
     providerResponse = await pm.sendEmail(postmarkPayload);
   } catch (rawErr) {
-    // Postmark SDK throws with rich diagnostics (HTTP status,
-    // ErrorCode, full response body). Log server-side so ops can
-    // see what actually broke without leaking it to the client.
-    const reason =
-      rawErr?.message || String(rawErr).slice(0, 1000) || "Postmark SDK threw";
+    // Postmark SDK throws on every HTTP 4xx/5xx as an ApiInputError
+    // (or one of its subclasses). The thrown error carries:
+    //   .code        — Postmark business ErrorCode (e.g. 412 for
+    //                  pending-approval sandbox, 406 for inactive
+    //                  recipient, etc.)
+    //   .statusCode  — HTTP status (4xx/5xx)
+    //   .message     — Postmark's diagnostic message
+    // We distinguish "real provider rejection" (business state, map
+    // to PROVIDER_FAILED 502 with the message surfaced to the user)
+    // from "infrastructure unreachable" (network, timeout — map to
+    // PROVIDER_UNREACHABLE 503 with generic copy).
+    const postmarkErrorCode =
+      typeof rawErr?.code === "number" ? rawErr.code : null;
+    const httpStatus = rawErr?.statusCode ?? rawErr?.status;
+    const errorName = rawErr?.name ?? "Error";
+    const rawMessage = rawErr?.message || String(rawErr).slice(0, 1000);
+
     console.error("[INBOX_OUTBOUND_EMAIL] Postmark sendEmail threw:", {
       messageId: messageRow.id,
       conversationId,
@@ -282,10 +335,10 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
       from: postmarkPayload.From,
       to: postmarkPayload.To,
       stream: postmarkPayload.MessageStream,
-      errorName: rawErr?.name,
-      errorMessage: rawErr?.message,
-      errorCode: rawErr?.code,
-      statusCode: rawErr?.statusCode ?? rawErr?.status,
+      errorName,
+      errorMessage: rawMessage,
+      errorCode: postmarkErrorCode,
+      statusCode: httpStatus,
       postmarkBody: rawErr?.body ?? rawErr?.response?.body ?? null,
       stack: rawErr?.stack?.split("\n").slice(0, 5).join("\n"),
     });
@@ -293,13 +346,36 @@ export async function sendInboxEmail(clientId, conversationId, userId, { body, s
       where: { id: messageRow.id },
       data: {
         deliveryStatus: "FAILED",
-        errorReason: `${rawErr?.name ?? "Error"}: ${reason}`.slice(0, 4000),
+        errorReason:
+          (postmarkErrorCode !== null
+            ? `${postmarkErrorCode}: ${rawMessage}`
+            : `${errorName}: ${rawMessage}`
+          ).slice(0, 4000),
       },
     });
-    const err = new Error("Email provider call failed");
+
+    // 4xx with a Postmark ErrorCode is a business rejection —
+    // surface the message verbatim so the user knows what to do
+    // (request account approval, fix sender signature, etc.).
+    if (
+      typeof httpStatus === "number" &&
+      httpStatus >= 400 &&
+      httpStatus < 500
+    ) {
+      const userFacing = buildPostmarkUserMessage(postmarkErrorCode, rawMessage);
+      const err = new Error(userFacing);
+      err.status = 502;
+      err.code = "PROVIDER_FAILED";
+      err.providerError = rawMessage;
+      err.postmarkErrorCode = postmarkErrorCode;
+      throw err;
+    }
+
+    // 5xx or thrown-without-status → real infrastructure issue.
+    const err = new Error("Email provider is unreachable. Try again in a minute.");
     err.status = 503;
     err.code = "PROVIDER_UNREACHABLE";
-    err.providerError = reason;
+    err.providerError = rawMessage;
     throw err;
   }
 
