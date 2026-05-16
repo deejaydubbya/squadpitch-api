@@ -332,6 +332,113 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     expect(findAction(actions, "REPLY_REVIEW")).toBeNull();
   });
 
+  // spinstr416 — YouTube comment reply path. Wireable today only
+  // when the connection's stored scopes include youtube.force-ssl
+  // (test users on the Google Cloud project can grant it; everyone
+  // else hits Google's unverified-app guard until sensitive-scope
+  // verification lands).
+  it("YouTube REPLY_PUBLIC_COMMENT stays disabled when there's no externalMessageId on the inbound", () => {
+    const conv = makeConversation({
+      provider: "YOUTUBE",
+      email: null,
+      phone: null,
+      messages: [{ party: "CONTACT", externalMessageId: null, sourceUrl: null }],
+    });
+    const action = findAction(getAvailableReplyActions(conv), "REPLY_PUBLIC_COMMENT");
+    expect(action.available).toBe(false);
+    expect(action.reason).toMatch(/no public comment to reply to/i);
+  });
+
+  it("YouTube REPLY_PUBLIC_COMMENT asks to connect YouTube when no connection is loaded", () => {
+    const conv = makeConversation({
+      provider: "YOUTUBE",
+      email: null,
+      phone: null,
+      messages: [{ party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null }],
+    });
+    const action = findAction(getAvailableReplyActions(conv), "REPLY_PUBLIC_COMMENT");
+    expect(action.available).toBe(false);
+    expect(action.reason).toMatch(/Connect YouTube/i);
+  });
+
+  it("YouTube REPLY_PUBLIC_COMMENT asks for the force-ssl reconnect when scope is missing", () => {
+    const conv = makeConversation({
+      provider: "YOUTUBE",
+      email: null,
+      phone: null,
+      messages: [{ party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null }],
+    });
+    const action = findAction(
+      getAvailableReplyActions(conv, {
+        youtubeConnection: {
+          status: "CONNECTED",
+          externalAccountId: "UCabc",
+          scopes: [
+            "https://www.googleapis.com/auth/youtube.upload",
+            "https://www.googleapis.com/auth/youtube.readonly",
+          ],
+        },
+      }),
+      "REPLY_PUBLIC_COMMENT",
+    );
+    expect(action.available).toBe(false);
+    expect(action.reason).toMatch(/youtube\.force-ssl/);
+  });
+
+  it("YouTube REPLY_PUBLIC_COMMENT flips to available when force-ssl is in the granted scopes", () => {
+    const conv = makeConversation({
+      provider: "YOUTUBE",
+      email: null,
+      phone: null,
+      messages: [{ party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null }],
+    });
+    const action = findAction(
+      getAvailableReplyActions(conv, {
+        youtubeConnection: {
+          status: "CONNECTED",
+          externalAccountId: "UCabc",
+          scopes: [
+            "https://www.googleapis.com/auth/youtube.upload",
+            "https://www.googleapis.com/auth/youtube.readonly",
+            "https://www.googleapis.com/auth/youtube.force-ssl",
+          ],
+        },
+      }),
+      "REPLY_PUBLIC_COMMENT",
+    );
+    expect(action.available).toBe(true);
+    expect(action.reason).toBeNull();
+  });
+
+  // spinstr416 — LinkedIn org comment + DM are gated on
+  // LinkedIn's Community Management API approval. Until that
+  // lands, resolver must always surface the truthful pending-
+  // approval reason regardless of connection state.
+  it("LinkedIn REPLY_PUBLIC_COMMENT is pinned to the Community Management API pending reason", () => {
+    const conv = makeConversation({
+      provider: "LINKEDIN",
+      email: null,
+      phone: null,
+      messages: [{ party: "CONTACT", externalMessageId: "urn:li:comment:1", sourceUrl: null }],
+    });
+    const action = findAction(getAvailableReplyActions(conv), "REPLY_PUBLIC_COMMENT");
+    expect(action.available).toBe(false);
+    expect(action.reason).toMatch(/Pending LinkedIn Community Management API approval/i);
+    expect(action.requiresConfig).toBe(false);
+  });
+
+  it("LinkedIn REPLY_DM is pinned to the same Community Management API pending reason", () => {
+    const conv = makeConversation({
+      provider: "LINKEDIN",
+      email: null,
+      phone: null,
+      externalThreadId: "urn:li:thread:1",
+    });
+    const action = findAction(getAvailableReplyActions(conv), "REPLY_DM");
+    expect(action.available).toBe(false);
+    expect(action.reason).toMatch(/Pending LinkedIn Community Management API approval/i);
+  });
+
   it("Instagram gets comment + DM (no review)", () => {
     const conv = makeConversation({ provider: "INSTAGRAM", email: null, phone: null });
     const actions = getAvailableReplyActions(conv);

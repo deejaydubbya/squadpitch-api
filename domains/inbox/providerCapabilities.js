@@ -155,10 +155,10 @@ export const providerCapabilities = {
 
   YOUTUBE: {
     label: "YouTube",
-    ingestComments: true,    // youtube.readonly already grants commentThreads.list
+    ingestComments: true,    // youtube.readonly grants commentThreads.list — POLLER WIRED
     ingestDMs: false,        // no DM API on YouTube
     ingestReviews: false,
-    sendPublicReply: false,  // needs youtube.force-ssl
+    sendPublicReply: true,   // youtube.force-ssl now requested; resolver checks per-connection scope grant
     sendDM: false,
     sendReview: false,
     webhooks: false,         // PubSubHubbub only for new videos, not comments
@@ -166,13 +166,12 @@ export const providerCapabilities = {
     currentScopes: [
       "https://www.googleapis.com/auth/youtube.upload",
       "https://www.googleapis.com/auth/youtube.readonly",
+      "https://www.googleapis.com/auth/youtube.force-ssl",
     ],
-    missingScopes: [
-      "https://www.googleapis.com/auth/youtube.force-ssl", // comment reply
-    ],
+    missingScopes: [],
     appReviewStatus: "live",         // current scopes already approved
     notes:
-      "Comment-read is technically possible today via readonly + commentThreads polling. Reply needs youtube.force-ssl and Google sensitive-scope verification. No webhook for comments — polling required.",
+      "Comment-ingestion poller landed in spinstr416 (inbox.youtube.ingestion.service.js + youtubeCommentPoller.service.js + youtubeCommentPollerWorker.js). Reply via comments.insert is feasible once a connection's granted scopes include youtube.force-ssl — the OAuth consent request asks for it, but Google's unverified-app guard blocks non-test-users from granting it until the project completes sensitive-scope verification. Test users on the Cloud project can grant it now. Resolver gates REPLY_PUBLIC_COMMENT on the actual granted-scopes list. No webhook for comments — polling required.",
   },
 
   LINKEDIN: {
@@ -194,23 +193,29 @@ export const providerCapabilities = {
 
   LINKEDIN_ORG: {
     label: "LinkedIn (organization)",
-    ingestComments: true,    // r_organization_social grants socialActions.list
+    // Both ingestion and reply are gated on LinkedIn's Community
+    // Management API approval. App submitted; "Review in progress"
+    // as of spinstr416. Until approval lands, do NOT poll
+    // socialActions or POST replies — even with the right scopes,
+    // LinkedIn rejects the call with 403 from an unapproved app.
+    // The resolver surfaces the truthful pending-approval reason.
+    ingestComments: false,
     ingestDMs: false,
     ingestReviews: false,
-    sendPublicReply: true,   // w_organization_social — can comment as org
+    sendPublicReply: false,
     sendDM: false,
     sendReview: false,
     webhooks: false,         // LinkedIn does NOT push org events
-    polling: true,
+    polling: false,
     currentScopes: [
       "r_organization_admin",
       "w_organization_social",
       "r_organization_social",
     ],
-    missingScopes: [],       // scopes are already sufficient for org comments
-    appReviewStatus: "live",
+    missingScopes: [],       // scopes ARE present; LinkedIn's app gate is the blocker
+    appReviewStatus: "submitted",
     notes:
-      "Org comments are theoretically wireable today — scopes are right. Polling required (no webhooks). Need adapter + LinkedIn rate-limit handling.",
+      "Community Management API approval pending. Do NOT flip ingestion or reply on until LinkedIn approves the app. Resolver surfaces 'Pending LinkedIn Community Management API approval.' for both REPLY_PUBLIC_COMMENT and REPLY_DM on LINKEDIN conversations.",
   },
 
   X: {

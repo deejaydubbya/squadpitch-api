@@ -77,6 +77,21 @@ function pickLastInbound(conversation) {
   return null;
 }
 
+// YouTube's comment-reply scope. Pulled from the OAuth module
+// constants to avoid string drift. We check presence on the
+// connection's stored scopes (Google omits scopes the user
+// declined) before flipping REPLY_PUBLIC_COMMENT to available.
+const YOUTUBE_REPLY_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
+
+// LinkedIn org-comment ingestion + reply requires Community
+// Management API approval from LinkedIn Developer Platform.
+// We submitted the app in April 2026; approval is "Review in
+// progress" at time of writing (spinstr416). Surface the
+// truthful pending-approval reason rather than a generic
+// "isn't connected yet" so the user knows what we're waiting on.
+const LINKEDIN_COMMUNITY_API_PENDING_REASON =
+  "Pending LinkedIn Community Management API approval.";
+
 /**
  * Resolve the ordered list of reply actions for a Conversation.
  *
@@ -87,6 +102,11 @@ function pickLastInbound(conversation) {
  *                                GOOGLE_BUSINESS_PROFILE ChannelConnection
  *                                row, when known. Used to flip REPLY_REVIEW
  *                                from "Connect..." to available.
+ *                                { youtubeConnection? } — the workspace's
+ *                                YOUTUBE ChannelConnection row. Used to
+ *                                decide whether REPLY_PUBLIC_COMMENT for a
+ *                                YouTube conversation is wireable today
+ *                                (gated on youtube.force-ssl in scopes).
  * @returns {Array<{action: string, label: string, available: boolean, reason: string|null, requiresConfig: boolean}>}
  */
 export function getAvailableReplyActions(conversation, extras = {}) {
@@ -151,20 +171,60 @@ export function getAvailableReplyActions(conversation, extras = {}) {
     const hasCommentId = Boolean(
       lastInbound?.externalMessageId || lastInbound?.sourceUrl,
     );
+    let available = false;
     let reason;
+    let requiresConfig = hasCommentId;
+
     if (!hasCommentId) {
       reason = "No public comment to reply to on this conversation.";
+    } else if (provider === "LINKEDIN") {
+      // LinkedIn org-comment ingestion + reply is gated on the
+      // Community Management API approval (still "Review in
+      // progress"). Pin the truthful reason regardless of token /
+      // scope state — we will not write to LinkedIn until approval
+      // lands. Personal LinkedIn isn't usable for org comments
+      // either; same blocker.
+      reason = LINKEDIN_COMMUNITY_API_PENDING_REASON;
+      requiresConfig = false;
+    } else if (provider === "YOUTUBE") {
+      // YouTube comment reply is wireable today IF the connection
+      // granted the youtube.force-ssl scope. Test users on the
+      // Google Cloud project can grant it; everyone else hits the
+      // unverified-app block from Google. We surface the exact
+      // missing-scope blocker so the user can reconnect.
+      const yt = extras?.youtubeConnection ?? null;
+      const hasScope =
+        yt &&
+        yt.status === "CONNECTED" &&
+        Array.isArray(yt.scopes) &&
+        yt.scopes.includes(YOUTUBE_REPLY_SCOPE);
+      if (!yt) {
+        reason = "Connect YouTube to reply to comments.";
+        requiresConfig = true;
+      } else if (yt.status !== "CONNECTED") {
+        reason = "YouTube connection needs to be reconnected.";
+        requiresConfig = true;
+      } else if (!hasScope) {
+        reason =
+          "Reconnect YouTube and grant the comment-reply permission (youtube.force-ssl).";
+        requiresConfig = true;
+      } else {
+        available = true;
+        reason = null;
+        requiresConfig = false;
+      }
     } else if (scopeBlocker) {
       reason = scopeBlocker;
     } else {
       reason = `Public comment reply isn't connected yet for ${humanizeProvider(provider)}.`;
     }
+
     actions.push({
       action: "REPLY_PUBLIC_COMMENT",
       label: "Reply to comment",
-      available: false, // No send path wired for any provider yet.
+      available,
       reason,
-      requiresConfig: hasCommentId,
+      requiresConfig,
     });
   }
 
@@ -174,6 +234,8 @@ export function getAvailableReplyActions(conversation, extras = {}) {
     let reason;
     if (!hasThread) {
       reason = `No ${humanizeProvider(provider)} thread on this conversation.`;
+    } else if (provider === "LINKEDIN") {
+      reason = LINKEDIN_COMMUNITY_API_PENDING_REASON;
     } else if (scopeBlocker) {
       reason = scopeBlocker;
     } else {

@@ -4164,6 +4164,96 @@ studioRouter.post(
   },
 );
 
+// ── YouTube comment sync ──────────────────────────────────────────────
+//
+// Trigger the YouTube comment poller for a single workspace right
+// now (rather than waiting for the next 15-minute tick). Used by the
+// "Sync comments now" button on the YouTube Settings tile + makes
+// end-to-end testing tractable (post a comment on a video → click
+// → see it land in the Inbox seconds later instead of waiting up to
+// 15 min).
+//
+// Enqueues a one-shot poll-connection BullMQ job — work happens
+// asynchronously so the request returns immediately. The user reads
+// the result in the Inbox; this endpoint just acknowledges the
+// queue write. Returns 202 with the connection id so the UI can
+// optionally poll for completion (not wired in the first cut —
+// the existing 15-min refresh is fine).
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/YOUTUBE/sync-comments`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "YOUTUBE",
+          },
+        },
+        select: { id: true, status: true, externalAccountId: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No YouTube connection on this workspace.",
+        );
+      }
+      if (conn.status !== "CONNECTED") {
+        return sendError(
+          res,
+          400,
+          "CONNECTION_NOT_ACTIVE",
+          "YouTube connection is not active. Reconnect to sync comments.",
+        );
+      }
+      if (!conn.externalAccountId) {
+        return sendError(
+          res,
+          400,
+          "NO_CHANNEL_ID",
+          "YouTube connection is missing a channel id; reconnect to refresh it.",
+        );
+      }
+      const { enqueueYouTubeCommentPollForConnection } = await import(
+        "../../workers/youtubeCommentPollerWorker.js"
+      );
+      try {
+        await enqueueYouTubeCommentPollForConnection(conn.id);
+      } catch (err) {
+        // Redis unavailable in some dev environments — fall back to
+        // running the tick inline so the dev / test experience still
+        // works without a queue. In prod (Fly), Redis is configured
+        // so this branch is rarely hit.
+        if (err?.code === "QUEUE_UNAVAILABLE") {
+          const { pollYouTubeCommentsForConnection } = await import(
+            "../inbox/youtubeCommentPoller.service.js"
+          );
+          const full = await prisma.channelConnection.findUnique({
+            where: { id: conn.id },
+          });
+          if (full) await pollYouTubeCommentsForConnection(full);
+        } else {
+          throw err;
+        }
+      }
+      return res.status(202).json({
+        status: "queued",
+        connectionId: conn.id,
+        message:
+          "YouTube comment sync queued. Comments will appear in the Inbox shortly.",
+      });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
 // ── Tech Stack ────────────────────────────────────────────────────────
 
 /**

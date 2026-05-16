@@ -151,11 +151,30 @@ describe("providerCapabilities — scope hygiene", () => {
     expect(ig.missingScopes).toContain("instagram_manage_messages");
   });
 
-  it("YouTube reply is gated on youtube.force-ssl", () => {
+  // spinstr416 — youtube.force-ssl is now in the requested scope
+  // list (so test users on the Google Cloud project can grant it).
+  // The matrix's missingScopes is therefore empty; the resolver
+  // checks the connection's actual granted-scopes list before
+  // flipping REPLY_PUBLIC_COMMENT to available.
+  it("YouTube requests force-ssl and has no missing scopes (gate is per-connection grant)", () => {
     const yt = providerCapabilities.YOUTUBE;
-    expect(yt.missingScopes).toContain(
+    expect(yt.currentScopes).toContain(
       "https://www.googleapis.com/auth/youtube.force-ssl",
     );
+    expect(yt.missingScopes).toEqual([]);
+    expect(yt.ingestComments).toBe(true);
+    expect(yt.sendPublicReply).toBe(true);
+  });
+
+  // spinstr416 — LinkedIn org is gated on the Community Management
+  // API approval (still "Review in progress"). Until LinkedIn
+  // approves the app, both ingestion and reply must stay off so
+  // we don't burn quota on calls LinkedIn will reject.
+  it("LinkedIn org has ingestion + reply OFF pending Community Management API approval", () => {
+    const li = providerCapabilities.LINKEDIN_ORG;
+    expect(li.ingestComments).toBe(false);
+    expect(li.sendPublicReply).toBe(false);
+    expect(li.appReviewStatus).toBe("submitted");
   });
 
   it("Google Business Profile is gated on business.manage", () => {

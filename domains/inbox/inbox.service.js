@@ -125,7 +125,29 @@ export async function getConversation(clientId, conversationId) {
           },
         })
       : null;
-  const availableReplyActions = getAvailableReplyActions(row, { gbpConnection });
+  // Same pre-load pattern for YouTube — the resolver needs the
+  // connection's stored scopes to decide whether REPLY_PUBLIC_COMMENT
+  // is wireable (gated on youtube.force-ssl, which only test users
+  // on the Google Cloud project can grant today).
+  const youtubeConnection =
+    row.provider === "YOUTUBE"
+      ? await prisma.channelConnection.findUnique({
+          where: {
+            clientId_channel: { clientId, channel: "YOUTUBE" },
+          },
+          select: {
+            id: true,
+            status: true,
+            externalAccountId: true,
+            scopes: true,
+            lastError: true,
+          },
+        })
+      : null;
+  const availableReplyActions = getAvailableReplyActions(row, {
+    gbpConnection,
+    youtubeConnection,
+  });
 
   // Stamp workspaceReadAt as a side effect of viewing — flips
   // unread to read. Caller decides whether to honor this via the
@@ -352,6 +374,7 @@ export async function generateAiReply(
     tone,
     channel,
     sourceContext,
+    provider: conversation.provider ?? null,
   });
   const userPrompt = buildAiReplyUserPrompt({
     conversation,
@@ -505,7 +528,7 @@ export async function loadAiReplyContext(conversation) {
 
 // ── Prompt builders ────────────────────────────────────────────────────
 
-function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext }) {
+function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext, provider = null }) {
   const brandName = ctx.client?.name ?? "the business";
   const voice = ctx.voice ?? null;
   const brand = ctx.brand ?? null;
@@ -533,12 +556,22 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext 
       `Tone: ${tone}. 1–3 sentences. No greeting, no sign-off — just the reply text itself.`,
     );
   } else if (channel === "public_comment") {
-    // Public-surface reply (FB/IG comment). Whatever you write
-    // here is visible to every viewer of the parent post.
-    lines.push(
-      `You draft a short public reply on behalf of ${brandName} to a comment on its social post. This reply will be visible to every viewer of the post — including people who are not the original commenter.`,
-      `Tone: ${tone}. 1–2 sentences max. Never include the commenter's email, phone, address, or any private detail; offer to continue privately via DM or email if a specific question needs a longer answer.`,
-    );
+    // Public-surface reply (FB/IG comment or YouTube comment).
+    // Whatever you write here is visible to every viewer of the
+    // parent post / video. Provider-aware framing so the model
+    // matches the conventions of the surface — YouTube comments
+    // skew shorter and more casual than FB/IG comments.
+    if (provider === "YOUTUBE") {
+      lines.push(
+        `You draft a short public reply on behalf of ${brandName} to a comment on one of its YouTube videos. The reply appears directly under the comment on the video's public comments section — visible to every viewer of the video.`,
+        `Tone: ${tone}. Keep it to 1 sentence (rarely 2). YouTube comments are casual and short; don't sound like a press release. Never include the commenter's email, phone, address, or any private detail. If a question needs a longer answer, invite them to reach out off-platform without sharing your own private contact info in public.`,
+      );
+    } else {
+      lines.push(
+        `You draft a short public reply on behalf of ${brandName} to a comment on its social post. This reply will be visible to every viewer of the post — including people who are not the original commenter.`,
+        `Tone: ${tone}. 1–2 sentences max. Never include the commenter's email, phone, address, or any private detail; offer to continue privately via DM or email if a specific question needs a longer answer.`,
+      );
+    }
   } else if (channel === "private_dm") {
     lines.push(
       `You draft a private direct message on behalf of ${brandName} to a contact via social DM (Facebook Messenger or Instagram Direct). The lead messaged the page directly; only they will see this reply.`,

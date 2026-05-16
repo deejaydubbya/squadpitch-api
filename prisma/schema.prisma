@@ -560,6 +560,11 @@ enum ConversationSource {
   // from SOCIAL so the UI can render a "Google review" / "Public
   // response" framing rather than a generic comment chip.
   REVIEW
+  // Public-comment surface (YouTube today; LinkedIn org pending
+  // Community Management API approval). Distinct from SOCIAL_DM so
+  // the AI prompt branches into the safer public-comment voice and
+  // the UI labels the row as a comment rather than a DM.
+  SOCIAL_COMMENT
 }
 
 // Per-network provider for a Conversation. Coarser sourceType
