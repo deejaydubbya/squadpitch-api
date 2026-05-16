@@ -4032,6 +4032,102 @@ studioRouter.post(
   }
 );
 
+// ── Google Business Profile location picker ──────────────────────────
+//
+// Mirrors the Pinterest board picker pattern: OAuth completes
+// with externalAccountId="accounts/{a}" as a sentinel; the user
+// must pick a specific location before reviews polling or reply
+// send can fire. The polling worker + outbound reply service both
+// refuse to act on connections lacking "/locations/" in their
+// externalAccountId, so a half-finished connection cannot leak
+// reviews into the inbox or attempt to send a reply against a
+// non-existent location.
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/connections/GOOGLE_BUSINESS_PROFILE/locations`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "GOOGLE_BUSINESS_PROFILE",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "Connect Google Business Profile first, then choose which location to manage.",
+        );
+      }
+      const { listLocations } = await import("./gbpLocations.service.js");
+      const locations = await listLocations({ connectionId: conn.id });
+      if (locations.length === 0) {
+        return res.json({
+          locations: [],
+          message:
+            "No Google Business Profile locations were found for this account. Add a location in Google Business Profile, then refresh.",
+        });
+      }
+      res.json({ locations });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/GOOGLE_BUSINESS_PROFILE/locations/select`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { locationName, locationTitle } = req.body ?? {};
+      if (!locationName || typeof locationName !== "string") {
+        return validationError(res, [
+          { path: ["locationName"], message: "locationName is required" },
+        ]);
+      }
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "GOOGLE_BUSINESS_PROFILE",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No Google Business Profile connection.",
+        );
+      }
+      const { saveSelectedLocation } = await import("./gbpLocations.service.js");
+      const updated = await saveSelectedLocation({
+        connectionId: conn.id,
+        locationName,
+        locationTitle: typeof locationTitle === "string" ? locationTitle : null,
+      });
+      res.json({ connection: updated });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
 // ── Tech Stack ────────────────────────────────────────────────────────
 
 /**

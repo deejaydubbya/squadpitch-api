@@ -25,6 +25,7 @@ import {
 } from "./inbox.schemas.js";
 import * as service from "./inbox.service.js";
 import { sendInboxEmail } from "./inbox.outbound.email.service.js";
+import { sendGbpReviewReply } from "./inbox.outbound.gbp.service.js";
 
 export const inboxRouter = express.Router();
 
@@ -171,6 +172,83 @@ inboxRouter.post(
         { ...parsed.data, idempotencyKey },
       );
       res.status(201).json({ message });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Send GBP public review reply (capability-gated) ────────────────────
+//
+// Workspace-owner gated; idempotency-key header mirrors the
+// email send path. PROVIDER_NOT_AVAILABLE (412) returns when
+// the workspace lacks a fully-configured GBP location with
+// business.manage scope — the UI surfaces the reason verbatim.
+inboxRouter.post(
+  `${BASE}/workspaces/:id/inbox/conversations/:conversationId/reply-review`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const body = typeof req.body?.body === "string" ? req.body.body : "";
+      if (!body || body.trim().length === 0) {
+        return validationError(res, [
+          { path: ["body"], message: "body is required" },
+        ]);
+      }
+      // Same idempotency-key pattern as send-email — fresh UUID
+      // per click. A retried POST returns the existing Message
+      // instead of firing a duplicate public reply.
+      const idempotencyKey =
+        typeof req.headers["idempotency-key"] === "string" &&
+        req.headers["idempotency-key"].trim()
+          ? req.headers["idempotency-key"].trim().slice(0, 128)
+          : null;
+      const message = await sendGbpReviewReply(
+        req.params.id,
+        req.params.conversationId,
+        getAuth0Sub(req),
+        { body, idempotencyKey },
+      );
+      res.status(201).json({ message });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Manual "sync now" trigger for GBP reviews (developer/admin) ────────
+//
+// Useful for first-sync seeding and for the UI's "Sync reviews
+// now" button. Runs the same polling code the cron job runs but
+// scoped to one workspace's GBP connection so a slow tick doesn't
+// block other workspaces.
+inboxRouter.post(
+  `${BASE}/workspaces/:id/inbox/_gbp-sync`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { prisma } = await import("../../prisma.js");
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "GOOGLE_BUSINESS_PROFILE",
+          },
+        },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "Connect a Google Business Profile location first.",
+        );
+      }
+      const { pollGbpReviewsForConnection } = await import(
+        "./gbpReviewPoller.service.js"
+      );
+      const summary = await pollGbpReviewsForConnection(conn);
+      res.json(summary);
     } catch (err) {
       handleServiceError(res, err, next);
     }

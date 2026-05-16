@@ -125,6 +125,14 @@ export const env = {
   YOUTUBE_CLIENT_SECRET: process.env.YOUTUBE_CLIENT_SECRET,
   YOUTUBE_REDIRECT_URI: process.env.YOUTUBE_REDIRECT_URI,
 
+  // Google Business Profile — Inbox reviews channel. Separate OAuth
+  // client from YouTube because the scope (business.manage) requires
+  // Google sensitive-scope verification independent of the YouTube
+  // scope set. Same Google Cloud project is fine; different client.
+  GOOGLE_BUSINESS_PROFILE_CLIENT_ID: process.env.GOOGLE_BUSINESS_PROFILE_CLIENT_ID,
+  GOOGLE_BUSINESS_PROFILE_CLIENT_SECRET: process.env.GOOGLE_BUSINESS_PROFILE_CLIENT_SECRET,
+  GOOGLE_BUSINESS_PROFILE_REDIRECT_URI: process.env.GOOGLE_BUSINESS_PROFILE_REDIRECT_URI,
+
   // Threads (Meta — separate Threads-only app, NOT the existing
   // Facebook/Instagram app). Threads has its own developer app on
   // developers.facebook.com with its own client_id/secret and uses the

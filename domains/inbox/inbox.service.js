@@ -101,7 +101,22 @@ export async function getConversation(clientId, conversationId) {
   // renders modes from the server list rather than three
   // hard-coded tabs. Older UI continues to work off
   // replyCapabilities until it migrates.
-  const availableReplyActions = getAvailableReplyActions(row);
+  //
+  // Pre-load the GBP connection when this conversation came in
+  // via Google Business Profile so the resolver can decide
+  // REPLY_REVIEW availability (otherwise it'd default to
+  // disabled). Cheap workspace-scoped lookup; null when no
+  // connection exists.
+  const gbpConnection =
+    row.provider === "GOOGLE_BUSINESS"
+      ? await prisma.channelConnection.findUnique({
+          where: {
+            clientId_channel: { clientId, channel: "GOOGLE_BUSINESS_PROFILE" },
+          },
+          select: { id: true, status: true, externalAccountId: true, scopes: true },
+        })
+      : null;
+  const availableReplyActions = getAvailableReplyActions(row, { gbpConnection });
 
   // Stamp workspaceReadAt as a side effect of viewing — flips
   // unread to read. Caller decides whether to honor this via the

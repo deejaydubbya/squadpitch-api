@@ -13,6 +13,7 @@ import * as pinterest from "./pinterest.oauth.js";
 import * as x from "./x.oauth.js";
 import * as youtube from "./youtube.oauth.js";
 import * as threads from "./threads.oauth.js";
+import * as googleBusinessProfile from "./googleBusinessProfile.oauth.js";
 
 const OAUTH_MODULES = {
   INSTAGRAM: instagram,
@@ -24,6 +25,7 @@ const OAUTH_MODULES = {
   X: x,
   YOUTUBE: youtube,
   THREADS: threads,
+  GOOGLE_BUSINESS_PROFILE: googleBusinessProfile,
 };
 
 /**

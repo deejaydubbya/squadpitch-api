@@ -222,7 +222,50 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     const actions = getAvailableReplyActions(conv);
     expect(findAction(actions, "REPLY_REVIEW")).toBeTruthy();
     expect(findAction(actions, "REPLY_PUBLIC_COMMENT")).toBeNull();
-    expect(findAction(actions, "REPLY_DM")).toBeNull();
+    expect(findAction(actions, "REPLY_REVIEW").available).toBe(false);
+    expect(findAction(actions, "REPLY_PUBLIC_COMMENT")).toBeNull();
+  });
+
+  it("Google Business REPLY_REVIEW flips to available when GBP connection has location + business.manage", () => {
+    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const actions = getAvailableReplyActions(conv, {
+      gbpConnection: {
+        status: "CONNECTED",
+        externalAccountId: "accounts/100/locations/A1",
+        scopes: ["https://www.googleapis.com/auth/business.manage"],
+      },
+    });
+    const review = findAction(actions, "REPLY_REVIEW");
+    expect(review.available).toBe(true);
+    expect(review.reason).toBeNull();
+  });
+
+  it("Google Business REPLY_REVIEW stays disabled when location picker hasn't run", () => {
+    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const actions = getAvailableReplyActions(conv, {
+      gbpConnection: {
+        status: "CONNECTED",
+        externalAccountId: "accounts/100", // sentinel — no /locations/
+        scopes: ["https://www.googleapis.com/auth/business.manage"],
+      },
+    });
+    const review = findAction(actions, "REPLY_REVIEW");
+    expect(review.available).toBe(false);
+    expect(review.reason).toMatch(/Pick a Google Business Profile location/i);
+  });
+
+  it("Google Business REPLY_REVIEW stays disabled when business.manage scope is missing", () => {
+    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const actions = getAvailableReplyActions(conv, {
+      gbpConnection: {
+        status: "CONNECTED",
+        externalAccountId: "accounts/100/locations/A1",
+        scopes: ["unrelated_scope"],
+      },
+    });
+    const review = findAction(actions, "REPLY_REVIEW");
+    expect(review.available).toBe(false);
+    expect(review.reason).toMatch(/review reply permission is not available/i);
   });
 
   it("YouTube gets REPLY_PUBLIC_COMMENT but no DM or review", () => {

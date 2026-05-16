@@ -21,6 +21,7 @@ export const ChannelEnum = z.enum([
   "YOUTUBE",
   "PINTEREST",
   "THREADS",
+  "GOOGLE_BUSINESS_PROFILE",
 ]);
 
 export const MediaModeEnum = z.enum([

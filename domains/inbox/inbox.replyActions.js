@@ -77,9 +77,15 @@ function pickLastInbound(conversation) {
  * Resolve the ordered list of reply actions for a Conversation.
  *
  * @param {object} conversation — must include contact + (optionally) messages.
+ * @param {object} [extras]    — pre-loaded per-conversation state the
+ *                                resolver can't fetch itself (it's sync):
+ *                                { gbpConnection? } — the workspace's
+ *                                GOOGLE_BUSINESS_PROFILE ChannelConnection
+ *                                row, when known. Used to flip REPLY_REVIEW
+ *                                from "Connect..." to available.
  * @returns {Array<{action: string, label: string, available: boolean, reason: string|null, requiresConfig: boolean}>}
  */
-export function getAvailableReplyActions(conversation) {
+export function getAvailableReplyActions(conversation, extras = {}) {
   if (!conversation) return [];
   const provider = conversation.provider ?? "SQUADSITES";
   const caps = capabilitiesFor(provider);
@@ -180,14 +186,50 @@ export function getAvailableReplyActions(conversation) {
 
   // ── REPLY_REVIEW ────────────────────────────────────────────────────
   if (caps.supportsReview) {
-    actions.push({
-      action: "REPLY_REVIEW",
-      label: "Reply to review",
-      available: false,
-      reason:
-        scopeBlocker ?? `${humanizeProvider(provider)} review replies aren't connected yet.`,
-      requiresConfig: true,
-    });
+    // GBP case — when the workspace has a fully-configured
+    // GOOGLE_BUSINESS_PROFILE connection (location picked +
+    // business.manage in scopes), the action becomes available.
+    if (provider === "GOOGLE_BUSINESS") {
+      const gbp = extras?.gbpConnection ?? null;
+      let available = false;
+      let reason = "Connect a Google Business Profile location to reply to reviews.";
+      let requiresConfig = true;
+      if (gbp && gbp.status === "CONNECTED") {
+        const hasLocation = typeof gbp.externalAccountId === "string" &&
+          gbp.externalAccountId.includes("/locations/");
+        const hasScope = Array.isArray(gbp.scopes) &&
+          gbp.scopes.includes("https://www.googleapis.com/auth/business.manage");
+        if (!hasLocation) {
+          available = false;
+          reason = "Pick a Google Business Profile location to reply to reviews.";
+          requiresConfig = true;
+        } else if (!hasScope) {
+          available = false;
+          reason = "Google Business Profile is connected, but review reply permission is not available.";
+          requiresConfig = true;
+        } else {
+          available = true;
+          reason = null;
+          requiresConfig = false;
+        }
+      }
+      actions.push({
+        action: "REPLY_REVIEW",
+        label: "Reply to review",
+        available,
+        reason,
+        requiresConfig,
+      });
+    } else {
+      actions.push({
+        action: "REPLY_REVIEW",
+        label: "Reply to review",
+        available: false,
+        reason:
+          scopeBlocker ?? `${humanizeProvider(provider)} review replies aren't connected yet.`,
+        requiresConfig: true,
+      });
+    }
   }
 
   // ── LOG_EXTERNAL_REPLY ──────────────────────────────────────────────
