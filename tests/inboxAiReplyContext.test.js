@@ -378,6 +378,24 @@ describe("generateAiReply — channel framing", () => {
     expect(captured.systemPrompt).toMatch(/single email reply/i);
   });
 
+  it("review_reply channel produces an appreciative, PII-safe public response", async () => {
+    await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
+      tone: "professional",
+      channel: "review_reply",
+    });
+    // Visibility framing — the reply is on a public Google listing.
+    expect(captured.systemPrompt).toMatch(/Google review/i);
+    expect(captured.systemPrompt).toMatch(/visible to every future customer/i);
+    // Appreciative for positive, calm for negative — explicit in the prompt.
+    expect(captured.systemPrompt).toMatch(/Appreciative when the review is positive/i);
+    expect(captured.systemPrompt).toMatch(/Calm and solution-oriented when the review is negative/i);
+    // Hard PII rule — never echo the reviewer's name / location / what they bought.
+    expect(captured.systemPrompt).toMatch(/Never repeat the reviewer's name, location/i);
+    // No star-restating rule.
+    expect(captured.systemPrompt).toMatch(/Don't restate the star rating/i);
+    expect(captured.userPrompt).toMatch(/public review response/i);
+  });
+
   it("public_comment channel produces a short, safe, no-PII reply", async () => {
     await generateAiReply(CLIENT_ID, CONV_ID, "auth0|user", {
       tone: "professional",

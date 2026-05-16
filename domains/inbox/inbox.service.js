@@ -520,6 +520,16 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext 
       `You draft a private direct message on behalf of ${brandName} to a contact via social DM (Facebook Messenger or Instagram Direct). The lead messaged the page directly; only they will see this reply.`,
       `Tone: ${tone}. 1–3 sentences. DMs read like chat — no formal greeting, no sign-off. Mention the lead by first name if known.`,
     );
+  } else if (channel === "review_reply") {
+    // Public response to a Google review (or future Yelp / FB
+    // Recommendation). This reply is visible to anyone browsing the
+    // business listing — calm, appreciative, never defensive, and
+    // never repeats anything personal the reviewer wrote about
+    // themselves (name, location, what they bought).
+    lines.push(
+      `You draft a short public response on behalf of ${brandName} to a Google review. The response will appear directly under the review on the business's Google listing — visible to every future customer browsing it.`,
+      `Tone: ${tone}. 1–3 sentences. Appreciative when the review is positive. Calm and solution-oriented when the review is negative — never defensive, never argumentative, never blame the reviewer.`,
+    );
   } else {
     // email (default)
     lines.push(
@@ -547,6 +557,11 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext 
     lines.push("- Address the commenter by first name only if their name is provided AND it's already public on the comment.");
     lines.push("- Never repeat or include the commenter's email, phone, address, or any contact detail in a public reply.");
     lines.push("- If the question can't be answered safely in public, invite them to continue via DM or email.");
+  } else if (channel === "review_reply") {
+    lines.push("- Thank the reviewer when the review is positive; acknowledge their concern when it's negative — without arguing or correcting them publicly.");
+    lines.push("- Never repeat the reviewer's name, location, what they bought, or any other personal detail they shared — keep the reply generic enough that the next ten customers reading it don't see private info.");
+    lines.push("- If the issue needs more investigation, invite the reviewer to reach out directly (email / phone) — never share private contact info in the public response.");
+    lines.push("- Don't restate the star rating — the reader can already see it.");
   }
 
   if (hasSource) {
@@ -596,6 +611,13 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext 
   } else if (channel === "private_dm") {
     lines.push(
       "- End with a concrete next step. No closing line — DMs end where the message ends.",
+    );
+  } else if (channel === "review_reply") {
+    lines.push(
+      "- Close warmly when the review is positive; close with a concrete next step (e.g. \"please reach out so we can make this right\") when it's negative.",
+    );
+    lines.push(
+      "- Don't sign off — Google attaches the business identity automatically.",
     );
   } else {
     // note
@@ -688,6 +710,8 @@ function buildAiReplyUserPrompt({ contact, lastInbound, history, sourceContext, 
     lines.push("Draft a single short public reply. JSON only.");
   } else if (channel === "private_dm") {
     lines.push("Draft a single direct message. JSON only.");
+  } else if (channel === "review_reply") {
+    lines.push("Draft a single public review response. JSON only.");
   } else {
     lines.push("Draft a single reply. JSON only.");
   }

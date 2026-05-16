@@ -150,7 +150,7 @@ export const providerCapabilities = {
     missingScopes: ["https://www.googleapis.com/auth/business.manage"],
     appReviewStatus: "not-submitted",
     notes:
-      "No integration today — needs full OAuth + adapter. Reviews polling on a fixed interval. business.manage is a sensitive scope (Google verification required). Messages API deprecated; only reviews are workable.",
+      "Reviews INGESTION layer landed in spinstr11 (domains/inbox/inbox.gbp.ingestion.service.js) — accepts a normalized review payload and writes provider=GOOGLE_BUSINESS, sourceType=REVIEW, visibility=PUBLIC. Still missing: OAuth flow (googleBusinessProfile.oauth.js), the reviews polling worker that calls accounts.locations.reviews.list, and the reviews.updateReply send path. Need Google sensitive-scope verification for business.manage before any of those can fire in production.",
   },
 
   YOUTUBE: {

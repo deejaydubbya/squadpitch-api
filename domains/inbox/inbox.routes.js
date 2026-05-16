@@ -272,3 +272,56 @@ inboxRouter.get(
     }
   },
 );
+
+// ── GBP review test injector (workspace-admin only) ────────────────────
+//
+// Until the real Google Business Profile OAuth + reviews-polling
+// adapter ships, this route lets a workspace owner inject a
+// synthetic review payload to exercise the ingestion service
+// end-to-end. Same shape the future polling worker will hand
+// ingestGbpReview() — so testing the full UI path doesn't depend
+// on Google sensitive-scope verification landing first.
+//
+// Tenant-isolated via requireClientOwner; the body's locationName
+// must match a CONNECTED ChannelConnection for this workspace or
+// the ingestion returns UNKNOWN_ACCOUNT.
+inboxRouter.post(
+  `${BASE}/workspaces/:id/inbox/_test/gbp-review`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      // Lazy import — the ingestion service uses Prisma at import
+      // time too, but keeping this here so the test-injector
+      // doesn't increase the cold-start surface for the more
+      // common Inbox routes above.
+      const { ingestGbpReview } = await import(
+        "./inbox.gbp.ingestion.service.js"
+      );
+      const body = req.body ?? {};
+      const result = await ingestGbpReview({
+        locationName: body.locationName,
+        reviewId:
+          body.reviewId ??
+          `${body.locationName}/reviews/sim_${Date.now()}_${Math.random()
+            .toString(36)
+            .slice(2, 8)}`,
+        starRating: Number.isFinite(body.starRating) ? body.starRating : 5,
+        comment: typeof body.comment === "string" ? body.comment : "",
+        reviewer: {
+          googleId: typeof body.reviewerId === "string" ? body.reviewerId : `sim_${Date.now()}`,
+          displayName:
+            typeof body.reviewerName === "string"
+              ? body.reviewerName
+              : "Test Reviewer (simulator)",
+          isAnonymous: Boolean(body.anonymous),
+        },
+        createTime: new Date().toISOString(),
+        updateTime: new Date().toISOString(),
+        sourceUrl: typeof body.sourceUrl === "string" ? body.sourceUrl : null,
+      });
+      res.status(200).json(result);
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);

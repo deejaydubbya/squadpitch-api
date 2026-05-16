@@ -55,13 +55,17 @@ export const ManualMessageSchema = z.object({
 //                    whole internet can read it.
 // "private_dm"     — direct message (FB/IG DM); more conversational
 //                    like email but no sign-off — DMs are short.
+// "review_reply"   — public response to a Google review (or future
+//                    Yelp / FB Recommendation). Appreciative for
+//                    positive reviews, calm + solution-oriented for
+//                    negative ones, never repeats reviewer PII.
 // Defaults to "email" because that's the only real outbound channel
 // today; older clients that don't send the field still get sensible
 // output.
 export const AiReplyRequestSchema = z.object({
   tone: z.enum(["professional", "friendly", "concise"]).optional().default("professional"),
   channel: z
-    .enum(["email", "reply", "note", "public_comment", "private_dm"])
+    .enum(["email", "reply", "note", "public_comment", "private_dm", "review_reply"])
     .optional()
     .default("email"),
 });

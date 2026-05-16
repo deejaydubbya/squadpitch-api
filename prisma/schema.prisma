@@ -555,6 +555,11 @@ enum ConversationSource {
   SOCIAL
   EMAIL_REPLY
   MANUAL
+  // Public review surface (Google Business Profile reviews today,
+  // Facebook Page Recommendations / Yelp / etc. later). Distinct
+  // from SOCIAL so the UI can render a "Google review" / "Public
+  // response" framing rather than a generic comment chip.
+  REVIEW
 }
 
 // Per-network provider for a Conversation. Coarser sourceType
