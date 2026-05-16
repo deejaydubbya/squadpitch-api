@@ -26,6 +26,7 @@ import {
 import * as service from "./inbox.service.js";
 import { sendInboxEmail } from "./inbox.outbound.email.service.js";
 import { sendGbpReviewReply } from "./inbox.outbound.gbp.service.js";
+import { sendYouTubeCommentReply } from "./inbox.outbound.youtube.service.js";
 
 export const inboxRouter = express.Router();
 
@@ -204,6 +205,70 @@ inboxRouter.post(
           ? req.headers["idempotency-key"].trim().slice(0, 128)
           : null;
       const message = await sendGbpReviewReply(
+        req.params.id,
+        req.params.conversationId,
+        getAuth0Sub(req),
+        { body, idempotencyKey },
+      );
+      res.status(201).json({ message });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Send YouTube public comment reply (capability-gated) ───────────────
+//
+// Workspace-owner gated; idempotency-key header mirrors the email
+// and GBP send paths. PROVIDER_NOT_AVAILABLE (412) returns when
+// the workspace's YouTube connection isn't set up with
+// youtube.force-ssl — the UI surfaces the reason verbatim
+// ("Reconnect YouTube and grant the comment-reply permission").
+//
+// The reply lands on YouTube as a public reply under the comment
+// — visible to every viewer of the video. Requires explicit user
+// click; never auto-sent (the composer button posts here only
+// when the user explicitly clicks Send).
+inboxRouter.post(
+  `${BASE}/workspaces/:id/inbox/conversations/:conversationId/reply-comment`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const body = typeof req.body?.body === "string" ? req.body.body : "";
+      if (!body || body.trim().length === 0) {
+        return validationError(res, [
+          { path: ["body"], message: "body is required" },
+        ]);
+      }
+      const idempotencyKey =
+        typeof req.headers["idempotency-key"] === "string" &&
+        req.headers["idempotency-key"].trim()
+          ? req.headers["idempotency-key"].trim().slice(0, 128)
+          : null;
+
+      // Provider-aware dispatch — same composer button maps to a
+      // different outbound service per Conversation.provider. Today:
+      // YOUTUBE is wired. LINKEDIN stays gated (resolver short-
+      // circuits before the user can click); other providers
+      // return 412.
+      const { prisma } = await import("../../prisma.js");
+      const conv = await prisma.conversation.findFirst({
+        where: { id: req.params.conversationId, clientId: req.params.id },
+        select: { provider: true },
+      });
+      if (!conv) {
+        return sendError(res, 404, "CONVERSATION_NOT_FOUND", "Conversation not found");
+      }
+      if (conv.provider !== "YOUTUBE") {
+        return sendError(
+          res,
+          412,
+          "PROVIDER_NOT_AVAILABLE",
+          `Public comment reply isn't connected yet for ${conv.provider}.`,
+        );
+      }
+
+      const message = await sendYouTubeCommentReply(
         req.params.id,
         req.params.conversationId,
         getAuth0Sub(req),
