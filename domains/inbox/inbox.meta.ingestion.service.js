@@ -316,6 +316,20 @@ async function ingestComment({
     });
   }
 
+  // Diagnostic — surfaces exactly which workspace the conversation
+  // landed in. Helpful when multiple workspaces have the same
+  // ChannelConnection.externalAccountId (rare, but possible after
+  // OAuth re-connections across workspaces).
+  console.log("[meta.inbox] ingested →", {
+    clientId,
+    provider,
+    pageOrIgId: externalAccountId,
+    conversationId: conversation.id,
+    messageId: message.id,
+    externalThreadId: threadKey,
+    externalMessageId: commentId,
+  });
+
   return {
     status: "created",
     conversationId: conversation.id,
