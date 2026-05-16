@@ -99,13 +99,36 @@ export const facebookAdapter = {
       });
     }
 
-    const externalPostId = postResult?.id ?? postResult?.post_id;
+    // For image posts the /photos endpoint returns BOTH a photo
+    // media id (`id`) and the feed post id (`post_id` in the
+    // shape `<page_id>_<feed_post_id>`). Prefer post_id because:
+    //   1. Fetching ?fields=permalink_url against the post_id
+    //      returns the canonical post URL
+    //      (https://facebook.com/<page>/posts/<id>) which loads
+    //      cleanly in incognito.
+    //   2. Fetching against the photo id returns the photo
+    //      lightbox URL (https://facebook.com/photo.php?fbid=...)
+    //      which Facebook routes through a login interstitial
+    //      for logged-out viewers — making public posts look
+    //      private. This was the spinstr410 bug.
+    // /feed and /videos only return `id` (no `post_id`), so the
+    // fallback covers text-only + video posts.
+    const externalPostId = postResult?.post_id ?? postResult?.id;
     if (!externalPostId) {
       throw new FacebookPublishError(
         "Facebook publish response missing post ID",
         { metaError: postResult }
       );
     }
+    // Diagnostic — PII-free fingerprint of the publish response so
+    // ops can verify the right field landed in externalPostId
+    // without grepping for actual ids/tokens.
+    console.log("[facebook.adapter] publish response shape:", {
+      pageId,
+      hasId: typeof postResult?.id === "string",
+      hasPostId: typeof postResult?.post_id === "string",
+      preferredField: postResult?.post_id ? "post_id" : "id",
+    });
 
     // Resolve permalink (non-fatal)
     let externalPostUrl = null;
