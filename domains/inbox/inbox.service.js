@@ -113,7 +113,16 @@ export async function getConversation(clientId, conversationId) {
           where: {
             clientId_channel: { clientId, channel: "GOOGLE_BUSINESS_PROFILE" },
           },
-          select: { id: true, status: true, externalAccountId: true, scopes: true },
+          // lastError carries the REVIEW_API_ACCESS_DENIED marker
+          // (when set) — the resolver reads it to refuse REPLY_REVIEW
+          // even when location + scope are otherwise correct.
+          select: {
+            id: true,
+            status: true,
+            externalAccountId: true,
+            scopes: true,
+            lastError: true,
+          },
         })
       : null;
   const availableReplyActions = getAvailableReplyActions(row, { gbpConnection });

@@ -26,6 +26,10 @@ import {
   listReviews,
   refreshAccessToken,
 } from "../studio/oauth/googleBusinessProfile.oauth.js";
+import {
+  isReviewApiAccessDenied,
+  buildAccessDeniedMarker,
+} from "./gbpReviewAccessMarker.js";
 
 const REVIEWS_PAGE_SIZE = 50;
 // How close to expiry before we proactively refresh. Google tokens
@@ -146,7 +150,45 @@ export async function pollGbpReviewsForConnection(connection) {
       locationName: connection.externalAccountId,
       pageSize: REVIEWS_PAGE_SIZE,
     });
+    // listReviews succeeded — clear any prior access-denied marker
+    // so the UI/resolver stops surfacing the approval-pending state.
+    // Only writes when there's something to clear so we don't
+    // burn a write on every successful tick.
+    if (connection.lastError) {
+      await prisma.channelConnection
+        .update({
+          where: { id: connection.id },
+          data: { lastError: null },
+        })
+        .catch(() => {});
+    }
   } catch (err) {
+    // Distinguish "Google hasn't allowlisted this project for the
+    // legacy reviews API" (sticky, surfaced to the UI as an
+    // approval-pending banner) from a transient 5xx (silently
+    // retried next tick).
+    if (isReviewApiAccessDenied(err)) {
+      summary.error = "REVIEW_API_ACCESS_DENIED";
+      const marker = buildAccessDeniedMarker(err?.message);
+      // Skip the write if the marker is already exactly what we'd
+      // set — saves the row update on every tick once the state
+      // is settled.
+      if (connection.lastError !== marker) {
+        await prisma.channelConnection
+          .update({
+            where: { id: connection.id },
+            data: { lastError: marker },
+          })
+          .catch(() => {});
+      }
+      console.warn("[gbp.poller] reviews API access denied:", {
+        connectionId: connection.id,
+        clientId: connection.clientId,
+        locationName: connection.externalAccountId,
+        providerMessage: err?.message,
+      });
+      return summary;
+    }
     summary.error = err?.message ?? "LIST_REVIEWS_FAILED";
     return summary;
   }

@@ -27,6 +27,12 @@ import {
   updateReply,
   refreshAccessToken,
 } from "../studio/oauth/googleBusinessProfile.oauth.js";
+import {
+  isReviewApiAccessDenied,
+  buildAccessDeniedMarker,
+  isAccessDeniedMarker,
+  ACCESS_DENIED_RESOLVER_REASON,
+} from "./gbpReviewAccessMarker.js";
 
 const TOKEN_REFRESH_SKEW_MS = 5 * 60_000;
 
@@ -118,6 +124,16 @@ export async function sendGbpReviewReply(
     const err = new Error(
       "Google Business Profile is connected, but review reply permission is not available.",
     );
+    err.status = 412;
+    err.code = "PROVIDER_NOT_AVAILABLE";
+    throw err;
+  }
+  // If a prior poll OR a prior reply attempt already learned that
+  // Google hasn't allowlisted this project for the reviews API,
+  // refuse pre-flight rather than burn another 403. The marker
+  // clears automatically when reviews.list next succeeds.
+  if (isAccessDeniedMarker(conn.lastError)) {
+    const err = new Error(ACCESS_DENIED_RESOLVER_REASON);
     err.status = 412;
     err.code = "PROVIDER_NOT_AVAILABLE";
     throw err;
@@ -219,6 +235,27 @@ export async function sendGbpReviewReply(
         errorReason: `${httpStatus}: ${reason}`.slice(0, 4000),
       },
     });
+    // When Google rejects with the "this project isn't allowlisted
+    // for the legacy reviews API" shape, persist the marker on
+    // the connection so subsequent send attempts AND the next
+    // resolver call refuse pre-flight. Saves a round trip and
+    // tells the UI what's actually wrong.
+    if (isReviewApiAccessDenied(callErr)) {
+      const marker = buildAccessDeniedMarker(reason);
+      if (conn.lastError !== marker) {
+        await prisma.channelConnection
+          .update({
+            where: { id: conn.id },
+            data: { lastError: marker },
+          })
+          .catch(() => {});
+      }
+      const accessErr = new Error(ACCESS_DENIED_RESOLVER_REASON);
+      accessErr.status = 412;
+      accessErr.code = "PROVIDER_NOT_AVAILABLE";
+      accessErr.providerError = reason;
+      throw accessErr;
+    }
     const err = new Error(reason);
     err.status = httpStatus >= 400 && httpStatus < 500 ? 502 : 503;
     err.code = httpStatus >= 400 && httpStatus < 500 ? "PROVIDER_FAILED" : "PROVIDER_UNREACHABLE";

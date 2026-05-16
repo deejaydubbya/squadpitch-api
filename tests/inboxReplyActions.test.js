@@ -268,6 +268,58 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     expect(review.reason).toMatch(/review reply permission is not available/i);
   });
 
+  // spinstr414 — even when location + scope look fine, the
+  // REVIEW_API_ACCESS_DENIED marker (set by the poller after
+  // Google rejects reviews.list) must keep REPLY_REVIEW disabled.
+  // Better to refuse pre-flight than mark available and have the
+  // send fail at runtime.
+  it("Google Business REPLY_REVIEW stays disabled when the access-denied marker is set", () => {
+    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const actions = getAvailableReplyActions(conv, {
+      gbpConnection: {
+        status: "CONNECTED",
+        externalAccountId: "accounts/100/locations/A1",
+        scopes: ["https://www.googleapis.com/auth/business.manage"],
+        lastError:
+          "REVIEW_API_ACCESS_DENIED: Google My Business API has not been used in project 822617393173",
+      },
+    });
+    const review = findAction(actions, "REPLY_REVIEW");
+    expect(review.available).toBe(false);
+    expect(review.reason).toMatch(/Google has not yet approved this project/i);
+    // No "Connect..." — the user can't fix this themselves; we're
+    // waiting on Google.
+    expect(review.requiresConfig).toBe(false);
+  });
+
+  // Successful account/location APIs (modern v1 surface) do not
+  // imply that reviews.list is reachable — that lives on the
+  // legacy mybusiness.googleapis.com which requires its own
+  // allowlisting. The resolver MUST NOT infer review readiness
+  // from connection-only state.
+  it("a fully-configured GBP connection does not imply review readiness if marker is set", () => {
+    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const withMarker = getAvailableReplyActions(conv, {
+      gbpConnection: {
+        status: "CONNECTED",
+        externalAccountId: "accounts/100/locations/A1",
+        scopes: ["https://www.googleapis.com/auth/business.manage"],
+        lastError: "REVIEW_API_ACCESS_DENIED: x",
+      },
+    });
+    expect(findAction(withMarker, "REPLY_REVIEW").available).toBe(false);
+
+    const withoutMarker = getAvailableReplyActions(conv, {
+      gbpConnection: {
+        status: "CONNECTED",
+        externalAccountId: "accounts/100/locations/A1",
+        scopes: ["https://www.googleapis.com/auth/business.manage"],
+        lastError: null,
+      },
+    });
+    expect(findAction(withoutMarker, "REPLY_REVIEW").available).toBe(true);
+  });
+
   it("YouTube gets REPLY_PUBLIC_COMMENT but no DM or review", () => {
     const conv = makeConversation({ provider: "YOUTUBE", email: null, phone: null });
     const actions = getAvailableReplyActions(conv);

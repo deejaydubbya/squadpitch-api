@@ -23,6 +23,10 @@
 import { env } from "../../config/env.js";
 import { emailCapabilityFor } from "./inbox.outbound.email.service.js";
 import { capabilityFor as providerMatrixFor } from "./providerCapabilities.js";
+import {
+  isAccessDeniedMarker,
+  ACCESS_DENIED_RESOLVER_REASON,
+} from "./gbpReviewAccessMarker.js";
 
 // Per-provider capability map. Drives which actions are
 // theoretically possible for a given Conversation.provider — does
@@ -199,7 +203,19 @@ export function getAvailableReplyActions(conversation, extras = {}) {
           gbp.externalAccountId.includes("/locations/");
         const hasScope = Array.isArray(gbp.scopes) &&
           gbp.scopes.includes("https://www.googleapis.com/auth/business.manage");
-        if (!hasLocation) {
+        // The poller or a prior reply attempt may have learned
+        // that Google hasn't allowlisted this project for the
+        // legacy reviews API. The marker takes precedence over
+        // location/scope — we don't want to mark REPLY_REVIEW
+        // available if Google will reject it anyway.
+        if (isAccessDeniedMarker(gbp.lastError)) {
+          available = false;
+          reason = ACCESS_DENIED_RESOLVER_REASON;
+          // Already-granted scope doesn't make this requiresConfig —
+          // there's nothing to configure on our side; we're waiting
+          // on Google.
+          requiresConfig = false;
+        } else if (!hasLocation) {
           available = false;
           reason = "Pick a Google Business Profile location to reply to reviews.";
           requiresConfig = true;
