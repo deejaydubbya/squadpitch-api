@@ -136,9 +136,16 @@ export async function exchangeCode({ code }) {
       ? tokenBody.scope.split(/\s+/).filter(Boolean)
       : GBP_SCOPES;
 
-  // 2. List accounts. This call doubles as a sanity check that
-  //    the granted token actually has business.manage. If it 403s,
-  //    bail with a clear error before persisting anything.
+  // 2. List accounts — best-effort. We use the result to seed
+  //    externalAccountId + displayName so the connection card
+  //    shows something meaningful before the user opens the
+  //    picker. But this call is gated by the same Business
+  //    Profile API approval that gates reviews, so on an
+  //    unapproved project it will fail with 429 RESOURCE_EXHAUSTED.
+  //    We do NOT want that to kill OAuth — the user has already
+  //    granted consent and we owe them a working connection
+  //    record. The picker will hit the same gate later (and
+  //    short-circuit cleanly via the access-denied marker).
   let accountId = null;
   let accountName = null;
   try {
@@ -156,18 +163,35 @@ export async function exchangeCode({ code }) {
           ? first.accountName
           : (typeof first.displayName === "string" ? first.displayName : null);
     } else if (!accountsRes.ok) {
-      throw gbpError(
-        accountsBody?.error?.message ?? `GBP accounts.list failed with ${accountsRes.status}`,
-        accountsBody,
-        accountsRes.status,
-      );
+      // Specific case: project not approved → RESOURCE_EXHAUSTED.
+      // Log + tolerate so OAuth still completes; the picker will
+      // surface the access-pending state.
+      const status = accountsRes.status;
+      const message = accountsBody?.error?.message ?? "";
+      const isQuotaGate =
+        status === 429 ||
+        /RESOURCE_EXHAUSTED|requests per minute|quota/i.test(message);
+      if (isQuotaGate) {
+        console.warn(
+          "[gbp.oauth] accounts.list quota-gated (non-fatal — OAuth completes without account name):",
+          { status, message },
+        );
+      } else {
+        // Real provider rejection (e.g. token misconfigured) —
+        // surface so the user knows OAuth didn't fully succeed.
+        throw gbpError(
+          message || `GBP accounts.list failed with ${status}`,
+          accountsBody,
+          status,
+        );
+      }
     }
     // accountsRes.ok with zero accounts → still OK; we just have no
     // pickable accounts. The picker UI will show an empty state.
   } catch (err) {
     // Network or parse-only failures shouldn't kill OAuth — the
-    // user can re-fetch the accounts list later. But a real 403
-    // (re-thrown above) should bubble.
+    // user can re-fetch the accounts list later. Re-throw real
+    // provider rejections (those carry GBP_OAUTH_FAILED).
     if (err?.code === "GBP_OAUTH_FAILED") throw err;
     console.warn("[gbp.oauth] accounts.list errored (non-fatal):", err?.message);
   }

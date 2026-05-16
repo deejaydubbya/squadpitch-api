@@ -140,6 +140,37 @@ describe("exchangeCode", () => {
       status: 403,
     });
   });
+
+  // Quota-gate tolerance — unapproved projects can't call
+  // mybusinessaccountmanagement at all (0 RPM allowance). OAuth
+  // must still succeed so the user gets a usable connection
+  // record; the picker handles the access-pending state.
+  it("tolerates 429 RESOURCE_EXHAUSTED on accounts.list — returns tokens with null account info", async () => {
+    fetchMock.mockImplementationOnce(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: "AT-3",
+        refresh_token: "RT-3",
+        expires_in: 3600,
+      }),
+    }));
+    fetchMock.mockImplementationOnce(async () => ({
+      ok: false,
+      status: 429,
+      json: async () => ({
+        error: {
+          message:
+            "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute' of service 'mybusinessaccountmanagement.googleapis.com'",
+        },
+      }),
+    }));
+    const bundle = await oauth.exchangeCode({ code: "ok-quota" });
+    expect(bundle.accessToken).toBe("AT-3");
+    expect(bundle.refreshToken).toBe("RT-3");
+    expect(bundle.externalAccountId).toBeNull();
+    expect(bundle.displayName).toBeNull();
+  });
 });
 
 describe("refreshAccessToken", () => {

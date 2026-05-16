@@ -20,6 +20,40 @@ import {
   listAccounts,
   listLocationsForAccount,
 } from "./oauth/googleBusinessProfile.oauth.js";
+import {
+  isReviewApiAccessDenied,
+  buildAccessDeniedMarker,
+  isAccessDeniedMarker,
+} from "../inbox/gbpReviewAccessMarker.js";
+
+// In-process cache for the picker's location list. Google's v1
+// quotas are tiny by default (often 1 RPM) and re-opening the
+// picker without caching burns through them instantly. 5-minute
+// TTL is long enough to absorb normal user behavior (open, close,
+// re-open to glance) without going stale enough to matter — a
+// new location added in Google Business Profile during a 5-min
+// window is rare, and saveSelectedLocation invalidates the cache
+// on success.
+const LOCATION_CACHE_TTL_MS = 5 * 60_000;
+const locationCache = new Map(); // connectionId -> { at: Date, locations: [] }
+
+function readCache(connectionId) {
+  const entry = locationCache.get(connectionId);
+  if (!entry) return null;
+  if (Date.now() - entry.at > LOCATION_CACHE_TTL_MS) {
+    locationCache.delete(connectionId);
+    return null;
+  }
+  return entry.locations;
+}
+
+function writeCache(connectionId, locations) {
+  locationCache.set(connectionId, { at: Date.now(), locations });
+}
+
+function invalidateCache(connectionId) {
+  locationCache.delete(connectionId);
+}
 
 class GbpLocationsError extends Error {
   constructor(message, { status, code, body } = {}) {
@@ -42,6 +76,7 @@ async function loadConnection(connectionId) {
       status: true,
       externalAccountId: true,
       displayName: true,
+      lastError: true,
     },
   });
   if (!conn) {
@@ -67,19 +102,65 @@ async function loadConnection(connectionId) {
 
 /**
  * Fetch every location across every GBP account the token can see.
- * Returns a flat array suitable for a picker UI.
- *   [{ name, title, address, accountName, accountId }, ...]
+ * Returns a structured response so the picker can distinguish
+ * "Google is happily returning your locations" from "Google's
+ * quota gate is blocking us — show the access-pending state."
  *
- * `name` is the canonical resource string Google expects
- * everywhere ("accounts/{a}/locations/{l}") — that's what gets
- * stamped onto externalAccountId on selection.
+ *   { status: 'ok',            locations: [...]              }
+ *   { status: 'access_denied', locations: [],  providerMessage }
+ *   { status: 'empty',         locations: []                  }
+ *
+ * `name` on each location is the canonical resource string
+ * ("accounts/{a}/locations/{l}") — that's what gets stamped onto
+ * externalAccountId on selection.
  */
 export async function listLocations({ connectionId }) {
   const conn = await loadConnection(connectionId);
-  const token = decryptToken(conn.accessToken);
 
-  const accounts = await listAccounts({ accessToken: token });
-  if (accounts.length === 0) return [];
+  // Short-circuit when we already know the project isn't
+  // approved. Saves a guaranteed-to-fail Google call (and
+  // another quota hit on what's typically a 0 RPM allowance).
+  // The /check-review-access probe clears the marker once
+  // Google approves, so the picker will start fetching again
+  // automatically after that.
+  if (isAccessDeniedMarker(conn.lastError)) {
+    return {
+      status: "access_denied",
+      locations: [],
+      providerMessage: conn.lastError,
+    };
+  }
+
+  // Cache hit — re-opening the picker within 5 min just replays
+  // the prior fetch instead of burning quota.
+  const cached = readCache(conn.id);
+  if (cached) {
+    return { status: cached.length === 0 ? "empty" : "ok", locations: cached };
+  }
+
+  const token = decryptToken(conn.accessToken);
+  let accounts;
+  try {
+    accounts = await listAccounts({ accessToken: token });
+  } catch (err) {
+    // The v1 mybusinessaccountmanagement.googleapis.com surface
+    // expresses "this project isn't approved" as 429 RESOURCE_EXHAUSTED.
+    // Mark the connection so the resolver + Settings tile + future
+    // picker opens all see the same access-pending state.
+    if (isReviewApiAccessDenied(err)) {
+      await persistAccessDeniedMarker(conn, err);
+      return {
+        status: "access_denied",
+        locations: [],
+        providerMessage: err?.message ?? null,
+      };
+    }
+    throw err;
+  }
+  if (accounts.length === 0) {
+    writeCache(conn.id, []);
+    return { status: "empty", locations: [] };
+  }
 
   const result = [];
   for (const acc of accounts) {
@@ -97,6 +178,15 @@ export async function listLocations({ connectionId }) {
         accountName: acc.name,
       });
     } catch (err) {
+      // Same gate, different sub-API.
+      if (isReviewApiAccessDenied(err)) {
+        await persistAccessDeniedMarker(conn, err);
+        return {
+          status: "access_denied",
+          locations: [],
+          providerMessage: err?.message ?? null,
+        };
+      }
       console.warn(
         `[gbp.locations] listLocationsForAccount failed for ${acc.name}:`,
         err?.message,
@@ -121,7 +211,19 @@ export async function listLocations({ connectionId }) {
       });
     }
   }
-  return result;
+  writeCache(conn.id, result);
+  return { status: result.length === 0 ? "empty" : "ok", locations: result };
+}
+
+// Mark the connection as access-denied so future picker opens
+// short-circuit. Best-effort write (catch + ignore failures so a
+// transient DB hiccup doesn't break the picker response).
+async function persistAccessDeniedMarker(conn, err) {
+  const marker = buildAccessDeniedMarker(err?.message);
+  if (conn.lastError === marker) return;
+  await prisma.channelConnection
+    .update({ where: { id: conn.id }, data: { lastError: marker } })
+    .catch(() => {});
 }
 
 /**
@@ -160,7 +262,7 @@ export async function saveSelectedLocation({ connectionId, locationName, locatio
       : trimmedTitle
     : accountName;
 
-  return prisma.channelConnection.update({
+  const updated = await prisma.channelConnection.update({
     where: { id: conn.id },
     data: {
       externalAccountId: locationName,
@@ -175,6 +277,10 @@ export async function saveSelectedLocation({ connectionId, locationName, locatio
       status: true,
     },
   });
+  // Stale cache entry — the picker's next open should re-fetch
+  // so a brand-new location added in GBP between calls shows up.
+  invalidateCache(conn.id);
+  return updated;
 }
 
 function formatAddress(storefrontAddress) {

@@ -35,24 +35,44 @@ export const ACCESS_DENIED_SETTINGS_BANNER =
 
 /**
  * True when a probe response (poller or reply send) looks like
- * Google saying "this project isn't allowlisted for the reviews
- * API." Matches both the gcloud-style PERMISSION_DENIED string
- * and the HTTP 403 status — Google returns both shapes depending
- * on the call site.
+ * Google saying "this project isn't allowlisted for the Business
+ * Profile APIs yet." There are THREE different error shapes for
+ * the same underlying gate, depending on which API surface you
+ * hit:
+ *
+ *   1. Legacy reviews (mybusiness.googleapis.com v4):
+ *      403 + "Permission denied" / "API has not been used"
+ *   2. gcloud services enable mybusiness.googleapis.com:
+ *      AUTH_PERMISSION_DENIED reason string
+ *   3. v1 APIs (mybusinessaccountmanagement / mybusinessbusinessinformation):
+ *      429 RESOURCE_EXHAUSTED + "Requests per minute exceeded"
+ *      (sounds like a rate limit — but unapproveded projects have
+ *      effectively a 0 RPM quota, so this error persists no matter
+ *      how long you wait)
+ *
+ * All three resolve via the same Business Profile API approval +
+ * quota-increase form, so we treat them as one marker state.
  */
 export function isReviewApiAccessDenied(err) {
   if (!err) return false;
   const status = err.status ?? err.statusCode ?? null;
   const message = String(err.message ?? err.gbpError?.error?.message ?? "");
-  // 403 alone isn't enough — could be a scope problem on a single
-  // location. Pair with the explicit access-denied phrasing
-  // Google uses on legacy GMB endpoints.
+  // (1) — 403 alone isn't enough; could be a scope problem on a
+  // single location. Pair with explicit access-denied phrasing.
   if (status === 403 && /permission denied|not been used|disabled/i.test(message)) {
     return true;
   }
-  // The serviceusage error from `gcloud services enable` uses a
-  // slightly different shape — we don't see that one in the
-  // outbound path, but cover it for tests.
+  // (3) — v1 API quota-zero state. 429 RESOURCE_EXHAUSTED with
+  // "Requests per minute" phrasing. Persists regardless of timing
+  // because unapproveded projects have RPM quota = 0.
+  if (
+    (status === 429 || /RESOURCE_EXHAUSTED/i.test(message)) &&
+    /requests per minute|RESOURCE_EXHAUSTED|quota/i.test(message)
+  ) {
+    return true;
+  }
+  // (2) — serviceusage error from `gcloud services enable`. Same
+  // gate, different surface.
   if (/AUTH_PERMISSION_DENIED|PERMISSION_DENIED/i.test(message)) {
     return true;
   }

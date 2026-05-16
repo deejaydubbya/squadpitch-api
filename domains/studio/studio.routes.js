@@ -4066,15 +4066,25 @@ studioRouter.get(
         );
       }
       const { listLocations } = await import("./gbpLocations.service.js");
-      const locations = await listLocations({ connectionId: conn.id });
-      if (locations.length === 0) {
+      const result = await listLocations({ connectionId: conn.id });
+      if (result.status === "access_denied") {
         return res.json({
+          status: "access_denied",
+          locations: [],
+          message:
+            "Awaiting Google Business Profile API access approval. Listing locations requires Google allowlisting.",
+          providerMessage: result.providerMessage ?? null,
+        });
+      }
+      if (result.status === "empty") {
+        return res.json({
+          status: "empty",
           locations: [],
           message:
             "No Google Business Profile locations were found for this account. Add a location in Google Business Profile, then refresh.",
         });
       }
-      res.json({ locations });
+      res.json({ status: "ok", locations: result.locations });
     } catch (err) {
       if (err?.code && err?.status) {
         return sendError(res, err.status, err.code, err.message);

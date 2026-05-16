@@ -28,6 +28,9 @@ const oauthMock = {
 vi.mock("../domains/studio/oauth/googleBusinessProfile.oauth.js", () => oauthMock);
 
 const svc = await import("../domains/studio/gbpLocations.service.js");
+const { buildAccessDeniedMarker } = await import(
+  "../domains/inbox/gbpReviewAccessMarker.js"
+);
 
 const CLIENT_ID = "client-1";
 const CONN_ID = "conn-gbp-1";
@@ -36,15 +39,18 @@ function setupConnection({
   status = "CONNECTED",
   externalAccountId = "accounts/100",
   displayName = "Acme Co",
+  lastError = null,
+  connId = CONN_ID,
 } = {}) {
   prismaMock.channelConnection.findUnique.mockResolvedValueOnce({
-    id: CONN_ID,
+    id: connId,
     clientId: CLIENT_ID,
     channel: "GOOGLE_BUSINESS_PROFILE",
     accessToken: "enc-token",
     status,
     externalAccountId,
     displayName,
+    lastError,
   });
 }
 
@@ -62,8 +68,8 @@ beforeEach(() => {
 // ── listLocations ──────────────────────────────────────────────────────
 
 describe("listLocations", () => {
-  it("returns a flat array with canonical accounts/.../locations/... names", async () => {
-    setupConnection();
+  it("returns ok status + canonical accounts/.../locations/... names", async () => {
+    setupConnection({ connId: "conn-list-1" });
     oauthMock.listAccounts.mockResolvedValue([
       { name: "accounts/100", accountName: "Acme Co" },
       { name: "accounts/200", accountName: "Beta LLC" },
@@ -83,16 +89,17 @@ describe("listLocations", () => {
       return [];
     });
 
-    const locations = await svc.listLocations({ connectionId: CONN_ID });
-    expect(locations).toHaveLength(3);
-    expect(locations[0]).toMatchObject({
+    const result = await svc.listLocations({ connectionId: "conn-list-1" });
+    expect(result.status).toBe("ok");
+    expect(result.locations).toHaveLength(3);
+    expect(result.locations[0]).toMatchObject({
       name: "accounts/100/locations/A1",
       title: "Acme Downtown",
       accountId: "accounts/100",
       accountName: "Acme Co",
     });
-    expect(locations[0].address).toMatch(/1 Main/);
-    expect(locations[2].name).toBe("accounts/200/locations/B1");
+    expect(result.locations[0].address).toMatch(/1 Main/);
+    expect(result.locations[2].name).toBe("accounts/200/locations/B1");
   });
 
   it("throws NOT_FOUND when the connection doesn't exist", async () => {
@@ -112,10 +119,106 @@ describe("listLocations", () => {
       status: "CONNECTED",
       externalAccountId: "user",
       displayName: "user",
+      lastError: null,
     });
     await expect(svc.listLocations({ connectionId: CONN_ID })).rejects.toMatchObject({
       code: "WRONG_CHANNEL",
     });
+  });
+
+  // Quota-gate hardening. The v1 GBP APIs return a 429
+  // RESOURCE_EXHAUSTED for unapproved projects on every call —
+  // we treat that as the same access-denied state as the v4
+  // PERMISSION_DENIED on reviews. One marker, one UI state,
+  // one Google approval clears all of them.
+  it("short-circuits without calling Google when lastError is already the access-denied marker", async () => {
+    setupConnection({
+      connId: "conn-cached-marker",
+      lastError: buildAccessDeniedMarker("prior denial"),
+    });
+    const result = await svc.listLocations({ connectionId: "conn-cached-marker" });
+    expect(result.status).toBe("access_denied");
+    expect(result.locations).toEqual([]);
+    expect(oauthMock.listAccounts).not.toHaveBeenCalled();
+    expect(oauthMock.listLocationsForAccount).not.toHaveBeenCalled();
+  });
+
+  it("persists the marker + returns access_denied when listAccounts throws 429 RESOURCE_EXHAUSTED", async () => {
+    setupConnection({ connId: "conn-429" });
+    const quotaErr = Object.assign(
+      new Error(
+        "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute' of service 'mybusinessaccountmanagement.googleapis.com'",
+      ),
+      { status: 429 },
+    );
+    oauthMock.listAccounts.mockRejectedValueOnce(quotaErr);
+
+    const result = await svc.listLocations({ connectionId: "conn-429" });
+    expect(result.status).toBe("access_denied");
+    expect(result.locations).toEqual([]);
+    expect(result.providerMessage).toMatch(/Quota exceeded/);
+    expect(prismaMock.channelConnection.update).toHaveBeenCalledTimes(1);
+    const written = prismaMock.channelConnection.update.mock.calls[0][0].data
+      .lastError;
+    expect(written).toMatch(/^REVIEW_API_ACCESS_DENIED:/);
+  });
+
+  it("persists the marker when listLocationsForAccount throws RESOURCE_EXHAUSTED (sub-API gate)", async () => {
+    setupConnection({ connId: "conn-sub-429" });
+    oauthMock.listAccounts.mockResolvedValueOnce([
+      { name: "accounts/100", accountName: "Acme Co" },
+    ]);
+    const quotaErr = Object.assign(
+      new Error("RESOURCE_EXHAUSTED: quota exceeded for mybusinessbusinessinformation"),
+      { status: 429 },
+    );
+    oauthMock.listLocationsForAccount.mockRejectedValueOnce(quotaErr);
+
+    const result = await svc.listLocations({ connectionId: "conn-sub-429" });
+    expect(result.status).toBe("access_denied");
+    expect(result.locations).toEqual([]);
+    expect(prismaMock.channelConnection.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-throws non-quota errors from listAccounts (transient 5xx must bubble, not poison the marker)", async () => {
+    setupConnection({ connId: "conn-5xx" });
+    const transientErr = Object.assign(new Error("Service unavailable"), {
+      status: 503,
+    });
+    oauthMock.listAccounts.mockRejectedValueOnce(transientErr);
+
+    await expect(
+      svc.listLocations({ connectionId: "conn-5xx" }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(prismaMock.channelConnection.update).not.toHaveBeenCalled();
+  });
+
+  // Cache behavior. The picker is the most quota-burning surface
+  // because users tab back and forth between pages — re-opening
+  // it should replay the prior fetch, not call Google again.
+  it("caches a successful fetch and replays it on the next call within the TTL", async () => {
+    setupConnection({ connId: "conn-cache" });
+    oauthMock.listAccounts.mockResolvedValueOnce([
+      { name: "accounts/100", accountName: "Acme Co" },
+    ]);
+    oauthMock.listLocationsForAccount.mockResolvedValueOnce([
+      { name: "accounts/100/locations/A1", title: "Acme Downtown" },
+    ]);
+
+    const first = await svc.listLocations({ connectionId: "conn-cache" });
+    expect(first.status).toBe("ok");
+    expect(first.locations).toHaveLength(1);
+
+    // Second call — connection still findable (re-prime findUnique
+    // because the service loads the connection on every call), but
+    // listAccounts is NOT mocked again so the cache hit is what
+    // keeps it from throwing.
+    setupConnection({ connId: "conn-cache" });
+    const second = await svc.listLocations({ connectionId: "conn-cache" });
+    expect(second.status).toBe("ok");
+    expect(second.locations).toHaveLength(1);
+    expect(oauthMock.listAccounts).toHaveBeenCalledTimes(1);
+    expect(oauthMock.listLocationsForAccount).toHaveBeenCalledTimes(1);
   });
 });
 

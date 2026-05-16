@@ -60,6 +60,32 @@ describe("isReviewApiAccessDenied", () => {
     expect(isReviewApiAccessDenied(err)).toBe(false);
   });
 
+  // v1 GBP APIs (account management + business information)
+  // express the same approval gate as a 429 "Requests per
+  // minute" error — unapproved projects have a 0 RPM allowance,
+  // so EVERY call returns the per-minute error regardless of
+  // pacing. Treat it as the same access-denied state so the
+  // picker, Settings tile, and composer all show consistent
+  // copy and one approval clears all three.
+  it("matches 429 RESOURCE_EXHAUSTED on v1 APIs (project not approved)", () => {
+    const err = new Error(
+      "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute' of service 'mybusinessaccountmanagement.googleapis.com' for consumer 'project_number:822617393173'.",
+    );
+    err.status = 429;
+    expect(isReviewApiAccessDenied(err)).toBe(true);
+  });
+
+  it("matches a bare RESOURCE_EXHAUSTED reason string regardless of HTTP status", () => {
+    const err = new Error("RESOURCE_EXHAUSTED: quota exceeded");
+    expect(isReviewApiAccessDenied(err)).toBe(true);
+  });
+
+  it("does NOT match a generic 429 without quota phrasing (e.g. user throttle)", () => {
+    const err = new Error("Too many requests");
+    err.status = 429;
+    expect(isReviewApiAccessDenied(err)).toBe(false);
+  });
+
   it("handles null / undefined safely", () => {
     expect(isReviewApiAccessDenied(null)).toBe(false);
     expect(isReviewApiAccessDenied(undefined)).toBe(false);
