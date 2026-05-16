@@ -130,19 +130,43 @@ export const facebookAdapter = {
       preferredField: postResult?.post_id ? "post_id" : "id",
     });
 
-    // Resolve permalink (non-fatal)
+    // Resolve permalink + visibility state (non-fatal). We pull
+    // is_published / is_hidden / privacy alongside permalink_url
+    // so the diagnostic log surfaces Facebook's verdict on the
+    // post — distinguishes "our URL is wrong" (preferredField
+    // log) from "Facebook is gating the post" (privacy/published
+    // state below). The latter usually means the Meta App needs
+    // Page Public Content Access from App Review.
     let externalPostUrl = null;
+    let publishedVerdict = null;
     try {
       const metaRes = await fetch(
-        `${GRAPH_BASE}/${externalPostId}?fields=permalink_url&access_token=${encodeURIComponent(token)}`
+        `${GRAPH_BASE}/${externalPostId}?fields=permalink_url,is_published,is_hidden,privacy&access_token=${encodeURIComponent(token)}`
       );
       const metaBody = await metaRes.json().catch(() => ({}));
-      if (metaRes.ok && metaBody?.permalink_url) {
-        externalPostUrl = metaBody.permalink_url;
+      if (metaRes.ok) {
+        if (metaBody?.permalink_url) externalPostUrl = metaBody.permalink_url;
+        publishedVerdict = {
+          is_published: metaBody?.is_published ?? null,
+          is_hidden: metaBody?.is_hidden ?? null,
+          privacy_value: metaBody?.privacy?.value ?? null,
+        };
+      } else {
+        publishedVerdict = {
+          probe_failed: true,
+          status: metaRes.status,
+          error: metaBody?.error?.message ?? null,
+        };
       }
-    } catch {
-      // non-fatal
+    } catch (err) {
+      publishedVerdict = { probe_failed: true, error: String(err?.message ?? err) };
     }
+    console.log("[facebook.adapter] post visibility verdict:", {
+      pageId,
+      externalPostId,
+      externalPostUrl,
+      ...publishedVerdict,
+    });
 
     return { externalPostId, externalPostUrl };
   },
