@@ -164,6 +164,23 @@ describe("providerCapabilities — scope hygiene", () => {
       "https://www.googleapis.com/auth/business.manage",
     );
   });
+
+  // spinstr411 — channel registry surfacing only; no real send/poll
+  // behavior should be flagged on until prompt 11.
+  it("Google Business Profile has all send/ingest flags FALSE (setup-only state)", () => {
+    const gbp = providerCapabilities.GOOGLE_BUSINESS;
+    expect(gbp.ingestReviews).toBe(false);
+    expect(gbp.sendReview).toBe(false);
+    expect(gbp.ingestComments).toBe(false);
+    expect(gbp.ingestDMs).toBe(false);
+    expect(gbp.sendPublicReply).toBe(false);
+    expect(gbp.sendDM).toBe(false);
+    // Polling stays true — that's a property of the channel, not a
+    // toggle. Reviews polling will be wired in the follow-up prompt.
+    expect(gbp.polling).toBe(true);
+    expect(gbp.webhooks).toBe(false);
+    expect(gbp.appReviewStatus).toBe("not-submitted");
+  });
 });
 
 describe("providerCapabilities — helpers", () => {

@@ -40,6 +40,12 @@ enum Channel {
   YOUTUBE
   PINTEREST
   THREADS
+  // Google Business Profile — Inbox-only surface (no publishing).
+  // Connected via OAuth + business.manage scope (Google sensitive-
+  // scope verification required). Reviews ingestion + reply land
+  // in a follow-up prompt; for now this exists so the channel
+  // appears in Settings → Channels as a "Coming soon" tile.
+  GOOGLE_BUSINESS_PROFILE
 }
 
 enum MediaMode {
