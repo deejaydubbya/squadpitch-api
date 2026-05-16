@@ -95,7 +95,20 @@ app.use((req, _res, next) => {
 });
 
 // body parsing
-app.use(express.json({ limit: "1mb" }));
+//
+// Skip the global JSON parser for the Meta Inbox webhook — that
+// route needs raw request bytes to verify the X-Hub-Signature-256
+// HMAC, which it captures via its own per-route express.json
+// instance with a `verify` hook. If we let the global parser
+// consume the stream first, the per-route hook gets an empty
+// rawBody and signature verification fails. Mirrors the
+// /listing-campaign/upload-images carve-out above.
+app.use((req, _res, next) => {
+  if (req.url.startsWith("/api/v1/webhooks/meta/inbox")) {
+    return next();
+  }
+  express.json({ limit: "1mb" })(req, _res, next);
+});
 
 // Raw body parsing for asset uploads (images + videos up to 500 MB)
 app.use(
