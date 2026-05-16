@@ -26,12 +26,12 @@ export const ACCESS_REQUEST_FORM_URL =
 // User-facing copy shown in the resolver's REPLY_REVIEW reason +
 // the Settings tile banner. Kept here so the wording stays
 // consistent across surfaces — change it once, change it
-// everywhere.
+// everywhere. Phrasing per spinstr415.
 export const ACCESS_DENIED_RESOLVER_REASON =
-  "Google has not yet approved this project for the Business Profile reviews API. Reviews can't be polled or replied to until approval lands.";
+  "Awaiting Google Business Profile API access approval. Account and location connection works, but review sync requires Google allowlisting.";
 
 export const ACCESS_DENIED_SETTINGS_BANNER =
-  "Google hasn't granted this project access to the Business Profile reviews API yet. OAuth and location selection work, but review polling and public replies are blocked until approval lands.";
+  "Awaiting Google Business Profile API access approval. Account and location connection works, but review sync requires Google allowlisting.";
 
 /**
  * True when a probe response (poller or reply send) looks like

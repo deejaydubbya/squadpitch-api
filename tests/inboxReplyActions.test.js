@@ -286,7 +286,11 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     });
     const review = findAction(actions, "REPLY_REVIEW");
     expect(review.available).toBe(false);
-    expect(review.reason).toMatch(/Google has not yet approved this project/i);
+    // Copy aligned with spinstr415 — same phrasing across resolver
+    // reason, Settings banner, and outbound reply pre-flight error.
+    expect(review.reason).toMatch(
+      /Awaiting Google Business Profile API access approval/i,
+    );
     // No "Connect..." — the user can't fix this themselves; we're
     // waiting on Google.
     expect(review.requiresConfig).toBe(false);

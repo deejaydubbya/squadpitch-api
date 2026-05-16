@@ -4084,6 +4084,32 @@ studioRouter.get(
   },
 );
 
+// Manual probe — workspace owner clicks "Check review API access"
+// in the Settings tile after submitting Google's allowlist
+// request. Runs reviews.list with pageSize=1 against the
+// connection's selected location; on success clears any stale
+// REVIEW_API_ACCESS_DENIED marker (so the resolver flips
+// REPLY_REVIEW back to available), on denial persists the
+// marker. No fake ingestion — this calls the real Google API.
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/GOOGLE_BUSINESS_PROFILE/check-review-access`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { checkGbpReviewAccess } = await import(
+        "./gbpReviewAccessCheck.service.js"
+      );
+      const result = await checkGbpReviewAccess({ clientId: req.params.id });
+      res.json(result);
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
 studioRouter.post(
   `${BASE}/workspaces/:id/connections/GOOGLE_BUSINESS_PROFILE/locations/select`,
   requireClientOwner,
