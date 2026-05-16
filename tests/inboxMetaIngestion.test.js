@@ -61,12 +61,12 @@ function createPrismaMock(opts = {}) {
   return {
     state: { conversations, contacts, messages, channelConnections },
     channelConnection: {
-      findFirst: vi.fn(async ({ where }) => {
+      findMany: vi.fn(async ({ where }) => {
         const key = `${where.channel}:${where.externalAccountId}`;
         const row = channelConnections.get(key);
-        if (!row) return null;
-        if (where.status && row.status !== where.status) return null;
-        return row;
+        if (!row) return [];
+        if (where.status && row.status !== where.status) return [];
+        return [row];
       }),
     },
     message: {

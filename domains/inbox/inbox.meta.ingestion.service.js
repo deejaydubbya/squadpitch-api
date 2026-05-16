@@ -341,14 +341,38 @@ async function ingestComment({
 
 async function findConnectionForAccount({ channel, externalAccountId }) {
   if (!externalAccountId) return null;
-  return prisma.channelConnection.findFirst({
+  // Same FB page / IG account can be wired to multiple workspaces
+  // (e.g. an old/orphaned workspace still has a connection row
+  // alongside a freshly-OAuth'd active workspace). When that
+  // happens, route the event to whichever connection was used
+  // most recently — that's almost certainly the one the user
+  // expects events to flow into. `updatedAt` is bumped on every
+  // OAuth, every token refresh, and every publish (via
+  // lastValidatedAt write), so it's a good "recently active"
+  // signal. Logs a warning when multiple rows are found so the
+  // ambiguity is visible to ops.
+  const candidates = await prisma.channelConnection.findMany({
     where: {
       channel,
       externalAccountId,
       status: "CONNECTED",
     },
-    select: { id: true, clientId: true, channel: true, scopes: true },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, clientId: true, channel: true, scopes: true, updatedAt: true },
   });
+  if (candidates.length === 0) return null;
+  if (candidates.length > 1) {
+    console.warn("[meta.inbox] multiple workspaces have this account connected:", {
+      channel,
+      externalAccountId,
+      candidates: candidates.map((c) => ({
+        clientId: c.clientId,
+        updatedAt: c.updatedAt,
+      })),
+      picked: candidates[0].clientId,
+    });
+  }
+  return candidates[0];
 }
 
 // Look up a Contact by the Meta user id stored in
