@@ -205,7 +205,10 @@ export async function sendThreadsReply(
     // We pass a synthetic shape since the helper accepts the connection
     // row's encrypted-token shape directly.
     const fresh = await ensureValidAccessToken(conn);
-    accessToken = fresh?.accessToken ?? decryptToken(conn.accessToken);
+    // ensureValidAccessToken returns the connection row unchanged
+    // when the token is fresh, so the accessToken is still
+    // ciphertext — always decrypt before handing to Graph.
+    accessToken = decryptToken(fresh?.accessToken ?? conn.accessToken);
   } catch (refreshErr) {
     await prisma.message.update({
       where: { id: messageRow.id },

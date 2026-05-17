@@ -26,8 +26,8 @@
 //   - access token decrypt or refresh fails.
 
 import { prisma } from "../../prisma.js";
+import { decryptToken } from "../../lib/tokenCrypto.js";
 import { ingestThreadsReply } from "./inbox.threads.ingestion.service.js";
-import { getConnectionForAdapter } from "../studio/connection.service.js";
 import { ensureValidAccessToken } from "../studio/tokenRefreshService.js";
 import { THREADS_GRAPH_BASE } from "../studio/threads.constants.js";
 
@@ -145,6 +145,9 @@ export async function pollThreadsRepliesForConnection(connection) {
 
   // Refresh near-expiry tokens via the shared service so Threads'
   // 60-day token roll-over is handled in exactly one place.
+  // ensureValidAccessToken returns the connection row unchanged
+  // when the token isn't near expiry, so accessToken on that row
+  // is still ciphertext — we always run it through decryptToken.
   let fresh;
   try {
     fresh = await ensureValidAccessToken(connection);
@@ -156,7 +159,17 @@ export async function pollThreadsRepliesForConnection(connection) {
     });
     return summary;
   }
-  const accessToken = fresh?.accessToken;
+  let accessToken;
+  try {
+    accessToken = decryptToken(fresh?.accessToken ?? connection.accessToken);
+  } catch (decryptErr) {
+    summary.error = "TOKEN_DECRYPT_FAILED";
+    console.warn("[threads.poller] token decrypt failed:", {
+      connectionId: connection.id,
+      err: decryptErr?.message,
+    });
+    return summary;
+  }
   if (!accessToken) {
     summary.error = "NO_ACCESS_TOKEN";
     return summary;
