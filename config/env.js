@@ -149,8 +149,25 @@ export const env = {
   // publish dispatch reject with THREADS_DISABLED. Lets us hold the
   // channel back while App Review is pending without rolling back
   // code. Defaults true in production once configured.
+  // THREADS_INTEGRATION_ENABLED is an accepted alias for
+  // THREADS_ENABLED — the prompt that introduced the Threads
+  // Inbox integration used the longer name, and we honor either
+  // so docs and Fly secrets commands work as written without a
+  // rename migration.
   THREADS_ENABLED:
-    String(process.env.THREADS_ENABLED ?? "true").toLowerCase() === "true",
+    String(
+      process.env.THREADS_ENABLED ?? process.env.THREADS_INTEGRATION_ENABLED ?? "true",
+    ).toLowerCase() === "true",
+  // Per-feature gate for the SquadInbox reply-publish path.
+  // Default OFF — Threads' "post a reply" requires creating a
+  // child thread with replied_to=<id>, which we have NOT wired
+  // through the publish pipeline yet. The resolver checks this
+  // flag before flipping REPLY_PUBLIC_COMMENT to available, so
+  // a workspace with a fully-connected Threads account still
+  // sees a truthful "Threads reply publishing is not enabled"
+  // until we ship the send path AND flip this flag.
+  THREADS_REPLY_ENABLED:
+    String(process.env.THREADS_REPLY_ENABLED ?? "false").toLowerCase() === "true",
 
   // Notifications
   POSTMARK_SERVER_TOKEN: process.env.POSTMARK_SERVER_TOKEN,

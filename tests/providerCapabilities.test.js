@@ -177,6 +177,18 @@ describe("providerCapabilities — scope hygiene", () => {
     expect(li.appReviewStatus).toBe("submitted");
   });
 
+  // spinstr417 — Threads reply ingestion is wired (read-only).
+  // sendPublicReply stays false at the matrix layer because the
+  // resolver gates it dynamically on env.THREADS_REPLY_ENABLED +
+  // per-connection scopes; the matrix can't reflect those.
+  it("Threads ingestion is ON; sendPublicReply stays false (resolver-gated dynamically)", () => {
+    const th = providerCapabilities.THREADS;
+    expect(th.ingestComments).toBe(true);
+    expect(th.sendPublicReply).toBe(false);
+    expect(th.currentScopes).toContain("threads_manage_replies");
+    expect(th.currentScopes).toContain("threads_read_replies");
+  });
+
   it("Google Business Profile is gated on business.manage", () => {
     const gbp = providerCapabilities.GOOGLE_BUSINESS;
     expect(gbp.missingScopes).toContain(

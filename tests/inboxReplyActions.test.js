@@ -427,6 +427,81 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     expect(action.requiresConfig).toBe(false);
   });
 
+  // spinstr417 — Threads. Ingestion is wired (read-only).
+  // REPLY_PUBLIC_COMMENT is gated on env.THREADS_REPLY_ENABLED
+  // AND the connection's stored scopes carrying
+  // threads_manage_replies. With the env flag off the resolver
+  // pins "publishing is not enabled" regardless of connection.
+  it("Threads REPLY_PUBLIC_COMMENT is pinned to 'not enabled' when env flag is off", () => {
+    envOverrides.THREADS_REPLY_ENABLED = false;
+    const conv = makeConversation({
+      provider: "THREADS",
+      email: null,
+      phone: null,
+      messages: [{ party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null }],
+    });
+    const action = findAction(
+      getAvailableReplyActions(conv, {
+        threadsConnection: {
+          status: "CONNECTED",
+          externalAccountId: "100",
+          scopes: ["threads_basic", "threads_manage_replies"],
+        },
+      }),
+      "REPLY_PUBLIC_COMMENT",
+    );
+    expect(action.available).toBe(false);
+    expect(action.reason).toMatch(/Threads reply publishing is not enabled/i);
+  });
+
+  it("Threads REPLY_PUBLIC_COMMENT asks to reconnect when env on but scope missing", () => {
+    envOverrides.THREADS_REPLY_ENABLED = true;
+    const conv = makeConversation({
+      provider: "THREADS",
+      email: null,
+      phone: null,
+      messages: [{ party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null }],
+    });
+    const action = findAction(
+      getAvailableReplyActions(conv, {
+        threadsConnection: {
+          status: "CONNECTED",
+          externalAccountId: "100",
+          scopes: ["threads_basic"],
+        },
+      }),
+      "REPLY_PUBLIC_COMMENT",
+    );
+    expect(action.available).toBe(false);
+    expect(action.reason).toMatch(/threads_manage_replies/);
+  });
+
+  it("Threads REPLY_PUBLIC_COMMENT flips to available with env on + scope granted", () => {
+    envOverrides.THREADS_REPLY_ENABLED = true;
+    const conv = makeConversation({
+      provider: "THREADS",
+      email: null,
+      phone: null,
+      messages: [{ party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null }],
+    });
+    const action = findAction(
+      getAvailableReplyActions(conv, {
+        threadsConnection: {
+          status: "CONNECTED",
+          externalAccountId: "100",
+          scopes: [
+            "threads_basic",
+            "threads_read_replies",
+            "threads_manage_replies",
+          ],
+        },
+      }),
+      "REPLY_PUBLIC_COMMENT",
+    );
+    expect(action.available).toBe(true);
+    expect(action.reason).toBeNull();
+  });
+
   it("LinkedIn REPLY_DM is pinned to the same Community Management API pending reason", () => {
     const conv = makeConversation({
       provider: "LINKEDIN",

@@ -4254,6 +4254,86 @@ studioRouter.post(
   },
 );
 
+// ── Threads reply sync ────────────────────────────────────────────────
+//
+// Trigger the Threads reply poller for a single workspace right
+// now (rather than waiting for the next 15-minute tick). Mirrors
+// the YouTube sync-comments endpoint. Enqueues a one-shot
+// poll-connection BullMQ job; the work happens asynchronously.
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/THREADS/sync-replies`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "THREADS",
+          },
+        },
+        select: { id: true, status: true, externalAccountId: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No Threads connection on this workspace.",
+        );
+      }
+      if (conn.status !== "CONNECTED") {
+        return sendError(
+          res,
+          400,
+          "CONNECTION_NOT_ACTIVE",
+          "Threads connection is not active. Reconnect to sync replies.",
+        );
+      }
+      if (!conn.externalAccountId) {
+        return sendError(
+          res,
+          400,
+          "NO_USER_ID",
+          "Threads connection is missing a user id; reconnect to refresh it.",
+        );
+      }
+      const { enqueueThreadsReplyPollForConnection } = await import(
+        "../../workers/threadsReplyPollerWorker.js"
+      );
+      try {
+        await enqueueThreadsReplyPollForConnection(conn.id);
+      } catch (err) {
+        // Same Redis-down fallback as the YouTube sync endpoint —
+        // dev environments without Redis still get a working
+        // sync via inline execution.
+        if (err?.code === "QUEUE_UNAVAILABLE") {
+          const { pollThreadsRepliesForConnection } = await import(
+            "../inbox/threadsReplyPoller.service.js"
+          );
+          const full = await prisma.channelConnection.findUnique({
+            where: { id: conn.id },
+          });
+          if (full) await pollThreadsRepliesForConnection(full);
+        } else {
+          throw err;
+        }
+      }
+      return res.status(202).json({
+        status: "queued",
+        connectionId: conn.id,
+        message:
+          "Threads reply sync queued. Replies will appear in the Inbox shortly.",
+      });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
 // ── Tech Stack ────────────────────────────────────────────────────────
 
 /**

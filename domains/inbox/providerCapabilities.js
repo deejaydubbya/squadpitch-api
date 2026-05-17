@@ -254,13 +254,24 @@ export const providerCapabilities = {
 
   THREADS: {
     label: "Threads",
-    ingestComments: false,   // possible: threads_read_replies + webhook
+    // Reply ingestion is now wired (read-only) — poller calls
+    // /{post-id}/conversation per published Threads post on a
+    // 15-min interval and ingests each reply idempotently as
+    // provider=THREADS, sourceType=SOCIAL_COMMENT, visibility=PUBLIC.
+    ingestComments: true,
     ingestDMs: false,        // Threads has no DM API
     ingestReviews: false,
-    sendPublicReply: false,  // possible: threads_manage_replies
+    // Reply publishing is intentionally gated. threads_manage_replies
+    // is granted, but Threads' "reply to a thread" is implemented as
+    // a new child thread with replied_to=<id> on the publish
+    // pipeline — we haven't wired that path through the Inbox send
+    // service yet. The resolver pins
+    // "Threads reply publishing is not enabled" until THREADS_REPLY_ENABLED
+    // env flips AND the send path lands.
+    sendPublicReply: false,
     sendDM: false,
     sendReview: false,
-    webhooks: true,          // Threads Webhook supports replies
+    webhooks: false,         // Threads Webhook doesn't cover reply ingestion
     polling: true,
     currentScopes: [
       "threads_basic",
@@ -269,10 +280,10 @@ export const providerCapabilities = {
       "threads_manage_replies",
       "threads_read_replies",
     ],
-    missingScopes: [],       // scopes are right; webhook subscription + adapter remain
-    appReviewStatus: "live", // already in production for publishing
+    missingScopes: [],
+    appReviewStatus: "live",
     notes:
-      "Reply scopes already in place. Subscribe webhook for THREADS_REPLIES event + add ingestion adapter + reply send. Likely the cheapest social Inbox channel to wire next after GBP reviews.",
+      "Read-only Inbox ingestion live (spinstr417). Poller: domains/inbox/threadsReplyPoller.service.js. Ingestion: inbox.threads.ingestion.service.js. Reply send remains gated until the create-thread-with-replied_to publish path is wired AND THREADS_REPLY_ENABLED flips on.",
   },
 
   PINTEREST: {

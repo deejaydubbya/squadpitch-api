@@ -186,6 +186,35 @@ export function getAvailableReplyActions(conversation, extras = {}) {
       // either; same blocker.
       reason = LINKEDIN_COMMUNITY_API_PENDING_REASON;
       requiresConfig = false;
+    } else if (provider === "THREADS") {
+      // Threads ingestion is wired (read-only). Reply publishing
+      // is gated behind:
+      //   1. env.THREADS_REPLY_ENABLED — operational kill switch
+      //   2. The connection carries threads_manage_replies in its
+      //      granted scopes — Meta omits scopes the user declined,
+      //      so we can't assume it from THREADS_SCOPES.
+      const th = extras?.threadsConnection ?? null;
+      if (!env.THREADS_REPLY_ENABLED) {
+        reason = "Threads reply publishing is not enabled.";
+        requiresConfig = false;
+      } else if (!th) {
+        reason = "Connect Threads to reply to comments.";
+        requiresConfig = true;
+      } else if (th.status !== "CONNECTED") {
+        reason = "Threads connection needs to be reconnected.";
+        requiresConfig = true;
+      } else if (
+        !Array.isArray(th.scopes) ||
+        !th.scopes.includes("threads_manage_replies")
+      ) {
+        reason =
+          "Reconnect Threads and grant the reply permission (threads_manage_replies).";
+        requiresConfig = true;
+      } else {
+        available = true;
+        reason = null;
+        requiresConfig = false;
+      }
     } else if (provider === "YOUTUBE") {
       // YouTube comment reply is wireable today IF the connection
       // granted the youtube.force-ssl scope. Test users on the

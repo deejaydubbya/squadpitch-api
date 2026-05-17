@@ -267,6 +267,7 @@ let refreshInsightsWorker;
 let personaTrainingWorker;
 let gbpReviewPollerWorker;
 let youtubeCommentPollerWorker;
+let threadsReplyPollerWorker;
 
 let server;
 (async () => {
@@ -348,6 +349,11 @@ let server;
         "./workers/youtubeCommentPollerWorker.js"
       );
       youtubeCommentPollerWorker = startYouTubeCommentPollerWorker();
+
+      const { startThreadsReplyPollerWorker } = await import(
+        "./workers/threadsReplyPollerWorker.js"
+      );
+      threadsReplyPollerWorker = startThreadsReplyPollerWorker();
     }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
@@ -368,6 +374,7 @@ const shutdown = (sig) => async () => {
   try { if (personaTrainingWorker) await personaTrainingWorker.close(); } catch {}
   try { if (gbpReviewPollerWorker) await gbpReviewPollerWorker.close(); } catch {}
   try { if (youtubeCommentPollerWorker) await youtubeCommentPollerWorker.close(); } catch {}
+  try { if (threadsReplyPollerWorker) await threadsReplyPollerWorker.close(); } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
   } catch {}

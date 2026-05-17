@@ -144,9 +144,29 @@ export async function getConversation(clientId, conversationId) {
           },
         })
       : null;
+  // Same pre-load for Threads — the resolver needs scopes +
+  // status to decide whether REPLY_PUBLIC_COMMENT is wireable
+  // (gated on env.THREADS_REPLY_ENABLED + threads_manage_replies
+  // in the granted scopes).
+  const threadsConnection =
+    row.provider === "THREADS"
+      ? await prisma.channelConnection.findUnique({
+          where: {
+            clientId_channel: { clientId, channel: "THREADS" },
+          },
+          select: {
+            id: true,
+            status: true,
+            externalAccountId: true,
+            scopes: true,
+            lastError: true,
+          },
+        })
+      : null;
   const availableReplyActions = getAvailableReplyActions(row, {
     gbpConnection,
     youtubeConnection,
+    threadsConnection,
   });
 
   // Stamp workspaceReadAt as a side effect of viewing — flips
@@ -565,6 +585,11 @@ function buildAiReplySystemPrompt({ ctx, tone, channel = "email", sourceContext,
       lines.push(
         `You draft a short public reply on behalf of ${brandName} to a comment on one of its YouTube videos. The reply appears directly under the comment on the video's public comments section — visible to every viewer of the video.`,
         `Tone: ${tone}. Keep it to 1 sentence (rarely 2). YouTube comments are casual and short; don't sound like a press release. Never include the commenter's email, phone, address, or any private detail. If a question needs a longer answer, invite them to reach out off-platform without sharing your own private contact info in public.`,
+      );
+    } else if (provider === "THREADS") {
+      lines.push(
+        `You draft a short public reply on behalf of ${brandName} to a reply on one of its Threads posts. The reply appears in the public conversation under the post — visible to every viewer.`,
+        `Tone: ${tone}. Threads is conversational and concise; 1 sentence is ideal, 2 max. No corporate voice, no hashtags. Never include the replier's email, phone, address, or any private detail. If a question needs a longer answer, invite them to DM (the lead initiates — we don't share contact info publicly).`,
       );
     } else {
       lines.push(

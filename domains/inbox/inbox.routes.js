@@ -27,6 +27,7 @@ import * as service from "./inbox.service.js";
 import { sendInboxEmail } from "./inbox.outbound.email.service.js";
 import { sendGbpReviewReply } from "./inbox.outbound.gbp.service.js";
 import { sendYouTubeCommentReply } from "./inbox.outbound.youtube.service.js";
+import { sendThreadsReply } from "./inbox.outbound.threads.service.js";
 
 export const inboxRouter = express.Router();
 
@@ -259,7 +260,22 @@ inboxRouter.post(
       if (!conv) {
         return sendError(res, 404, "CONVERSATION_NOT_FOUND", "Conversation not found");
       }
-      if (conv.provider !== "YOUTUBE") {
+      let message;
+      if (conv.provider === "YOUTUBE") {
+        message = await sendYouTubeCommentReply(
+          req.params.id,
+          req.params.conversationId,
+          getAuth0Sub(req),
+          { body, idempotencyKey },
+        );
+      } else if (conv.provider === "THREADS") {
+        message = await sendThreadsReply(
+          req.params.id,
+          req.params.conversationId,
+          getAuth0Sub(req),
+          { body, idempotencyKey },
+        );
+      } else {
         return sendError(
           res,
           412,
@@ -267,13 +283,6 @@ inboxRouter.post(
           `Public comment reply isn't connected yet for ${conv.provider}.`,
         );
       }
-
-      const message = await sendYouTubeCommentReply(
-        req.params.id,
-        req.params.conversationId,
-        getAuth0Sub(req),
-        { body, idempotencyKey },
-      );
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
