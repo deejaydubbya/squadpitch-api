@@ -332,6 +332,20 @@ async function upsertContact({ clientId, email, phone, submission }) {
 //   if (open) { ...append a Message; return open... }
 // The rest of the service stays the same.
 async function createConversationIfMissing({ clientId, contact, submission }) {
+  // Inbox-level duplicate-content spam rule (spinstr15). If the
+  // same contact submits an identical payload within the dup
+  // window, route the new conversation to the Spam tab instead
+  // of OPEN. We don't delete or skip — preserving the row is
+  // important for the audit trail (and the workspace user can
+  // unmark if it's a false positive). Idempotency on
+  // sourceFormSubmissionId already prevents EXACT duplicates;
+  // this catches the bot pattern where the same contact replays
+  // the same dataJson with a fresh submission id.
+  const isLikelySpam = await detectDuplicateContentSpam({
+    clientId,
+    contactId: contact.id,
+    submission,
+  });
   return prisma.conversation.create({
     data: {
       clientId,
@@ -341,6 +355,7 @@ async function createConversationIfMissing({ clientId, contact, submission }) {
       pageId: submission.pageId,
       campaignId: submission.campaignId,
       status: "OPEN",
+      spam: isLikelySpam,
       // The form submission IS the first message — stamp the
       // timestamps off submission.createdAt so the inbox sort
       // is consistent with the underlying event.
@@ -348,6 +363,66 @@ async function createConversationIfMissing({ clientId, contact, submission }) {
       lastMessageFrom: "CONTACT",
     },
   });
+}
+
+// Returns true when this contact has submitted the same dataJson
+// (by stable hash) within the dup window. Bounded lookback (10
+// minutes, last 5 conversations) so a real burst of legit forms
+// from the same person on the same day doesn't get false-flagged.
+const DUP_WINDOW_MS = 10 * 60_000;
+async function detectDuplicateContentSpam({ clientId, contactId, submission }) {
+  try {
+    const payload = submission?.dataJson ?? null;
+    if (!payload || typeof payload !== "object") return false;
+    const since = new Date(Date.now() - DUP_WINDOW_MS);
+    const recent = await prisma.conversation.findMany({
+      where: {
+        clientId,
+        contactId,
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: {
+        id: true,
+        messages: {
+          where: { party: "CONTACT", channel: "FORM_SUBMISSION" },
+          orderBy: { createdAt: "asc" },
+          take: 1,
+          select: { payloadJson: true },
+        },
+      },
+    });
+    const currentHash = stableHashJson(payload);
+    for (const c of recent) {
+      const m0 = c.messages?.[0];
+      if (!m0?.payloadJson) continue;
+      if (stableHashJson(m0.payloadJson) === currentHash) {
+        return true;
+      }
+    }
+    return false;
+  } catch (err) {
+    // Best-effort guard — a heuristic failure must never block
+    // legitimate intake. Default to NOT spam on error.
+    console.warn("[inbox.intake] duplicate-content check failed:", err?.message);
+    return false;
+  }
+}
+
+// Stable JSON serialization for hashing — sorts object keys so
+// {a:1,b:2} and {b:2,a:1} hash to the same value.
+function stableHashJson(value) {
+  return stableStringify(value);
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
 }
 
 // ── Initial message creation ───────────────────────────────────────────

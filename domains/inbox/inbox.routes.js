@@ -46,6 +46,24 @@ function handleServiceError(res, err, next) {
   return next(err);
 }
 
+// Centralised outbound-send audit helper. Used by every send-*
+// route so the audit table carries a consistent action vocabulary
+// across providers. Body content is deliberately omitted — only
+// the channel + outcome + ids are recorded (the Message row
+// already preserves the body if anyone needs to inspect later).
+async function auditOutboundAttempt(req, kind, conversationId, outcome, extras = {}) {
+  await writeAudit(req, {
+    action: `inbox.outbound.${kind}.${outcome}`,
+    resourceType: "Conversation",
+    resourceId: conversationId,
+    metadata: {
+      clientId: req.params.id,
+      channel: kind,
+      ...extras,
+    },
+  });
+}
+
 // ── Conversations ──────────────────────────────────────────────────────
 
 inboxRouter.get(
@@ -89,11 +107,53 @@ inboxRouter.patch(
     try {
       const parsed = UpdateConversationSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
+      // Capture the before-state so we can audit the delta. Only
+      // workspace-meaningful fields are tracked; lastMessage*/read*
+      // flip on every read and would flood the audit table.
+      const { prisma } = await import("../../prisma.js");
+      const before = await prisma.conversation.findUnique({
+        where: { id: req.params.conversationId },
+        select: { status: true, spam: true, assignedUserId: true },
+      });
       const conversation = await service.updateConversation(
         req.params.id,
         req.params.conversationId,
         parsed.data,
       );
+      // spinstr15 — audit the delta. Separate action names for the
+      // two states the prompt cares about so a downstream report
+      // can count spam flips vs status flips without parsing
+      // metadata. Skip when nothing actually changed.
+      const after = conversation;
+      const delta = {};
+      if (before && before.status !== after.status) {
+        delta.status = { from: before.status, to: after.status };
+      }
+      if (before && before.spam !== after.spam) {
+        delta.spam = { from: before.spam, to: after.spam };
+      }
+      if (before && before.assignedUserId !== after.assignedUserId) {
+        delta.assignedUserId = {
+          from: before.assignedUserId,
+          to: after.assignedUserId,
+        };
+      }
+      if (Object.keys(delta).length > 0) {
+        const action =
+          "spam" in delta
+            ? delta.spam.to
+              ? "inbox.conversation.spam.marked"
+              : "inbox.conversation.spam.unmarked"
+            : "status" in delta
+              ? `inbox.conversation.status.${delta.status.to.toLowerCase()}`
+              : "inbox.conversation.updated";
+        await writeAudit(req, {
+          action,
+          resourceType: "Conversation",
+          resourceId: conversation.id,
+          metadata: { clientId: req.params.id, delta },
+        });
+      }
       res.json({ conversation });
     } catch (err) {
       handleServiceError(res, err, next);
@@ -168,12 +228,44 @@ inboxRouter.post(
         typeof req.headers["idempotency-key"] === "string" && req.headers["idempotency-key"].trim()
           ? req.headers["idempotency-key"].trim().slice(0, 128)
           : null;
-      const message = await sendInboxEmail(
-        req.params.id,
-        req.params.conversationId,
-        getAuth0Sub(req),
-        { ...parsed.data, idempotencyKey },
-      );
+      await auditOutboundAttempt(req, "email", req.params.conversationId, "attempt", {
+        fromSuggestionId: parsed.data.fromSuggestionId ?? null,
+      });
+      let message;
+      try {
+        message = await sendInboxEmail(
+          req.params.id,
+          req.params.conversationId,
+          getAuth0Sub(req),
+          { ...parsed.data, idempotencyKey },
+        );
+      } catch (sendErr) {
+        await auditOutboundAttempt(req, "email", req.params.conversationId, "failure", {
+          errorCode: sendErr?.code ?? null,
+          errorStatus: sendErr?.status ?? null,
+        });
+        throw sendErr;
+      }
+      await auditOutboundAttempt(req, "email", req.params.conversationId, "success", {
+        messageId: message.id,
+        providerMessageId: message.providerMessageId ?? null,
+      });
+      // spinstr15 — when the user fired the send with an AI
+      // suggestion attached, audit the acceptance explicitly so
+      // analytics can tell "drafted" from "drafted + sent".
+      if (parsed.data.fromSuggestionId) {
+        await writeAudit(req, {
+          action: "inbox.ai.suggestion.accepted",
+          resourceType: "AIReplySuggestion",
+          resourceId: parsed.data.fromSuggestionId,
+          metadata: {
+            clientId: req.params.id,
+            conversationId: req.params.conversationId,
+            channel: "email",
+            messageId: message.id,
+          },
+        });
+      }
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
@@ -205,12 +297,26 @@ inboxRouter.post(
         req.headers["idempotency-key"].trim()
           ? req.headers["idempotency-key"].trim().slice(0, 128)
           : null;
-      const message = await sendInboxSms(
-        req.params.id,
-        req.params.conversationId,
-        getAuth0Sub(req),
-        { body, idempotencyKey },
-      );
+      await auditOutboundAttempt(req, "sms", req.params.conversationId, "attempt");
+      let message;
+      try {
+        message = await sendInboxSms(
+          req.params.id,
+          req.params.conversationId,
+          getAuth0Sub(req),
+          { body, idempotencyKey },
+        );
+      } catch (sendErr) {
+        await auditOutboundAttempt(req, "sms", req.params.conversationId, "failure", {
+          errorCode: sendErr?.code ?? null,
+          errorStatus: sendErr?.status ?? null,
+        });
+        throw sendErr;
+      }
+      await auditOutboundAttempt(req, "sms", req.params.conversationId, "success", {
+        messageId: message.id,
+        providerMessageId: message.providerMessageId ?? null,
+      });
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
@@ -306,12 +412,25 @@ inboxRouter.post(
         req.headers["idempotency-key"].trim()
           ? req.headers["idempotency-key"].trim().slice(0, 128)
           : null;
-      const message = await sendGbpReviewReply(
-        req.params.id,
-        req.params.conversationId,
-        getAuth0Sub(req),
-        { body, idempotencyKey },
-      );
+      await auditOutboundAttempt(req, "review_reply", req.params.conversationId, "attempt");
+      let message;
+      try {
+        message = await sendGbpReviewReply(
+          req.params.id,
+          req.params.conversationId,
+          getAuth0Sub(req),
+          { body, idempotencyKey },
+        );
+      } catch (sendErr) {
+        await auditOutboundAttempt(req, "review_reply", req.params.conversationId, "failure", {
+          errorCode: sendErr?.code ?? null,
+          errorStatus: sendErr?.status ?? null,
+        });
+        throw sendErr;
+      }
+      await auditOutboundAttempt(req, "review_reply", req.params.conversationId, "success", {
+        messageId: message.id,
+      });
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
@@ -361,29 +480,51 @@ inboxRouter.post(
       if (!conv) {
         return sendError(res, 404, "CONVERSATION_NOT_FOUND", "Conversation not found");
       }
+      const auditKind =
+        conv.provider === "YOUTUBE"
+          ? "youtube_comment"
+          : conv.provider === "THREADS"
+            ? "threads_reply"
+            : "comment_reply";
+      await auditOutboundAttempt(req, auditKind, req.params.conversationId, "attempt");
       let message;
-      if (conv.provider === "YOUTUBE") {
-        message = await sendYouTubeCommentReply(
-          req.params.id,
-          req.params.conversationId,
-          getAuth0Sub(req),
-          { body, idempotencyKey },
-        );
-      } else if (conv.provider === "THREADS") {
-        message = await sendThreadsReply(
-          req.params.id,
-          req.params.conversationId,
-          getAuth0Sub(req),
-          { body, idempotencyKey },
-        );
-      } else {
-        return sendError(
-          res,
-          412,
-          "PROVIDER_NOT_AVAILABLE",
-          `Public comment reply isn't connected yet for ${conv.provider}.`,
-        );
+      try {
+        if (conv.provider === "YOUTUBE") {
+          message = await sendYouTubeCommentReply(
+            req.params.id,
+            req.params.conversationId,
+            getAuth0Sub(req),
+            { body, idempotencyKey },
+          );
+        } else if (conv.provider === "THREADS") {
+          message = await sendThreadsReply(
+            req.params.id,
+            req.params.conversationId,
+            getAuth0Sub(req),
+            { body, idempotencyKey },
+          );
+        } else {
+          await auditOutboundAttempt(req, auditKind, req.params.conversationId, "failure", {
+            errorCode: "PROVIDER_NOT_AVAILABLE",
+            errorStatus: 412,
+          });
+          return sendError(
+            res,
+            412,
+            "PROVIDER_NOT_AVAILABLE",
+            `Public comment reply isn't connected yet for ${conv.provider}.`,
+          );
+        }
+      } catch (sendErr) {
+        await auditOutboundAttempt(req, auditKind, req.params.conversationId, "failure", {
+          errorCode: sendErr?.code ?? null,
+          errorStatus: sendErr?.status ?? null,
+        });
+        throw sendErr;
       }
+      await auditOutboundAttempt(req, auditKind, req.params.conversationId, "success", {
+        messageId: message.id,
+      });
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
@@ -505,6 +646,135 @@ inboxRouter.patch(
         });
       }
       res.json({ contact });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Contact data export (GDPR-style portable JSON) ─────────────────────
+//
+// Returns everything we know about a single contact in this
+// workspace, as a single JSON document. The workspace owner can
+// hand this to the lead on request. Tenant-scoped via
+// requireClientOwner; the lookup additionally filters by clientId
+// so a stray contactId from another workspace 404s.
+//
+// What's included: Contact row + every Conversation + every
+// Message (body included) + every Note. What's NOT: AI
+// suggestions (those are workspace-internal artifacts about the
+// contact, not authored by them).
+inboxRouter.get(
+  `${BASE}/workspaces/:id/inbox/contacts/:contactId/export`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { prisma } = await import("../../prisma.js");
+      const contact = await prisma.contact.findFirst({
+        where: { id: req.params.contactId, clientId: req.params.id },
+        include: {
+          conversations: {
+            include: {
+              messages: {
+                orderBy: { createdAt: "asc" },
+                select: {
+                  id: true,
+                  party: true,
+                  channel: true,
+                  body: true,
+                  visibility: true,
+                  externalMessageId: true,
+                  deliveryStatus: true,
+                  createdAt: true,
+                },
+              },
+              notes: {
+                orderBy: { createdAt: "asc" },
+                select: { id: true, body: true, createdAt: true },
+              },
+            },
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      });
+      if (!contact) {
+        return sendError(res, 404, "CONTACT_NOT_FOUND", "Contact not found");
+      }
+      await writeAudit(req, {
+        action: "inbox.contact.exported",
+        resourceType: "Contact",
+        resourceId: contact.id,
+        metadata: {
+          clientId: req.params.id,
+          conversationCount: contact.conversations.length,
+        },
+      });
+      const filename = `squadpitch-contact-${contact.id}.json`;
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.json({
+        exportedAt: new Date().toISOString(),
+        workspaceId: req.params.id,
+        contact,
+      });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Contact purge (manual, audit-logged) ───────────────────────────────
+//
+// Hard-deletes a contact and everything keyed off them: all of
+// their Conversations (cascade pulls Messages + Notes +
+// AIReplySuggestions). Tenant-scoped + audit-logged before the
+// delete fires so an after-the-fact dispute has the actor + the
+// deleted shape captured. There is no auto-purge worker; this
+// route is the only path that destroys inbox PII.
+inboxRouter.delete(
+  `${BASE}/workspaces/:id/inbox/contacts/:contactId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { prisma } = await import("../../prisma.js");
+      const contact = await prisma.contact.findFirst({
+        where: { id: req.params.contactId, clientId: req.params.id },
+        select: {
+          id: true,
+          email: true,
+          phone: true,
+          name: true,
+          _count: { select: { conversations: true } },
+        },
+      });
+      if (!contact) {
+        return sendError(res, 404, "CONTACT_NOT_FOUND", "Contact not found");
+      }
+      // Audit BEFORE the delete so an audit-table failure doesn't
+      // hide a destructive op. Body excluded from the metadata —
+      // the contact's identity (email/phone/name) is enough for
+      // the audit trail; the full payload was already captured
+      // when the export endpoint ran, if the workspace user
+      // chose to run it first.
+      await writeAudit(req, {
+        action: "inbox.contact.deleted",
+        resourceType: "Contact",
+        resourceId: contact.id,
+        metadata: {
+          clientId: req.params.id,
+          conversationCount: contact._count.conversations,
+          deletedIdentity: {
+            email: contact.email,
+            phone: contact.phone,
+            name: contact.name,
+          },
+        },
+      });
+      // onDelete: Cascade on Conversation.contactId AND on
+      // Message.conversationId means a single Contact.delete
+      // takes everything with it.
+      await prisma.contact.delete({ where: { id: contact.id } });
+      res.status(204).send();
     } catch (err) {
       handleServiceError(res, err, next);
     }

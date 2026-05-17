@@ -186,6 +186,12 @@ model Client {
   logoUrl     String?
   industryKey String?
   timezone    String       @default("UTC")
+  // Inbox contact retention window. Documentary only today —
+  // there is NO auto-purge worker; manual purge requires an
+  // explicit DELETE call. Stored so a future retention worker
+  // (and the workspace settings UI) can show the policy without
+  // a schema change.
+  contactRetentionDays Int?
   createdBy   String
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
