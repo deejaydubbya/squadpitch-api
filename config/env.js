@@ -158,16 +158,24 @@ export const env = {
     String(
       process.env.THREADS_ENABLED ?? process.env.THREADS_INTEGRATION_ENABLED ?? "true",
     ).toLowerCase() === "true",
-  // Per-feature gate for the SquadInbox reply-publish path.
-  // Default OFF — Threads' "post a reply" requires creating a
-  // child thread with replied_to=<id>, which we have NOT wired
-  // through the publish pipeline yet. The resolver checks this
-  // flag before flipping REPLY_PUBLIC_COMMENT to available, so
-  // a workspace with a fully-connected Threads account still
-  // sees a truthful "Threads reply publishing is not enabled"
-  // until we ship the send path AND flip this flag.
+  // Per-feature gate for the SquadInbox reply path. Default OFF
+  // so a fresh deploy doesn't accidentally start posting public
+  // replies on Threads. The resolver + outbound service both
+  // check this flag before any Threads write.
   THREADS_REPLY_ENABLED:
     String(process.env.THREADS_REPLY_ENABLED ?? "false").toLowerCase() === "true",
+  // Per-feature gate for the Threads publish adapter (organic
+  // content publishing from Squadpitch Studio). Default OFF
+  // until the workspace has explicitly opted in — flipping this
+  // false halts publishPost at the channel-dispatch level so
+  // even a scheduled Draft won't fire on the wrong workspace.
+  THREADS_PUBLISHING_ENABLED:
+    String(process.env.THREADS_PUBLISHING_ENABLED ?? "false").toLowerCase() === "true",
+  // Per-feature gate for any Threads insights fetcher. Default
+  // OFF. Reserved for the analytics sync worker once it's wired
+  // for Threads — Inbox functionality must NOT depend on this.
+  THREADS_INSIGHTS_ENABLED:
+    String(process.env.THREADS_INSIGHTS_ENABLED ?? "false").toLowerCase() === "true",
 
   // Notifications
   POSTMARK_SERVER_TOKEN: process.env.POSTMARK_SERVER_TOKEN,

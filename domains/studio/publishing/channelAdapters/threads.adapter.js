@@ -14,6 +14,7 @@
 //
 // Spec: https://developers.facebook.com/docs/threads/reference/publishing/
 
+import { env } from "../../../../config/env.js";
 import { THREADS_GRAPH_BASE } from "../../threads.constants.js";
 
 const THREADS_TEXT_MAX = 500;
@@ -142,6 +143,17 @@ export const threadsAdapter = {
   },
 
   async publishPost({ draft, connection, client }) {
+    // Operational kill switch (spinstr418). When THREADS_PUBLISHING_ENABLED
+    // is false, halt at the channel-dispatch level so a scheduled
+    // Draft can't fire on a workspace that hasn't opted into
+    // Threads publishing. THREADS_ENABLED gates OAuth/Inbox; this
+    // flag is specifically for organic publishing.
+    if (!env.THREADS_PUBLISHING_ENABLED) {
+      throw new ThreadsPublishError(
+        "Threads publishing is not enabled.",
+        { status: 412, code: "THREADS_PUBLISHING_DISABLED" },
+      );
+    }
     const { text, mediaUrl, mediaContainerType } = await this.validatePublishTarget({
       draft,
       client,
