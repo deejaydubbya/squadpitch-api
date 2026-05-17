@@ -930,9 +930,39 @@ function truncate(s, max) {
 }
 
 // ── Stats for dashboard widget ─────────────────────────────────────────
+//
+// Two tiers of metrics:
+//   1. Lifetime counts (unread / open / pending / closed / spam /
+//      total) — power the header pills.
+//   2. 30-day windowed analytics — power the analytics bar:
+//      bySource breakdown, message-type counts, AI usage, avg
+//      first-response time.
+//
+// All queries are tenant-scoped by clientId at the top filter.
+// We never select message bodies for aggregation — only counts +
+// timestamps + enum buckets. The 30-day window keeps the work
+// bounded so a workspace with 10k conversations doesn't burn the
+// connection pool.
+const ANALYTICS_WINDOW_DAYS = 30;
 
 export async function getInboxStats(clientId) {
-  const [unreadCount, openCount, spamCount, totalCount] = await Promise.all([
+  const windowStart = new Date(
+    Date.now() - ANALYTICS_WINDOW_DAYS * 24 * 60 * 60_000,
+  );
+
+  const [
+    unreadCount,
+    openCount,
+    pendingCount,
+    closedCount,
+    spamCount,
+    totalCount,
+    bySourceRows,
+    aiSuggestionsGenerated,
+    aiSuggestionsUsed,
+    messageBuckets,
+    firstResponseRows,
+  ] = await Promise.all([
     prisma.conversation.count({
       where: {
         clientId,
@@ -947,6 +977,12 @@ export async function getInboxStats(clientId) {
     prisma.conversation.count({
       where: { clientId, status: "OPEN", spam: false },
     }),
+    prisma.conversation.count({
+      where: { clientId, status: "PENDING", spam: false },
+    }),
+    prisma.conversation.count({
+      where: { clientId, status: "CLOSED", spam: false },
+    }),
     // Spam bucket — independent of status so it stays accurate
     // even after a closed-then-marked-spam conversation.
     prisma.conversation.count({
@@ -957,8 +993,156 @@ export async function getInboxStats(clientId) {
     prisma.conversation.count({
       where: { clientId },
     }),
+    // Source attribution — group by sourceType for the last 30
+    // days. "Provider" is too granular for a header bar; the
+    // source enum already aligns with the categories the prompt
+    // asked for (FORM / EMAIL_REPLY / SOCIAL / SOCIAL_COMMENT /
+    // REVIEW / MANUAL).
+    prisma.conversation.groupBy({
+      by: ["sourceType"],
+      where: { clientId, createdAt: { gte: windowStart } },
+      _count: { _all: true },
+    }),
+    prisma.aIReplySuggestion.count({
+      where: {
+        conversation: { clientId },
+        createdAt: { gte: windowStart },
+      },
+    }),
+    prisma.aIReplySuggestion.count({
+      where: {
+        conversation: { clientId },
+        createdAt: { gte: windowStart },
+        acceptedAt: { not: null },
+      },
+    }),
+    // Outbound message buckets — emailSent / smsSent / loggedExternal
+    // / commentOrReviewReply. We group by (channel, deliveryStatus)
+    // and post-process.
+    prisma.message.groupBy({
+      by: ["channel", "deliveryStatus", "party"],
+      where: {
+        conversation: { clientId },
+        createdAt: { gte: windowStart },
+      },
+      _count: { _all: true },
+    }),
+    // Avg first-response time. For each conversation that has BOTH
+    // an inbound CONTACT message and at least one outbound
+    // WORKSPACE message within the window, compute (first outbound -
+    // first inbound) and average. Heavy queries are kept off the
+    // hot path by using a single raw query — see below.
+    fetchFirstResponseRows(clientId, windowStart),
   ]);
-  return { unreadCount, openCount, spamCount, totalCount };
+
+  // ── Post-process source breakdown ──
+  // Map prisma enum keys to the categories the dashboard surfaces.
+  // Conversations with sourceType=SOCIAL keep their bucket; we
+  // split SOCIAL_COMMENT and REVIEW separately because those are
+  // the high-signal Inbox surfaces.
+  const bySource = {
+    FORM: 0,
+    EMAIL_REPLY: 0,
+    SOCIAL: 0,
+    SOCIAL_COMMENT: 0,
+    REVIEW: 0,
+    MANUAL: 0,
+  };
+  for (const row of bySourceRows) {
+    const key = row.sourceType;
+    if (key in bySource) bySource[key] = row._count._all;
+  }
+
+  // ── Post-process message-type counts ──
+  // Counts what the workspace user actually did in the last 30
+  // days. Logged-external doesn't fire a provider call so it
+  // doesn't carry deliveryStatus=SENT — keyed on channel=MANUAL_LOG
+  // instead.
+  const messageCounts = {
+    emailSent: 0,
+    smsSent: 0,
+    socialReplySent: 0,
+    loggedExternal: 0,
+    internalNotes: 0, // filled below from the notes count
+  };
+  for (const b of messageBuckets) {
+    if (b.party !== "WORKSPACE") continue;
+    const n = b._count._all;
+    if (b.channel === "EMAIL" && b.deliveryStatus === "SENT") {
+      messageCounts.emailSent += n;
+    } else if (b.channel === "SMS" && b.deliveryStatus === "SENT") {
+      messageCounts.smsSent += n;
+    } else if (b.channel === "SOCIAL_DM" && b.deliveryStatus === "SENT") {
+      // Covers GBP review reply + YouTube comment reply + Threads
+      // reply — all of them write SOCIAL_DM as the closest enum.
+      messageCounts.socialReplySent += n;
+    } else if (b.channel === "MANUAL_LOG") {
+      messageCounts.loggedExternal += n;
+    }
+  }
+  messageCounts.internalNotes = await prisma.conversationNote.count({
+    where: {
+      conversation: { clientId },
+      createdAt: { gte: windowStart },
+    },
+  });
+
+  // ── Post-process avg first-response ──
+  // Average seconds between firstInbound and firstOutbound, only
+  // counting conversations that had BOTH within the window. Null
+  // when no qualifying conversations exist (the UI shows "—").
+  let avgFirstResponseSeconds = null;
+  if (firstResponseRows.length > 0) {
+    const total = firstResponseRows.reduce((sum, r) => sum + r.responseSec, 0);
+    avgFirstResponseSeconds = Math.round(total / firstResponseRows.length);
+  }
+
+  return {
+    unreadCount,
+    openCount,
+    pendingCount,
+    closedCount,
+    spamCount,
+    totalCount,
+    windowDays: ANALYTICS_WINDOW_DAYS,
+    bySource,
+    messageCounts,
+    aiSuggestionsGenerated,
+    aiSuggestionsUsed,
+    avgFirstResponseSeconds,
+    firstResponseSampleSize: firstResponseRows.length,
+  };
+}
+
+// Pull per-conversation first-inbound + first-outbound timestamps
+// for the analytics window. Raw query because Prisma's aggregate
+// doesn't expose per-row MIN-with-condition cleanly, and a
+// single-pass SQL is much faster than two queries + a JS merge.
+async function fetchFirstResponseRows(clientId, windowStart) {
+  // We compute MIN(createdAt) per party WITHIN each conversation,
+  // then keep only conversations that have both. responseSec is
+  // (firstOut - firstIn) clamped to >= 0 (defensive — an outbound
+  // landing before any inbound shouldn't happen but if it does we
+  // skip it rather than contribute a negative).
+  const rows = await prisma.$queryRaw`
+    SELECT
+      EXTRACT(EPOCH FROM (firstOut - firstIn))::int AS "responseSec"
+    FROM (
+      SELECT
+        m."conversationId",
+        MIN(m."createdAt") FILTER (WHERE m.party = 'CONTACT')   AS firstIn,
+        MIN(m."createdAt") FILTER (WHERE m.party = 'WORKSPACE') AS firstOut
+      FROM "messages" m
+      JOIN "conversations" c ON c.id = m."conversationId"
+      WHERE c."clientId" = ${clientId}
+        AND m."createdAt" >= ${windowStart}
+      GROUP BY m."conversationId"
+    ) sub
+    WHERE firstIn IS NOT NULL
+      AND firstOut IS NOT NULL
+      AND firstOut >= firstIn
+  `;
+  return rows.map((r) => ({ responseSec: Number(r.responseSec) }));
 }
 
 // ── Contact mutation (CRM-lite) ─────────────────────────────────────────

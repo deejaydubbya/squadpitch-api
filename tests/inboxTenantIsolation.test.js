@@ -167,24 +167,57 @@ function buildPrismaMock() {
           return true;
         }).length;
       }),
+      // spinstr14 — bySource breakdown for the analytics bar.
+      groupBy: vi.fn(async ({ where, by }) => {
+        const filtered = [...convs.values()].filter((c) => c.clientId === where.clientId);
+        const buckets = {};
+        for (const c of filtered) {
+          const key = c[by[0]];
+          buckets[key] = (buckets[key] ?? 0) + 1;
+        }
+        return Object.entries(buckets).map(([sourceType, n]) => ({
+          sourceType,
+          _count: { _all: n },
+        }));
+      }),
       fields: { lastMessageAt: "lastMessageAt" }, // prisma raw-field hack the service uses
     },
     sitePage: { findUnique: vi.fn(async () => null) },
     campaign: { findUnique: vi.fn(async () => null) },
     formSubmission: { findUnique: vi.fn(async () => null) },
     workspaceDataItem: { findUnique: vi.fn(async () => null) },
-    conversationNote: {
-      create: vi.fn(async ({ data }) => {
-        const row = { id: `note-${notes.length + 1}`, ...data, createdAt: new Date() };
-        notes.push(row);
-        return row;
-      }),
-    },
     message: {
       create: vi.fn(async ({ data }) => {
         const row = { id: `msg-new-${messages.length + 1}`, ...data, createdAt: data.createdAt ?? new Date() };
         messages.push(row);
         return row;
+      }),
+      // spinstr14 — messageCounts bucket aggregation. The service
+      // groups by (channel, deliveryStatus, party) within a 30-day
+      // window scoped to the client.
+      groupBy: vi.fn(async ({ where }) => {
+        const clientId = where?.conversation?.clientId;
+        const since = where?.createdAt?.gte ?? null;
+        const inWindow = messages.filter((m) => {
+          const conv = convs.get(m.conversationId);
+          if (!conv || conv.clientId !== clientId) return false;
+          if (since && new Date(m.createdAt) < since) return false;
+          return true;
+        });
+        const buckets = new Map();
+        for (const m of inWindow) {
+          const key = `${m.channel}|${m.deliveryStatus ?? "null"}|${m.party}`;
+          buckets.set(key, (buckets.get(key) ?? 0) + 1);
+        }
+        return [...buckets.entries()].map(([k, n]) => {
+          const [channel, deliveryStatus, party] = k.split("|");
+          return {
+            channel,
+            deliveryStatus: deliveryStatus === "null" ? null : deliveryStatus,
+            party,
+            _count: { _all: n },
+          };
+        });
       }),
     },
     aIReplySuggestion: {
@@ -194,7 +227,42 @@ function buildPrismaMock() {
         return row;
       }),
       updateMany: vi.fn(async () => ({ count: 0 })),
+      // spinstr14 — AI usage counts within the analytics window.
+      count: vi.fn(async ({ where }) => {
+        const clientId = where?.conversation?.clientId;
+        const since = where?.createdAt?.gte ?? null;
+        const acceptedOnly = where?.acceptedAt?.not === null ? true : false;
+        return suggestions.filter((s) => {
+          const conv = convs.get(s.conversationId);
+          if (!conv || conv.clientId !== clientId) return false;
+          if (since && new Date(s.createdAt) < since) return false;
+          if (acceptedOnly && !s.acceptedAt) return false;
+          return true;
+        }).length;
+      }),
     },
+    // spinstr14 — Note count + raw query for avg first-response.
+    // $queryRaw returns an empty array in the mock (no qualifying
+    // conversations); the service treats that as
+    // avgFirstResponseSeconds=null.
+    conversationNote: {
+      create: vi.fn(async ({ data }) => {
+        const row = { id: `note-${notes.length + 1}`, ...data, createdAt: new Date() };
+        notes.push(row);
+        return row;
+      }),
+      count: vi.fn(async ({ where }) => {
+        const clientId = where?.conversation?.clientId;
+        const since = where?.createdAt?.gte ?? null;
+        return notes.filter((n) => {
+          const conv = convs.get(n.conversationId);
+          if (!conv || conv.clientId !== clientId) return false;
+          if (since && new Date(n.createdAt) < since) return false;
+          return true;
+        }).length;
+      }),
+    },
+    $queryRaw: vi.fn(async () => []),
     _state: { convs, notes, messages, suggestions },
   };
 }
@@ -328,5 +396,53 @@ describe("inbox stats serializer contract", () => {
         totalCount: expect.any(Number),
       }),
     );
+  });
+
+  // spinstr14 — extended analytics. The dashboard widget reads
+  // every key in this list, so the shape contract pins them all.
+  // Empty workspaces yield zeros + nulls rather than missing keys,
+  // so the UI doesn't need to defensively coalesce.
+  it("returns the extended analytics shape (status buckets, source mix, AI usage, message counts, avg response)", async () => {
+    const stats = await service.getInboxStats(CLIENT_A);
+    expect(stats).toEqual(
+      expect.objectContaining({
+        unreadCount: expect.any(Number),
+        openCount: expect.any(Number),
+        pendingCount: expect.any(Number),
+        closedCount: expect.any(Number),
+        spamCount: expect.any(Number),
+        totalCount: expect.any(Number),
+        windowDays: expect.any(Number),
+        bySource: expect.objectContaining({
+          FORM: expect.any(Number),
+          EMAIL_REPLY: expect.any(Number),
+          SOCIAL: expect.any(Number),
+          SOCIAL_COMMENT: expect.any(Number),
+          REVIEW: expect.any(Number),
+          MANUAL: expect.any(Number),
+        }),
+        messageCounts: expect.objectContaining({
+          emailSent: expect.any(Number),
+          smsSent: expect.any(Number),
+          socialReplySent: expect.any(Number),
+          loggedExternal: expect.any(Number),
+          internalNotes: expect.any(Number),
+        }),
+        aiSuggestionsGenerated: expect.any(Number),
+        aiSuggestionsUsed: expect.any(Number),
+        firstResponseSampleSize: expect.any(Number),
+      }),
+    );
+    // avgFirstResponseSeconds is null when no qualifying conversations
+    // exist (the mock's $queryRaw returns []). UI shows "—".
+    expect(stats.avgFirstResponseSeconds).toBeNull();
+  });
+
+  it("bySource counts only conversations belonging to the queried clientId", async () => {
+    // CONV_A.sourceType=FORM in workspace A; CONV_B same in B.
+    const statsA = await service.getInboxStats(CLIENT_A);
+    expect(statsA.bySource.FORM).toBe(1);
+    const statsB = await service.getInboxStats(CLIENT_B);
+    expect(statsB.bySource.FORM).toBe(1);
   });
 });
