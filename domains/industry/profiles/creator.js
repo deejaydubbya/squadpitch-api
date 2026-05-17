@@ -1,7 +1,8 @@
 export default {
   key: "creator",
-  label: "Creator & Brand",
+  label: "Content Creator / Personal Brand",
   description: "Content creators, influencers, podcasters, and personal brands.",
+  status: "coming_soon",
   onboarding: {
     websitePlaceholder: "janedoe.co",
     extraContextLabel: "Content niche or brand details",

@@ -1,7 +1,14 @@
 export default {
   key: "mortgage",
-  label: "Mortgage & Loans",
+  label: "Mortgage / Loan Officer",
   description: "Mortgage brokers, loan officers, and lending institutions.",
+  status: "coming_soon",
+  isComplianceSensitive: true,
+  complianceNotes: [
+    "Avoid rate guarantees or promises of approval.",
+    "Don't claim specific loan terms without a disclaimer.",
+    "Encourage human review before publishing.",
+  ],
   onboarding: {
     websitePlaceholder: "primemortgage.com",
     extraContextLabel: "Loan programs or specialties",

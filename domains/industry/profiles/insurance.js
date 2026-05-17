@@ -2,6 +2,13 @@ export default {
   key: "insurance",
   label: "Insurance Agent",
   description: "Insurance agents, brokers, and agencies across all lines of coverage.",
+  status: "coming_soon",
+  isComplianceSensitive: true,
+  complianceNotes: [
+    "Avoid coverage or claim-payout guarantees.",
+    "Don't make absolute promises about coverage.",
+    "Encourage human review before publishing.",
+  ],
   onboarding: {
     websitePlaceholder: "shieldinsurance.com",
     extraContextLabel: "Coverage types or specialties",

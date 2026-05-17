@@ -1,7 +1,8 @@
 export default {
   key: "fitness",
-  label: "Fitness & Training",
+  label: "Fitness / Gym / Personal Training",
   description: "Gyms, personal trainers, yoga studios, and wellness coaches.",
+  status: "coming_soon",
   onboarding: {
     websitePlaceholder: "ironcorefitness.com",
     extraContextLabel: "Programs or specialties",

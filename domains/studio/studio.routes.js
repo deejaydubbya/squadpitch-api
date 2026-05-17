@@ -235,6 +235,24 @@ studioRouter.patch(`${BASE}/workspaces/:id`, requireClientOwner, async (req, res
   try {
     const parsed = UpdateClientSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
+    // spinstr421 — refuse to assign a coming-soon industryKey.
+    // The onboarding selector already grays these out, but the
+    // server still pre-flights so a hand-crafted request can't
+    // sneak past the UI. Pass-through is fine for clearing the
+    // value (null) or omitting it entirely.
+    if (parsed.data.industryKey) {
+      const { isIndustryKeySelectable } = await import(
+        "../industry/registry.js"
+      );
+      if (!isIndustryKeySelectable(parsed.data.industryKey)) {
+        return sendError(
+          res,
+          400,
+          "INDUSTRY_NOT_SELECTABLE",
+          "That industry isn't available yet. Choose Real Estate or Car Sales.",
+        );
+      }
+    }
     const actorSub = getAuth0Sub(req);
     const client = await service.updateClient(req.params.id, parsed.data, actorSub);
     res.json(service.formatClient(client));

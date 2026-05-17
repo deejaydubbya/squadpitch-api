@@ -2,6 +2,13 @@ export default {
   key: "legal",
   label: "Legal Services",
   description: "Law firms, solo practitioners, and legal service providers.",
+  status: "coming_soon",
+  isComplianceSensitive: true,
+  complianceNotes: [
+    "Don't provide legal advice in public content.",
+    "Avoid case-outcome guarantees.",
+    "Encourage attorney review before publishing.",
+  ],
   onboarding: {
     websitePlaceholder: "smithlawfirm.com",
     extraContextLabel: "Practice areas or specialties",
