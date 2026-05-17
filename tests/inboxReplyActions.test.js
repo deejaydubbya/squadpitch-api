@@ -121,11 +121,68 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     envOverrides.TWILIO_ACCOUNT_SID = "AC123";
     envOverrides.TWILIO_AUTH_TOKEN = "auth";
     envOverrides.TWILIO_FROM_NUMBER = "+15550000000";
+    // spinstr13 — also need the A2P + sending flags on so the gate
+    // doesn't pre-empt the no-phone check. Resolver surfaces the
+    // most blocking reason in order: configured → A2P → enabled →
+    // phone → opt-out → spam.
+    envOverrides.SMS_A2P_APPROVED = true;
+    envOverrides.SMS_SENDING_ENABLED = true;
     const actions = getAvailableReplyActions(makeConversation({ phone: null }));
     const sms = findAction(actions, "SEND_SMS");
     expect(sms.available).toBe(false);
     expect(sms.requiresConfig).toBe(false);
     expect(sms.reason).toMatch(/no phone number/i);
+  });
+
+  // spinstr13 — A2P gate. Twilio creds + phone in place, but the
+  // A2P_APPROVED flag is false → resolver pins the truthful
+  // approval-pending reason. UI surfaces this in the SMS tab's
+  // disabled state.
+  it("SEND_SMS pinned to 'Awaiting Twilio business profile / A2P 10DLC approval' when flag is off", () => {
+    envOverrides.TWILIO_ACCOUNT_SID = "AC123";
+    envOverrides.TWILIO_AUTH_TOKEN = "auth";
+    envOverrides.TWILIO_FROM_NUMBER = "+15550000000";
+    envOverrides.SMS_A2P_APPROVED = false;
+    envOverrides.SMS_SENDING_ENABLED = true;
+    const sms = findAction(getAvailableReplyActions(makeConversation()), "SEND_SMS");
+    expect(sms.available).toBe(false);
+    expect(sms.reason).toMatch(/Awaiting Twilio business profile \/ A2P 10DLC approval/i);
+    expect(sms.requiresConfig).toBe(true);
+  });
+
+  it("SEND_SMS pinned to 'sending is not enabled' when A2P is approved but kill switch off", () => {
+    envOverrides.TWILIO_ACCOUNT_SID = "AC123";
+    envOverrides.TWILIO_AUTH_TOKEN = "auth";
+    envOverrides.TWILIO_FROM_NUMBER = "+15550000000";
+    envOverrides.SMS_A2P_APPROVED = true;
+    envOverrides.SMS_SENDING_ENABLED = false;
+    const sms = findAction(getAvailableReplyActions(makeConversation()), "SEND_SMS");
+    expect(sms.available).toBe(false);
+    expect(sms.reason).toMatch(/sms sending is not enabled/i);
+  });
+
+  it("SEND_SMS short-circuits when contact has opted out of SMS", () => {
+    envOverrides.TWILIO_ACCOUNT_SID = "AC123";
+    envOverrides.TWILIO_AUTH_TOKEN = "auth";
+    envOverrides.TWILIO_FROM_NUMBER = "+15550000000";
+    envOverrides.SMS_A2P_APPROVED = true;
+    envOverrides.SMS_SENDING_ENABLED = true;
+    const conv = makeConversation();
+    conv.contact.enrichmentJson = { smsOptOut: true };
+    const sms = findAction(getAvailableReplyActions(conv), "SEND_SMS");
+    expect(sms.available).toBe(false);
+    expect(sms.reason).toMatch(/opted out/i);
+  });
+
+  it("SEND_SMS flips to available with creds + A2P + sending + phone + no opt-out", () => {
+    envOverrides.TWILIO_ACCOUNT_SID = "AC123";
+    envOverrides.TWILIO_AUTH_TOKEN = "auth";
+    envOverrides.TWILIO_FROM_NUMBER = "+15550000000";
+    envOverrides.SMS_A2P_APPROVED = true;
+    envOverrides.SMS_SENDING_ENABLED = true;
+    const sms = findAction(getAvailableReplyActions(makeConversation()), "SEND_SMS");
+    expect(sms.available).toBe(true);
+    expect(sms.reason).toBeNull();
   });
 
   it("does NOT surface REPLY_PUBLIC_COMMENT / REPLY_DM / REPLY_REVIEW for SquadSites", () => {

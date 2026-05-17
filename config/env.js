@@ -202,6 +202,26 @@ export const env = {
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
   TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
+  // SMS sending gates. Two independently-flippable flags so the
+  // workspace can hold sending back even after A2P approval lands
+  // (or vice versa — flip A2P_APPROVED to acknowledge approval
+  // without enabling sending, then flip SENDING_ENABLED later).
+  // Both must be true for the inbox outbound SMS path to fire.
+  //
+  //   SMS_A2P_APPROVED       — Twilio Brand + Campaign both
+  //                            APPROVED. Set this when Twilio
+  //                            Console confirms approval.
+  //   SMS_SENDING_ENABLED    — operational kill switch for the
+  //                            inbox send path. Lets us roll
+  //                            the code without enabling live
+  //                            send on day one.
+  //
+  // Notifications-side SMS (OTPs, internal alerts) is unaffected
+  // by these flags — those go through transactional channels.
+  SMS_A2P_APPROVED:
+    String(process.env.SMS_A2P_APPROVED ?? "false").toLowerCase() === "true",
+  SMS_SENDING_ENABLED:
+    String(process.env.SMS_SENDING_ENABLED ?? "false").toLowerCase() === "true",
   VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY,
   VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
   APP_URL: process.env.APP_URL ?? "https://squadpitch-web.fly.dev",

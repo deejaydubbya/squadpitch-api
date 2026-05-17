@@ -140,19 +140,32 @@ export function getAvailableReplyActions(conversation, extras = {}) {
   if (caps.supportsSms) {
     const smsConfigured = isSmsProviderConfigured();
     const hasPhone = Boolean(contact.phone);
+    const optedOut = contact.enrichmentJson?.smsOptOut === true;
+    // Two independent env flags. A2P_APPROVED reflects Twilio
+    // approval state; SENDING_ENABLED is the kill switch. Both
+    // must be true to send. Surface the most blocking reason
+    // first so the UI shows the actionable step.
+    const a2pApproved = Boolean(env.SMS_A2P_APPROVED);
+    const sendingEnabled = Boolean(env.SMS_SENDING_ENABLED);
     const blocker = !smsConfigured
       ? "SMS sending is not configured for this workspace yet."
-      : !hasPhone
-        ? "This lead has no phone number on file."
-        : conversation.spam
-          ? "Conversation is marked as spam — unmark before sending."
-          : null;
+      : !a2pApproved
+        ? "Awaiting Twilio business profile / A2P 10DLC approval."
+        : !sendingEnabled
+          ? "SMS sending is not enabled in this workspace."
+          : !hasPhone
+            ? "This lead has no phone number on file."
+            : optedOut
+              ? "Contact has opted out of SMS (replied STOP)."
+              : conversation.spam
+                ? "Conversation is marked as spam — unmark before sending."
+                : null;
     actions.push({
       action: "SEND_SMS",
       label: "Send SMS",
       available: blocker === null,
       reason: blocker,
-      requiresConfig: !smsConfigured,
+      requiresConfig: !smsConfigured || !a2pApproved || !sendingEnabled,
     });
   }
 

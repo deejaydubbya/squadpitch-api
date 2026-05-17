@@ -28,6 +28,7 @@ import { sendInboxEmail } from "./inbox.outbound.email.service.js";
 import { sendGbpReviewReply } from "./inbox.outbound.gbp.service.js";
 import { sendYouTubeCommentReply } from "./inbox.outbound.youtube.service.js";
 import { sendThreadsReply } from "./inbox.outbound.threads.service.js";
+import { sendInboxSms } from "./inbox.outbound.sms.service.js";
 
 export const inboxRouter = express.Router();
 
@@ -176,6 +177,106 @@ inboxRouter.post(
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Send SMS reply (capability-gated) ──────────────────────────────────
+//
+// Hard-gated on env.SMS_SENDING_ENABLED + env.SMS_A2P_APPROVED in
+// the outbound service — even if the resolver lets the UI render
+// the Send SMS button, the server refuses to fire Twilio until
+// Twilio Business Profile + A2P Brand + A2P Campaign are approved.
+// The UI surfaces the reason verbatim ("Awaiting Twilio business
+// profile / A2P 10DLC approval.").
+inboxRouter.post(
+  `${BASE}/workspaces/:id/inbox/conversations/:conversationId/send-sms`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const body = typeof req.body?.body === "string" ? req.body.body : "";
+      if (!body || body.trim().length === 0) {
+        return validationError(res, [
+          { path: ["body"], message: "body is required" },
+        ]);
+      }
+      const idempotencyKey =
+        typeof req.headers["idempotency-key"] === "string" &&
+        req.headers["idempotency-key"].trim()
+          ? req.headers["idempotency-key"].trim().slice(0, 128)
+          : null;
+      const message = await sendInboxSms(
+        req.params.id,
+        req.params.conversationId,
+        getAuth0Sub(req),
+        { body, idempotencyKey },
+      );
+      res.status(201).json({ message });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Twilio inbound webhook (foundation; opt-out handling) ──────────────
+//
+// Twilio POSTs here when a contact replies. We handle STOP /
+// HELP / START at the carrier level (Twilio's Advanced Opt-Out
+// also handles these automatically once 10DLC is registered, so
+// this is defense-in-depth). When a STOP arrives we flip
+// Contact.enrichmentJson.smsOptOut=true so the outbound service
+// short-circuits any future send to that contact.
+//
+// Real inbound message ingestion (turning their reply into a
+// SquadInbox Message) is a follow-up — for now we just record
+// opt-out state. Webhook signature verification is the planned
+// next iteration; the route is public-readable by Twilio so the
+// stub returns 200 OK to satisfy Twilio's delivery check.
+inboxRouter.post(
+  `${BASE}/inbox/webhooks/twilio/inbound`,
+  // No requireClientOwner — Twilio is the caller. TODO: verify
+  // X-Twilio-Signature header against env.TWILIO_AUTH_TOKEN
+  // before doing any DB write in a future iteration.
+  async (req, res) => {
+    try {
+      const from = typeof req.body?.From === "string" ? req.body.From : null;
+      const text = typeof req.body?.Body === "string" ? req.body.Body : "";
+      const cmd = text.trim().toUpperCase();
+      if (from && (cmd === "STOP" || cmd === "STOPALL" || cmd === "UNSUBSCRIBE" || cmd === "CANCEL" || cmd === "END" || cmd === "QUIT")) {
+        const { prisma } = await import("../../prisma.js");
+        const contacts = await prisma.contact.findMany({
+          where: { phone: from },
+          select: { id: true, enrichmentJson: true },
+        });
+        for (const c of contacts) {
+          await prisma.contact
+            .update({
+              where: { id: c.id },
+              data: {
+                enrichmentJson: {
+                  ...(c.enrichmentJson ?? {}),
+                  smsOptOut: true,
+                  smsOptOutAt: new Date().toISOString(),
+                },
+              },
+            })
+            .catch(() => {});
+        }
+        console.log("[INBOX_INBOUND_SMS] STOP recorded:", {
+          from,
+          contacts: contacts.length,
+        });
+      }
+      // Twilio expects an empty TwiML 200 response so it doesn't
+      // retry. We don't reply to STOP from app code — Twilio's
+      // Advanced Opt-Out emits the standard "You've been
+      // unsubscribed" automatically.
+      res.set("Content-Type", "text/xml");
+      res.status(200).send("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>");
+    } catch (err) {
+      console.error("[INBOX_INBOUND_SMS] webhook error:", err?.message);
+      res.set("Content-Type", "text/xml");
+      res.status(200).send("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>");
     }
   },
 );
