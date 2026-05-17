@@ -51,6 +51,7 @@ const CONV_A = {
   clientId: CLIENT_A,
   contactId: "contact-a",
   sourceType: "FORM",
+  provider: "SQUADSITES",
   sourceFormSubmissionId: "sub-a",
   pageId: null,
   campaignId: null,
@@ -76,6 +77,7 @@ const CONV_B = {
   clientId: CLIENT_B,
   contactId: "contact-b",
   sourceType: "FORM",
+  provider: "SQUADSITES",
   sourceFormSubmissionId: "sub-b",
   pageId: null,
   campaignId: null,
@@ -167,18 +169,24 @@ function buildPrismaMock() {
           return true;
         }).length;
       }),
-      // spinstr14 — bySource breakdown for the analytics bar.
+      // spinstr14/420 — bySource breakdown for the analytics bar.
+      // groupBy on (sourceType, provider) so the dashboard can
+      // distinguish Threads comments from YouTube comments, etc.
       groupBy: vi.fn(async ({ where, by }) => {
         const filtered = [...convs.values()].filter((c) => c.clientId === where.clientId);
-        const buckets = {};
+        const buckets = new Map();
         for (const c of filtered) {
-          const key = c[by[0]];
-          buckets[key] = (buckets[key] ?? 0) + 1;
+          const key = JSON.stringify(by.map((field) => c[field] ?? null));
+          buckets.set(key, (buckets.get(key) ?? 0) + 1);
         }
-        return Object.entries(buckets).map(([sourceType, n]) => ({
-          sourceType,
-          _count: { _all: n },
-        }));
+        return [...buckets.entries()].map(([k, n]) => {
+          const values = JSON.parse(k);
+          const row = { _count: { _all: n } };
+          by.forEach((field, i) => {
+            row[field] = values[i];
+          });
+          return row;
+        });
       }),
       fields: { lastMessageAt: "lastMessageAt" }, // prisma raw-field hack the service uses
     },
@@ -414,12 +422,15 @@ describe("inbox stats serializer contract", () => {
         totalCount: expect.any(Number),
         windowDays: expect.any(Number),
         bySource: expect.objectContaining({
-          FORM: expect.any(Number),
-          EMAIL_REPLY: expect.any(Number),
-          SOCIAL: expect.any(Number),
-          SOCIAL_COMMENT: expect.any(Number),
-          REVIEW: expect.any(Number),
-          MANUAL: expect.any(Number),
+          forms: expect.any(Number),
+          email: expect.any(Number),
+          threadsComments: expect.any(Number),
+          youtubeComments: expect.any(Number),
+          otherSocialComments: expect.any(Number),
+          reviews: expect.any(Number),
+          dms: expect.any(Number),
+          sms: expect.any(Number),
+          manual: expect.any(Number),
         }),
         messageCounts: expect.objectContaining({
           emailSent: expect.any(Number),
@@ -441,8 +452,42 @@ describe("inbox stats serializer contract", () => {
   it("bySource counts only conversations belonging to the queried clientId", async () => {
     // CONV_A.sourceType=FORM in workspace A; CONV_B same in B.
     const statsA = await service.getInboxStats(CLIENT_A);
-    expect(statsA.bySource.FORM).toBe(1);
+    expect(statsA.bySource.forms).toBe(1);
     const statsB = await service.getInboxStats(CLIENT_B);
-    expect(statsB.bySource.FORM).toBe(1);
+    expect(statsB.bySource.forms).toBe(1);
+  });
+
+  // spinstr420 — Threads vs YouTube comments must land in
+  // separate buckets so the dashboard can distinguish networks.
+  // Add fixture conversations of each kind and verify the split.
+  it("splits SOCIAL_COMMENT conversations by provider (Threads vs YouTube vs other)", async () => {
+    state.prisma._state.convs.set("conv-th-1", {
+      id: "conv-th-1",
+      clientId: CLIENT_A,
+      sourceType: "SOCIAL_COMMENT",
+      provider: "THREADS",
+      status: "OPEN",
+      spam: false,
+    });
+    state.prisma._state.convs.set("conv-yt-1", {
+      id: "conv-yt-1",
+      clientId: CLIENT_A,
+      sourceType: "SOCIAL_COMMENT",
+      provider: "YOUTUBE",
+      status: "OPEN",
+      spam: false,
+    });
+    state.prisma._state.convs.set("conv-other-1", {
+      id: "conv-other-1",
+      clientId: CLIENT_A,
+      sourceType: "SOCIAL_COMMENT",
+      provider: "FACEBOOK",
+      status: "OPEN",
+      spam: false,
+    });
+    const stats = await service.getInboxStats(CLIENT_A);
+    expect(stats.bySource.threadsComments).toBe(1);
+    expect(stats.bySource.youtubeComments).toBe(1);
+    expect(stats.bySource.otherSocialComments).toBe(1);
   });
 });

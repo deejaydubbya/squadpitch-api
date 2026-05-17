@@ -993,13 +993,13 @@ export async function getInboxStats(clientId) {
     prisma.conversation.count({
       where: { clientId },
     }),
-    // Source attribution — group by sourceType for the last 30
-    // days. "Provider" is too granular for a header bar; the
-    // source enum already aligns with the categories the prompt
-    // asked for (FORM / EMAIL_REPLY / SOCIAL / SOCIAL_COMMENT /
-    // REVIEW / MANUAL).
+    // Source attribution — group by (sourceType, provider) so
+    // the bar can distinguish Threads comments from YouTube
+    // comments, and DMs from comments. Cheaper than a per-row
+    // scan; the categorizer below collapses the tuples into
+    // the dashboard's surface labels.
     prisma.conversation.groupBy({
-      by: ["sourceType"],
+      by: ["sourceType", "provider"],
       where: { clientId, createdAt: { gte: windowStart } },
       _count: { _all: true },
     }),
@@ -1036,21 +1036,53 @@ export async function getInboxStats(clientId) {
   ]);
 
   // ── Post-process source breakdown ──
-  // Map prisma enum keys to the categories the dashboard surfaces.
-  // Conversations with sourceType=SOCIAL keep their bucket; we
-  // split SOCIAL_COMMENT and REVIEW separately because those are
-  // the high-signal Inbox surfaces.
+  // Map (sourceType, provider) tuples to the dashboard's surface
+  // labels. Splitting SOCIAL_COMMENT by provider so the bar can
+  // show "Threads (5)" vs "YouTube (3)" rather than a single
+  // generic "Comments". Reviews + DMs get their own buckets.
+  // SMS lives in its own bucket so it surfaces the moment A2P
+  // approval lands.
   const bySource = {
-    FORM: 0,
-    EMAIL_REPLY: 0,
-    SOCIAL: 0,
-    SOCIAL_COMMENT: 0,
-    REVIEW: 0,
-    MANUAL: 0,
+    forms: 0,
+    email: 0,
+    threadsComments: 0,
+    youtubeComments: 0,
+    otherSocialComments: 0,
+    reviews: 0,
+    dms: 0,
+    sms: 0,
+    manual: 0,
   };
   for (const row of bySourceRows) {
-    const key = row.sourceType;
-    if (key in bySource) bySource[key] = row._count._all;
+    const n = row._count._all;
+    const st = row.sourceType;
+    const p = row.provider;
+    if (st === "FORM") {
+      bySource.forms += n;
+    } else if (st === "EMAIL_REPLY" || p === "EMAIL") {
+      bySource.email += n;
+    } else if (st === "REVIEW") {
+      bySource.reviews += n;
+    } else if (st === "SOCIAL_COMMENT") {
+      if (p === "THREADS") bySource.threadsComments += n;
+      else if (p === "YOUTUBE") bySource.youtubeComments += n;
+      else bySource.otherSocialComments += n;
+    } else if (st === "SOCIAL") {
+      // SOCIAL sourceType today comes from social DM ingestion
+      // (Meta / Instagram once App Review lands). Split out as
+      // its own DM bucket so the dashboard distinguishes
+      // comment-style vs DM-style conversations.
+      bySource.dms += n;
+    } else if (st === "MANUAL") {
+      bySource.manual += n;
+    } else if (p === "SMS") {
+      bySource.sms += n;
+    } else {
+      // Unknown bucket — log once. Don't drop the row silently;
+      // count it under manual so the totals still reconcile.
+      console.warn("[inbox.stats] unmapped source tuple:", { st, p, n });
+      bySource.manual += n;
+    }
   }
 
   // ── Post-process message-type counts ──
