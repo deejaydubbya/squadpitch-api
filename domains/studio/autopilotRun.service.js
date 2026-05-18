@@ -143,6 +143,7 @@ export async function listRuns({ clientId, limit = 25, offset = 0 } = {}) {
         startedAt: true,
         finishedAt: true,
         errorMessage: true,
+        metadata: true,
       },
     }),
     prisma.autopilotRun.count({ where: { clientId } }),
@@ -160,7 +161,37 @@ export async function listRuns({ clientId, limit = 25, offset = 0 } = {}) {
       finishedAt:
         r.finishedAt instanceof Date ? r.finishedAt.toISOString() : r.finishedAt,
       errorMessage: r.errorMessage,
+      // Spinstr04 — explainability surface. Pass the run-time
+      // metadata (skip reasons, summary counts, autoGenerate
+      // results) through to the activity panel so it can render
+      // rich plain-English rows instead of bare reason strings.
+      // Privacy: only structured counts + ids land here; the
+      // detector deliberately never writes user-identifying data
+      // into metadata.
+      metadata: sanitizeRunMetadata(r.metadata),
     })),
     total,
   };
+}
+
+// Whitelist of top-level metadata keys the API exposes. Anything
+// the detector hasn't added to this list stays internal. Keeps
+// future detector experiments from accidentally leaking through.
+const SAFE_METADATA_KEYS = new Set([
+  "summary",
+  "autoGenerate",
+  "schedulerTickId",
+]);
+
+function sanitizeRunMetadata(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const safe = {};
+  let any = false;
+  for (const key of SAFE_METADATA_KEYS) {
+    if (key in value) {
+      safe[key] = value[key];
+      any = true;
+    }
+  }
+  return any ? safe : null;
 }

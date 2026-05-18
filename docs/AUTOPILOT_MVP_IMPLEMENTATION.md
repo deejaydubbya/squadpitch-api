@@ -195,6 +195,87 @@ old "Coming soon" shell renders unchanged.
   `<AutopilotCommandCenter />`; max-width bumped from
   `max-w-4xl` to `max-w-6xl` to fit the tile row.
 
+### 2c. Explainability (Spinstr04)
+
+Autopilot's biggest trust problem is opacity: the workspace
+owner can't tell *why* something did or didn't happen.
+Spinstr04 closes that loop end-to-end.
+
+**Run metadata.** `detectAndPersistRecommendations` now
+returns a structured `summary` alongside the create/update
+counts:
+
+```ts
+{
+  eligibleListings,
+  duplicatesSuppressed,        // collapsed by listingDedupKey
+  listingsCappedByRunLimit,    // capped at REC_MAX_NEW_LISTINGS_PER_RUN
+  openHouseCandidates,
+  openHouseEmitted,
+  reviewsConsidered,
+  reviewsEmitted,
+  inactivityEmitted,
+  noActionReason,              // human-readable when nothing was created
+}
+```
+
+`runEvaluatorAndRecord` bundles that summary + the
+existing `autoGenerate` block under
+`AutopilotRun.metadata = { summary, autoGenerate, schedulerTickId? }`
+and uses `summary.noActionReason` as the run's `reason`
+string when the surfaced count is zero.
+
+**API exposure.** `listRuns` previously stripped
+`metadata` from the response. It now passes the blob
+through a whitelist (`sanitizeRunMetadata`) — only
+`summary`, `autoGenerate`, and `schedulerTickId` survive.
+Any other key (current or future) is dropped, so an
+ad-hoc detector experiment can't accidentally leak
+internal or user-identifying data through the activity
+endpoint. Returns `null` (not `{}`) when nothing
+whitelisted is present.
+
+**Privacy considerations:**
+
+- Detector summary stores **counts only** — no addresses,
+  reviewer names, or content bodies.
+- `autoGenerate.skipped[].recommendationId` is a
+  workspace-scoped id, not a global identifier.
+- `errorMessage` already passed through `errorMessage` is
+  free-form — when an evaluator throws we record the
+  exception's `message`. Detectors are responsible for
+  not embedding PII in error messages (none today do).
+- The `settingsSnapshot` / `readinessSnapshot` columns on
+  the model are not exposed by `listRuns`; they exist for
+  internal forensics only.
+
+**UI consumers.**
+
+- `RunActivityPanel` adds a `runDetailFragments` helper
+  that emits short plain-English suffixes from
+  `metadata.summary` and `metadata.autoGenerate`:
+  - "collapsed 2 duplicates"
+  - "4 more held for next run"
+  - "auto-prepared 3 drafts"
+  - "2 held back from auto-generation"
+- `no_action` rows prefer `metadata.summary.noActionReason`
+  over the raw `reason` string.
+- `OpportunityQueue` row gets a per-row "Why?" toggle
+  (`WhyThisDetails`) that expands to show: what we
+  noticed, why it matters, confidence + the reason behind
+  it, recommended channels, recommended angles, and a
+  concrete description of what the primary CTA actually
+  does.
+- `StatusChips` (in the command center) shows the current
+  automation mode label + a green
+  "Approval required before publishing" pill so the
+  safety guarantee is visible from the Inbox tab, not
+  only from Settings.
+- `FirstRunEmptyState` reads `runsData?.runs[0]` and shows
+  "Last scan 12m ago — no fresh listings, reviews, or
+  inactivity signals in the lookback window." so the empty
+  hero isn't dead air after a scan.
+
 ---
 
 ## 3. Endpoints
