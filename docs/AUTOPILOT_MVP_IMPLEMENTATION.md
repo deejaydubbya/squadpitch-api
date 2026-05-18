@@ -119,6 +119,82 @@ NEW_REVIEW to trust / social proof, INACTIVITY_GAP to
 consistency / re-engagement. Generic placeholder copy is
 gone.
 
+### 2b. Command Center UI (Spinstr03)
+
+The Autopilot page (`/workspaces/:id/autopilot`) used to render
+the inbox as a stack of large planner-style cards. After
+Spinstr03 the page is laid out as an AI marketing command
+center. Same data, same handlers, same backend — different
+composition.
+
+**Layout (Inbox tab, top to bottom):**
+
+1. **Header** — title `Autopilot`, subtitle `AI campaign
+   opportunities prepared for your review`, status pill
+   (`Active` / `Off` / `Setup Required`).
+2. **Summary tiles** — five metric chips:
+   `Opportunities` (`pendingCount`), `Drafts Ready`
+   (`readyCount`), `Approved`, `Scheduled`, `Last Scan`
+   (relative time from `status.lastActionAt`). Rendered as
+   `CommandSummaryTiles`.
+3. **Safety callout** — persistent: *"Autopilot watches your
+   business for timely marketing opportunities, prepares
+   campaign drafts, and waits for your approval before
+   anything reaches your planner."*
+4. **Next best move** — `OpportunityHero`. The single
+   highest-priority recommendation rendered as a large
+   featured card with property image, full
+   `whatWeNoticed` + `whyItMatters` copy, channel chips,
+   confidence pill, and a single strong CTA. The CTA label
+   matches the lifecycle stage (`Prepare Drafts` for pending,
+   `Approve Drafts` for ready, `View Drafts` for approved/
+   launched). Secondary actions: View details, Dismiss.
+   Selection logic lives in `commandCenter.helpers.ts`:
+   status weight (pending > ready > approved) + confidence
+   weight (high > medium > low) + recency bonus.
+5. **Opportunity Inbox** — `OpportunityQueue`. Remaining
+   recommendations as compact one-line rows (icon + trigger
+   label + confidence dot + status badge + title + address +
+   single primary action). Filter tabs above: Recommended /
+   Drafts Ready / Approved / Scheduled / Dismissed / All
+   (UI-only mapping over the existing `AutopilotCampaignStatus`
+   enum — backend unchanged).
+6. **Recent Autopilot Activity** — `RunActivityPanel`.
+   Merged feed of `AutopilotRun` rows and recent autopilot
+   `Draft` rows, sorted by recency. Run rows surface the
+   human-readable `reason` ("Autopilot scanned and found 3
+   new opportunities"; "Skipped — preconditions not met").
+
+**Empty / setup states (`FirstRunEmptyState`):**
+
+- No recommendations + no channels → "Connect a channel to
+  get started" with a CTA to `/settings/channels`.
+- No recommendations + has channels + no data → "Add listings
+  or connect a data source" with a CTA to `/data`.
+- No recommendations + everything wired → polished "No
+  opportunities found yet. Autopilot will surface
+  recommendations as soon as it detects new listings,
+  reviews, open houses, or posting gaps."
+
+**Error state (`ErrorState`):** dedicated retry card backed
+by `useAutopilotCampaignRecommendations().refetch()`. No
+white screen on transient API failures.
+
+**Feature flag preserved.** When
+`NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED` is off the
+old "Coming soon" shell renders unchanged.
+
+**Files:**
+
+- `src/components/studio/autopilot/AutopilotCommandCenter.tsx`
+  — orchestrator (replaces `AutopilotCampaignsSection`).
+- `CommandSummaryTiles.tsx`, `OpportunityHero.tsx`,
+  `OpportunityQueue.tsx`, `RunActivityPanel.tsx`,
+  `commandCenter.helpers.ts` — primitives.
+- `autopilot/page.tsx` — Inbox tab now renders
+  `<AutopilotCommandCenter />`; max-width bumped from
+  `max-w-4xl` to `max-w-6xl` to fit the tile row.
+
 ---
 
 ## 3. Endpoints
