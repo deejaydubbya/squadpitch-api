@@ -723,3 +723,174 @@ web typecheck clean. No skipped tests.
 The new triggers feed the same NEEDS_REVIEW → user-click
 generate → DRAFT_GENERATED → user-click approve →
 APPROVED/SCHEDULED workflow as the existing four.
+
+---
+
+## 17. Spinstr06 — Final Hardening Completion Note
+
+**Date:** 2026-05-18
+
+Final hardening pass after Spinstr01–05. No new product
+features — closing the gaps the upgrade left behind and
+codifying the safety contract.
+
+### Gaps fixed
+
+**1. `recommend_only` actually gates the Prepare CTA.**
+The mode picker shipped in Spinstr01 but the Hero +
+Queue rows kept rendering "Prepare Drafts" regardless of
+mode — so a user in recommend_only could still trigger
+generation. Both components now accept `mode` and hide
+the Prepare button when `mode === 'recommend_only'`,
+replacing it with a yellow note:
+*"Recommendations-only mode. Switch automation level to
+Generate drafts manually (or higher) on the Settings tab
+to prepare drafts from Autopilot."*
+
+**2. Scheduled tab now surfaces SCHEDULED recs.**
+The backend `STATUS_BE_TO_FE` map collapsed `SCHEDULED`
+into the FE's `approved` state because the legacy UI had
+no separate "Scheduled" surface. The command-center
+Scheduled tab landed in Spinstr03 but the upstream
+mapping never updated — every SCHEDULED rec was showing
+in the Approved tab.
+
+Fix:
+- `STATUS_BE_TO_FE.SCHEDULED → "scheduled"` (was `"approved"`).
+- `AutopilotCampaignStatus` FE union adds `'scheduled'`.
+- `STATUS_DISPLAY['scheduled']` adds a violet "Scheduled"
+  badge.
+- `OpportunityQueue.STATUS_BUCKETS.scheduled` now matches
+  `['scheduled', 'launched']` (legacy `launched` kept for
+  backward compatibility with older rows).
+- `isInactiveStatus('scheduled') === true` (CTA-locked, like
+  approved).
+
+**3. Dead code removed.**
+`AutopilotCampaignsSection.tsx` and the old per-rec
+`AutopilotCampaignCard.tsx` were orphaned after the
+Spinstr03 command-center redesign. Both deleted.
+`autopilotCampaignMapping.ts` and `useAutopilotCampaignIntelligence`
+stay — they're still used by `AutopilotCampaignDetailModal`.
+`autopilotCampaignInbox.ts` flag comment updated to
+reference the live component.
+
+### Final mode behavior table
+
+| Mode | Detector | Auto-gen drafts | On approve | Publishes | Selectable |
+|---|---|---|---|---|---|
+| `off` | no | no | n/a | no | yes |
+| `recommend_only` | yes | no | manual approve only | no | yes |
+| `draft_on_click` | yes | no (manual click) | manual approve only | no | yes |
+| `auto_generate_drafts` | yes | **yes** (high-confidence) | manual approve only | no | yes |
+| `schedule_after_approval` | yes | no (manual click) | **auto-schedule** safe slots | no | yes |
+| `auto_publish_guarded` | — | — | — | — | **NO** (locked, schema-rejected) |
+
+Legacy mode strings (`draft_only`, `draft_assist`,
+`schedule_approved`, `auto_publish`, `auto_publish_guarded`)
+normalize to `draft_on_click` on read.
+
+### Final trigger table
+
+| Trigger | Status | Lookback | Cap/run |
+|---|---|---|---|
+| `NEW_LISTING` | live | 14d | 3 |
+| `OPEN_HOUSE` | live | 7d | per-listing |
+| `PRICE_DROP` | live | 14d | 3 |
+| `JUST_SOLD` | live | 30d | 3 |
+| `STALE_LISTING` | live (suppressed by stronger active recs) | 14d | 2 |
+| `NEW_REVIEW` | live | 14d | per-review |
+| `SEASONAL` | live (one per workspace per window per year) | window months | 1 |
+| `INACTIVITY_GAP` | live | 14d (fallback) | 1 |
+| `MARKET_UPDATE` | **deferred** — requires market data not tracked | — | — |
+
+### Safety guarantees (codified)
+
+1. **No auto-publish path exists.** Every published draft
+   passes through the user-clicked `approveDraft` and the
+   existing scheduled-publish worker. `auto_publish_guarded`
+   is enum-only and rejected by `AutopilotSettingsSchema`.
+2. **Approval is always explicit.** Even in
+   `auto_generate_drafts`, drafts stay at `DRAFT` until a
+   user clicks Approve. Even in `schedule_after_approval`,
+   the scheduling step is triggered by Approve.
+3. **No silent scheduling.** `schedule_after_approval`
+   only fires when no explicit `scheduleAt` is passed by
+   the UI — explicit calendar picks always win.
+4. **Idempotency at every layer.** DB unique constraint
+   on `(clientId, triggerType, triggerObjectId)`;
+   `upsertRecommendation` preserves user decisions across
+   detector re-runs; `generatedDraftIds.length > 0`
+   short-circuits re-generation; `approveRecommendation`
+   refuses to double-transition.
+5. **Sticky user state.** `DISMISSED` / `APPROVED` /
+   `SCHEDULED` rows never reopen on detector re-run.
+6. **Run metadata sanitization.** `listRuns` whitelists
+   `{ summary, autoGenerate, schedulerTickId }`; any other
+   key is dropped, so detector experiments can't leak PII.
+7. **Tenant scoping at routes.** All workspace-scoped
+   routes run `requireClientOwner`; internal `evaluate-all`
+   runs `requireInternalAccess`.
+
+### Environment flags
+
+| Flag | Repo | Purpose |
+|---|---|---|
+| `AUTOPILOT_SCHEDULER_ENABLED` | api | gates the BullMQ scheduler worker on |
+| `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED` | web | kill switch for the command-center surface (build-time inline via fly.toml + Dockerfile ARG) |
+
+### Rollout / testing checklist
+
+- [x] Flag `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED=true` on the workspace under test
+- [x] Confirm Inbox tab renders the command center (tiles + hero + queue + activity)
+- [x] Confirm mode picker shows 5 selectable modes + locked auto_publish_guarded
+- [x] Switch to `recommend_only` — verify Prepare button is hidden in Hero + Queue
+- [x] Switch to `draft_on_click` — verify Prepare → Approve flow
+- [x] Switch to `auto_generate_drafts` — run detector; verify high-confidence recs auto-generate, low-confidence stay
+- [x] Switch to `schedule_after_approval` — approve a ready rec without `scheduleAt`; verify scheduling lands on a safe slot
+- [x] Re-run scheduler — confirm no duplicate drafts, no duplicate schedules, no double-approvals
+- [x] Dismiss a rec — confirm it stays dismissed on next scan
+- [x] Property Library: import the same listing twice via different paths — confirm intake dedup merges them
+
+### Known limitations
+
+- **MARKET_UPDATE deferred.** Requires market data.
+- **Legacy duplicate WorkspaceDataItems.** Intake dedup is
+  forward-looking; rows already in a workspace's database
+  are not retroactively merged (Autopilot detector dedup
+  keeps the Inbox correct).
+- **`propertyMerged` count not surfaced in importer UI.**
+  Backend returns it; no review screen reads it yet.
+- **"Next scheduled scan" tile not implemented.** The
+  scheduler doesn't expose its cron cadence through any
+  endpoint. Empty/last-scan-only for now.
+- **No FE icon/label for `converted` status.** Falls back
+  to the blue "Converted" badge; covers an unlikely path
+  (rec → converted to manual campaign).
+
+### Files changed in this hardening pass
+
+API:
+- `domains/studio/autopilotCampaignRecommendation.service.js` — `STATUS_BE_TO_FE.SCHEDULED → "scheduled"`
+- `docs/AUTOPILOT_PRODUCT_AUDIT.md` — this section
+
+Web:
+- `src/hooks/useSquadpitch.ts` — `AutopilotCampaignStatus` adds `'scheduled'`
+- `src/components/studio/autopilotInboxConstants.ts` — adds `scheduled` to `STATUS_DISPLAY` + `isInactiveStatus`
+- `src/components/studio/autopilot/OpportunityHero.tsx` — accepts `mode`, hides Prepare in `recommend_only`
+- `src/components/studio/autopilot/OpportunityQueue.tsx` — accepts `mode`, hides Prepare in `recommend_only`, Scheduled bucket includes `'scheduled'`
+- `src/components/studio/autopilot/AutopilotCommandCenter.tsx` — passes `settings.mode` to Hero + Queue
+- `src/components/studio/autopilot/commandCenter.gating.test.ts` — 9 new cases
+- `src/lib/autopilotCampaignInbox.ts` — comment refresh
+- `src/lib/assistant/autopilotCampaignMapping.ts` — comment refresh
+- **deleted**: `src/components/studio/AutopilotCampaignsSection.tsx`
+- **deleted**: `src/components/studio/AutopilotCampaignCard.tsx`
+
+### Tests
+
+- API: 932/932 passing
+- Web: 300/300 passing (9 new in `commandCenter.gating.test.ts`)
+- Web typecheck: clean
+- No skipped tests
+
+### No unsafe auto-publish path was added across Spinstr01–06.

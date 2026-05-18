@@ -23,16 +23,15 @@ import { writeAudit } from "../../lib/auditLog.js";
 
 // ── BE → FE status / trigger serialization ─────────────────────────────
 //
-// The web-side type `AutopilotCampaignStatus` predates the Prisma
-// enum; map the storage representation to what the existing UI
-// renders so Phase 2 doesn't require a UI rewrite. SCHEDULED
-// folds into 'approved' since the FE currently has no separate
-// scheduled state on this surface.
+// The web-side type `AutopilotCampaignStatus` mirrors the Prisma
+// enum 1:1 after Spinstr06. SCHEDULED used to fold into 'approved'
+// (no FE consumer for it); now the command-center Scheduled tab
+// surfaces SCHEDULED recs separately.
 const STATUS_BE_TO_FE = {
   NEEDS_REVIEW: "pending",
   DRAFT_GENERATED: "ready",
   APPROVED: "approved",
-  SCHEDULED: "approved",
+  SCHEDULED: "scheduled",
   DISMISSED: "dismissed",
   EXPIRED: "expired",
 };
