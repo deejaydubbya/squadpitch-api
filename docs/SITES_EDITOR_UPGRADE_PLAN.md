@@ -217,16 +217,49 @@ which property and the renderer/editor surface autofill primitives.
 - No automatic re-pull when the source property changes — autofill is one-shot. "Always sync" toggle is a Phase 4 idea.
 - `applyPropertyDeterministicFields` doesn't *add* a gallery block when the LLM didn't include one. Phase 4 templates address that via per-(sourceType, pageGoal) scaffolds.
 
-### Phase 2 — Media picker + property photos
+### Phase 2 — Media picker + property photos — ✅ SHIPPED (sites-03)
 
 Goal: kill the URL-only image fields.
 
-- Extract `MiniMediaPicker` from `AddDataItemModal.tsx` into a reusable `MediaPickerModal` that opens from the editor.
-- New block field affordance: image inputs render as `[Thumbnail] [Choose…] [Replace] [Remove]`. Choose opens the picker with a tab for **Library** (workspace assets) and **Property photos** (when `page.sourceType === 'PROPERTY'`, pulls `dataJson.images[]`).
-- Wire `imageId` to actually persist when the picker is used. The renderer should accept either `imageId` (preferred, signed URL resolved by the API resolver) or `imageUrl` (back-compat).
-- Public renderer (`squadpitch-sites`): API resolver returns a resolved image URL per `imageId`; renderer prefers `imageUrl` for back-compat and falls back to resolved URL. Old pages keep working.
+**Implementation:**
 
-Risk: Medium. Touches the public renderer (read path). Worth a dedicated test sweep — the existing block dispatcher's "unknown block / unknown field → skip" behavior is the safety net.
+- **`MediaPickerModal`** (`components/studio/MediaPickerModal.tsx`) — new reusable modal with 4 tabs:
+  - **Library** — workspace MediaAssets (always present; uses `useAssets` filtered to `assetType=image, status=READY`).
+  - **Property Photos** — only appears when the editor passes `propertyImages` (i.e. on PROPERTY-linked pages). Default-active tab when populated.
+  - **Upload** — file picker → `useUploadAsset` → server-side Cloudinary upload (signed; no secret on the client). JPG/PNG/WebP.
+  - **URL** — paste an external image URL (fallback).
+  - Returns `{ url, imageId?, publicId?, alt?, source: 'media_library' | 'property_photo' | 'upload' | 'external_url' }`. Supports `mode: 'single' | 'multi'` — single dispatches on click, multi accumulates and dispatches on "Add N images".
+  - Decided NOT to extract `MiniMediaPicker` from `AddDataItemModal` — it was a thin inline grid (~50 lines) without tabs, upload, or URL paste. Kept it in place for the existing Add Data Item modal; built a fresh full-featured picker.
+
+- **`ImageField`** (`sites/_components/ImageField.tsx`) — single-image picker for hero / image / testimonial blocks. Renders `[Thumbnail] [Choose…/Replace…] [Remove]` + a URL-paste fallback input. Calls `MediaPickerModal` in single mode. Always writes `imageUrl`; persists `imageId` when the picker returns one.
+
+- **`GalleryField`** (`sites/_components/GalleryField.tsx`) — multi-image picker for the gallery block. Grid of thumbnails + "Add images" button. Dedups against the existing `imageUrls`. Calls `MediaPickerModal` in multi mode.
+
+- **Wired into `PageEditor` `BlockFields`** for: hero, image, gallery, testimonial. Plain `<input type="text">` URL fields gone. The "Pull from property" actions added in Phase 1 still render alongside.
+
+**imageId strategy (chosen):** write both `imageUrl` (always) and `imageId` (optional, when picker returns a Library / Upload asset). The public renderer **continues to read only `imageUrl`** — zero risk to existing pages. `imageId` is persisted as forward-looking metadata for a future signed-URL flow (private media buckets etc.), but the renderer doesn't depend on it today. The `imageId` column on hero + image blocks (declared but unused historically) is now populated when applicable.
+
+**Renderer compatibility:**
+- Old pages with only `imageUrl` → unchanged, render as before.
+- New pages picked via Library → `imageUrl` set to the resolved Cloudinary URL + `imageId` set to the MediaAsset id.
+- New pages with URL paste → `imageUrl` set, `imageId` null.
+- The `lib/pageBlocks` dispatcher's "unknown field → skip" behavior already covered the new `imageId` field even before this change.
+
+**Property photos integration:** when `page.sourceType === 'PROPERTY'`, `PageEditor` reads `property.images` (via the Phase 1 normalizer) and passes them as `propertyImages` to every ImageField + GalleryField. The Property Photos tab in the modal pulls from that list. "Use all property photos" is implemented via the **Phase 1 "Pull from property" button** on the gallery block (kept separate so the user can either pull-all or hand-pick).
+
+**Files changed (sites-03):**
+- `components/studio/MediaPickerModal.tsx` (new)
+- `sites/_components/ImageField.tsx` (new)
+- `sites/_components/GalleryField.tsx` (new)
+- `sites/_components/PageEditor.tsx` — `BlockFields` updated; `clientId` threaded through `SortableBlockCard` so the picker can fetch assets.
+
+**Phase 2 limitations / follow-ups:**
+- No drag-drop on the upload tab — file input click only (consistent with sites-01).
+- `MediaAsset` rows aren't auto-tagged "site_page" — uploads land in the workspace library un-folder. A future enhancement could pass a `folderId` per Sites context.
+- Public renderer's `imageId` resolution is **deferred**: the resolver doesn't yet return a `resolvedImageUrl` for `imageId`-only blocks. Since we always write `imageUrl` alongside, this isn't blocking — flagged for when a private-asset flow is needed.
+- `MediaPickerModal` doesn't paginate — `useAssets` page is capped at the default (50–100). Workspaces with thousands of images would need a future search/pagination layer.
+
+Risk: Medium → executed Low. Touches the editor but **not** the public renderer (read path unchanged). Existing pages keep rendering.
 
 ### Phase 3 — Draft preview
 
