@@ -1,6 +1,7 @@
 # Autopilot Product Audit
 
-**Status:** Phases 1 + 2 + 3 + 4 + 5 shipped. Phase 6 still planned.
+**Status:** All six phases shipped. See `docs/AUTOPILOT_MVP_IMPLEMENTATION.md`
+for the final-state reference.
 **Repos audited:** squadpitch-api, squadpitch-web.
 **Baseline at audit:** API 813 passing, web typecheck clean.
 **After Phase 1:** API 823 passing, web 272 passing, web typecheck clean.
@@ -8,6 +9,7 @@
 **After Phase 3:** API 846 passing, web 272 passing, web typecheck clean.
 **After Phase 4:** API 856 passing, web 272 passing, web typecheck clean.
 **After Phase 5:** API 865 passing, web 272 passing, web typecheck clean.
+**After Phase 6:** API 867 passing, web 272 passing, web typecheck clean.
 
 ---
 
