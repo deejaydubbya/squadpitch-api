@@ -1,11 +1,12 @@
 # Autopilot Product Audit
 
-**Status:** Phases 1 + 2 + 3 shipped. Phases 4–6 still planned.
+**Status:** Phases 1 + 2 + 3 + 4 shipped. Phases 5–6 still planned.
 **Repos audited:** squadpitch-api, squadpitch-web.
 **Baseline at audit:** API 813 passing, web typecheck clean.
 **After Phase 1:** API 823 passing, web 272 passing, web typecheck clean.
 **After Phase 2:** API 837 passing, web 272 passing, web typecheck clean.
 **After Phase 3:** API 846 passing, web 272 passing, web typecheck clean.
+**After Phase 4:** API 856 passing, web 272 passing, web typecheck clean.
 
 ---
 
@@ -340,3 +341,53 @@ channels, all-channel-failure DOES NOT flip status). Suites:
 draft to APPROVED via the existing `draftWorkflow.service`.
 Optional `scheduleAt` per draft. Replaces the Phase 3 coming-soon
 alert on the Approve button.
+
+---
+
+## 12. Phase 4 Completion Note
+
+**Shipped:**
+
+- New service helper `approveRecommendation({ clientId,
+  recommendationId, userId, scheduleAt? })`:
+  - Refuses when no `generatedDraftIds` (400 NO_GENERATED_DRAFTS).
+  - Refuses DISMISSED / EXPIRED (412 RECOMMENDATION_NOT_ELIGIBLE).
+  - Tenant-isolated (404 cross-workspace; no draft mutations).
+  - Transitions each child Draft via existing
+    `draftWorkflow.approveDraft`. When `scheduleAt` is provided,
+    follows with `draftWorkflow.scheduleDraft` (validates the
+    date — future-only).
+  - Idempotent: drafts already past APPROVED are skipped;
+    same-time SCHEDULED skips the re-schedule.
+  - Rec status: all children APPROVED → APPROVED; all SCHEDULED
+    + scheduleAt → SCHEDULED; any per-draft error → stays put
+    + status=partial_success.
+- New route:
+  `POST /api/v1/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/approve`
+  — owner-gated, audit-logged
+  (`autopilot.recommendation.approve.<status>`).
+- Convert is **deferred** per the audit's "intent unclear" note.
+  FE handler keeps the manual nav to `/create`; no server route
+  added, no visible 404.
+- `useApproveAutopilotCampaign` input updated to
+  `{ recommendationId, scheduleAt? }`. New
+  `AutopilotApproveResult` shape.
+- Campaign Inbox section's Approve button wired. Success alert
+  reports approved-count + any per-draft errors. No
+  "auto-publish" / "automatically posts" language.
+
+**No publish path added.** Drafts move to APPROVED / SCHEDULED
+only; the existing scheduled-publish worker handles SCHEDULED →
+PUBLISHED.
+
+**Tests:** 10 new (happy-path, schedule fan-out, idempotency,
+refusals, never-publishes guarantee, partial-failure). Suites:
+**API 856/856 passing; Web 272/272 passing; web typecheck clean.**
+
+**Lifecycle now fully wired**: NEEDS_REVIEW → DRAFT_GENERATED →
+APPROVED → SCHEDULED → DISMISSED / EXPIRED (terminal).
+
+**Next step:** Phase 5 — scheduler worker + run history. Wires
+the BullMQ worker that calls `runScheduledAutopilot` on an
+interval, persists `AutopilotRun` rows with per-tick counts, and
+augments the activity feed with run-level entries.

@@ -4958,6 +4958,48 @@ studioRouter.get(
   },
 );
 
+// Phase 4 — approve a recommendation (+ optionally schedule child drafts).
+studioRouter.post(
+  `${BASE}/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/approve`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { approveRecommendation, auditRecommendationEvent } = await import(
+        "./autopilotCampaignRecommendation.service.js"
+      );
+      const scheduleAt =
+        typeof req.body?.scheduleAt === "string" ? req.body.scheduleAt : null;
+      const result = await approveRecommendation({
+        clientId: req.params.id,
+        recommendationId: req.params.recommendationId,
+        userId: getAuth0Sub(req),
+        scheduleAt,
+      });
+      await auditRecommendationEvent(
+        req,
+        `autopilot.recommendation.approve.${result.status}`,
+        req.params.recommendationId,
+        {
+          clientId: req.params.id,
+          draftCount: result.drafts.length,
+          scheduledAt: scheduleAt,
+          partial: result.status === "partial_success",
+        },
+      );
+      const code =
+        result.status === "success" || result.status === "partial_success"
+          ? 201
+          : 200;
+      res.status(code).json(result);
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
 // Phase 3 — generate drafts from a recommendation.
 studioRouter.post(
   `${BASE}/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/generate`,

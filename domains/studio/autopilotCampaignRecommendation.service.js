@@ -752,3 +752,139 @@ export async function generateDraftsForRecommendation({
     recommendationId: rec.id,
   };
 }
+
+// ── Phase 4 — approve (+ optionally schedule) drafts on a rec ──────────
+//
+// Transitions each child draft via the existing draftWorkflow
+// service. Idempotent — drafts already past APPROVED are
+// skipped, not errored. No publish path; auto-publish stays out
+// of scope per docs/AUTOPILOT_PRODUCT_AUDIT.md §6.
+export async function approveRecommendation({
+  clientId,
+  recommendationId,
+  userId,
+  scheduleAt = null,
+}) {
+  if (!clientId || !recommendationId) {
+    throw Object.assign(new Error("clientId + recommendationId are required"), {
+      status: 400,
+      code: "BAD_INPUT",
+    });
+  }
+
+  const rec = await prisma.autopilotCampaignRecommendation.findFirst({
+    where: { id: recommendationId, clientId },
+  });
+  if (!rec) {
+    throw Object.assign(new Error("Recommendation not found"), {
+      status: 404,
+      code: "RECOMMENDATION_NOT_FOUND",
+    });
+  }
+  if (rec.status === "DISMISSED" || rec.status === "EXPIRED") {
+    throw Object.assign(
+      new Error(`Cannot approve a ${rec.status} recommendation.`),
+      { status: 412, code: "RECOMMENDATION_NOT_ELIGIBLE" },
+    );
+  }
+  if (!Array.isArray(rec.generatedDraftIds) || rec.generatedDraftIds.length === 0) {
+    throw Object.assign(
+      new Error("Generate drafts before approving the recommendation."),
+      { status: 400, code: "NO_GENERATED_DRAFTS" },
+    );
+  }
+
+  const { approveDraft, scheduleDraft } = await import("./draftWorkflow.service.js");
+
+  const childDrafts = await prisma.draft.findMany({
+    where: { id: { in: rec.generatedDraftIds }, clientId },
+    select: { id: true, status: true, channel: true, scheduledFor: true },
+  });
+
+  const outcomes = [];
+  for (const d of childDrafts) {
+    try {
+      let next = d;
+      // Approval step — skip when already past DRAFT/PENDING_REVIEW.
+      const needsApprove =
+        d.status === "DRAFT" || d.status === "PENDING_REVIEW";
+      if (needsApprove) {
+        next = await approveDraft(d.id, userId);
+      }
+      // Schedule step (optional). PUBLISHED is terminal — don't
+      // try to schedule a published draft. Same-time SCHEDULED
+      // is a no-op so a repeat click doesn't churn the row.
+      let scheduled = false;
+      if (scheduleAt && next.status !== "PUBLISHED") {
+        const sameTime =
+          next.status === "SCHEDULED" &&
+          next.scheduledFor &&
+          new Date(next.scheduledFor).getTime() === new Date(scheduleAt).getTime();
+        if (!sameTime) {
+          next = await scheduleDraft(d.id, scheduleAt, userId);
+        }
+        scheduled = true;
+      }
+      outcomes.push({
+        draftId: d.id,
+        channel: d.channel,
+        status: next.status,
+        scheduled,
+        skipped: !needsApprove && !scheduled,
+      });
+    } catch (err) {
+      console.error("[autopilot.rec.approve] draft transition failed:", {
+        clientId,
+        recommendationId,
+        draftId: d.id,
+        err: err?.message,
+      });
+      outcomes.push({
+        draftId: d.id,
+        channel: d.channel,
+        status: d.status,
+        scheduled: false,
+        skipped: false,
+        error: err?.message ?? "transition failed",
+      });
+    }
+  }
+
+  // Recommendation status decision:
+  //   - All children at-or-past APPROVED → rec APPROVED
+  //   - All children at-or-past SCHEDULED AND scheduleAt was given → SCHEDULED
+  //   - Otherwise leave rec status alone
+  const allApprovedOrPast = outcomes.every((o) =>
+    ["APPROVED", "SCHEDULED", "PUBLISHED"].includes(o.status),
+  );
+  const allScheduledOrPast =
+    Boolean(scheduleAt) &&
+    outcomes.every((o) => ["SCHEDULED", "PUBLISHED"].includes(o.status));
+
+  let nextRecStatus = rec.status;
+  if (allScheduledOrPast) nextRecStatus = "SCHEDULED";
+  else if (allApprovedOrPast) nextRecStatus = "APPROVED";
+
+  let updated = rec;
+  if (nextRecStatus !== rec.status) {
+    updated = await prisma.autopilotCampaignRecommendation.update({
+      where: { id: rec.id },
+      data: { status: nextRecStatus, decidedBy: userId },
+    });
+  }
+
+  const anyError = outcomes.some((o) => o.error);
+  const status = anyError
+    ? "partial_success"
+    : allScheduledOrPast || allApprovedOrPast
+      ? "success"
+      : "noop";
+
+  return {
+    status,
+    recommendation: toFrontendShape(updated),
+    recommendationId: rec.id,
+    drafts: outcomes,
+    scheduledAt: scheduleAt,
+  };
+}
