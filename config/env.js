@@ -158,6 +158,19 @@ export const env = {
     String(
       process.env.THREADS_ENABLED ?? process.env.THREADS_INTEGRATION_ENABLED ?? "true",
     ).toLowerCase() === "true",
+  // Autopilot scheduler — default OFF so a deploy doesn't start
+  // a fleet-wide eval loop on day one. When ENABLED is true, the
+  // autopilotEvaluatorWorker fires every INTERVAL_MIN minutes
+  // and calls runScheduledAutopilot for each opt-in workspace.
+  // The internal evaluate-all endpoint stays available either
+  // way for external cron + manual triggers.
+  AUTOPILOT_SCHEDULER_ENABLED:
+    String(process.env.AUTOPILOT_SCHEDULER_ENABLED ?? "false").toLowerCase() === "true",
+  AUTOPILOT_SCHEDULER_INTERVAL_MIN:
+    Number(process.env.AUTOPILOT_SCHEDULER_INTERVAL_MIN) > 0
+      ? Number(process.env.AUTOPILOT_SCHEDULER_INTERVAL_MIN)
+      : 360, // 6 hours default
+
   // Per-feature gate for the SquadInbox reply path. Default OFF
   // so a fresh deploy doesn't accidentally start posting public
   // replies on Threads. The resolver + outbound service both

@@ -268,6 +268,7 @@ let personaTrainingWorker;
 let gbpReviewPollerWorker;
 let youtubeCommentPollerWorker;
 let threadsReplyPollerWorker;
+let autopilotEvaluatorWorker;
 
 let server;
 (async () => {
@@ -354,6 +355,11 @@ let server;
         "./workers/threadsReplyPollerWorker.js"
       );
       threadsReplyPollerWorker = startThreadsReplyPollerWorker();
+
+      const { startAutopilotEvaluatorWorker } = await import(
+        "./workers/autopilotEvaluatorWorker.js"
+      );
+      autopilotEvaluatorWorker = startAutopilotEvaluatorWorker();
     }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
@@ -375,6 +381,7 @@ const shutdown = (sig) => async () => {
   try { if (gbpReviewPollerWorker) await gbpReviewPollerWorker.close(); } catch {}
   try { if (youtubeCommentPollerWorker) await youtubeCommentPollerWorker.close(); } catch {}
   try { if (threadsReplyPollerWorker) await threadsReplyPollerWorker.close(); } catch {}
+  try { if (autopilotEvaluatorWorker) await autopilotEvaluatorWorker.close(); } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
   } catch {}

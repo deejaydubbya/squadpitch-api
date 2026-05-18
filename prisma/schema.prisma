@@ -225,6 +225,7 @@ model Client {
   conversations        Conversation[]
   adPackages           AdPackage[]
   autopilotCampaignRecommendations AutopilotCampaignRecommendation[]
+  autopilotRuns                    AutopilotRun[]
 
   @@index([status])
   @@map("clients")
@@ -2273,4 +2274,56 @@ enum AutopilotRecommendationStatus {
   SCHEDULED
   DISMISSED
   EXPIRED
+}
+
+// ── Autopilot run history (Phase 5) ────────────────────────────────────
+//
+// One row per evaluator pass. Captures what the evaluator
+// decided + per-workspace counts, so the activity feed can show
+// "ran 3h ago — found 2 new opportunities" or "skipped: no
+// channels connected" instead of just per-draft history.
+//
+// Manual runs (user clicked "Run now"), scheduled runs (BullMQ
+// worker), and the internal evaluate-all loop all write here.
+// errorMessage is set when the evaluator threw — the rest of the
+// fields are still populated so we know which workspace failed
+// and why.
+model AutopilotRun {
+  id                      String                @id @default(cuid())
+  clientId                String
+  triggerSource           AutopilotRunSource
+  status                  AutopilotRunStatus
+  reason                  String?               @db.Text
+  recommendationsCreated  Int                   @default(0)
+  recommendationsUpdated  Int                   @default(0)
+  recommendationsExpired  Int                   @default(0)
+  // Snapshot of the settings + readiness at run time so a
+  // historical row stays meaningful even after the workspace's
+  // config changes.
+  settingsSnapshot        Json?
+  readinessSnapshot       Json?
+  startedAt               DateTime              @default(now())
+  finishedAt              DateTime?
+  errorMessage            String?               @db.Text
+  metadata                Json?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, startedAt])
+  @@index([startedAt])
+  @@map("autopilot_runs")
+}
+
+enum AutopilotRunSource {
+  MANUAL
+  SCHEDULED
+  EVENT
+}
+
+enum AutopilotRunStatus {
+  CREATED_RECOMMENDATIONS
+  UPDATED_RECOMMENDATIONS
+  NO_ACTION
+  SKIPPED
+  ERROR
 }

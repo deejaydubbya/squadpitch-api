@@ -1,12 +1,13 @@
 # Autopilot Product Audit
 
-**Status:** Phases 1 + 2 + 3 + 4 shipped. Phases 5–6 still planned.
+**Status:** Phases 1 + 2 + 3 + 4 + 5 shipped. Phase 6 still planned.
 **Repos audited:** squadpitch-api, squadpitch-web.
 **Baseline at audit:** API 813 passing, web typecheck clean.
 **After Phase 1:** API 823 passing, web 272 passing, web typecheck clean.
 **After Phase 2:** API 837 passing, web 272 passing, web typecheck clean.
 **After Phase 3:** API 846 passing, web 272 passing, web typecheck clean.
 **After Phase 4:** API 856 passing, web 272 passing, web typecheck clean.
+**After Phase 5:** API 865 passing, web 272 passing, web typecheck clean.
 
 ---
 
@@ -391,3 +392,74 @@ APPROVED → SCHEDULED → DISMISSED / EXPIRED (terminal).
 the BullMQ worker that calls `runScheduledAutopilot` on an
 interval, persists `AutopilotRun` rows with per-tick counts, and
 augments the activity feed with run-level entries.
+
+---
+
+## 13. Phase 5 Completion Note
+
+**Shipped:**
+
+- New Prisma model `AutopilotRun` + enums `AutopilotRunSource` /
+  `AutopilotRunStatus`. Migration
+  `20260518000002_autopilot_runs`. Indexed on
+  `(clientId, startedAt)`.
+- New service `domains/studio/autopilotRun.service.js`:
+  - `startRun` / `finishRun` — best-effort writes (a logging
+    failure NEVER fails the evaluator).
+  - `recordRun(opts, fn)` — wraps the evaluator: opens a run,
+    runs `fn`, finishes with the outcome. On throw, records
+    `ERROR` and re-throws.
+  - `listRuns({ clientId, limit, offset })` — paginated, FE-
+    shaped (status/source lowercased), empty workspace returns
+    `[]` (200, not 404).
+- `runAutopilot` and `runScheduledAutopilot` now share a single
+  evaluator body wrapped in `recordRun`. **Every tick writes an
+  `AutopilotRun` row** — including no-action, skipped, and error
+  ticks. The activity feed can finally explain WHY Autopilot
+  did nothing.
+- Internal endpoint protection:
+  `POST /api/v1/internal/autopilot/evaluate-all` now requires
+  `requireInternalAccess` (admin/developer). A normal user JWT
+  can no longer trigger a fleet-wide evaluation.
+- New endpoint `GET /api/v1/workspaces/:id/autopilot/runs`
+  (owner-gated, paginated, newest-first).
+- New BullMQ worker
+  `workers/autopilotEvaluatorWorker.js`. Default-OFF behind
+  `AUTOPILOT_SCHEDULER_ENABLED`. Interval configurable via
+  `AUTOPILOT_SCHEDULER_INTERVAL_MIN` (default 360 = 6h). Calls
+  `evaluateAllAutopilotWorkspaces` per tick. Registered in
+  `server.js` alongside the other periodic workers.
+- Frontend hook `useAutopilotRuns` + `AutopilotRun` type — UI
+  surfaces can render the run history (existing Activity card
+  can drop in a `useAutopilotRuns` call when ready).
+
+**Idempotency**: re-runs against the same `(clientId, triggerType,
+triggerObjectId)` opportunity continue to update rather than
+duplicate (composite unique on the recommendations table). The
+scheduler adds no new duplication surface — every tick goes
+through the same `upsertRecommendation` path Phase 2 wired.
+
+**No publish path added.** The scheduler creates / updates
+recommendations only. Drafts still require a user click on
+Generate (Phase 3). Approvals still require a user click on
+Approve (Phase 4).
+
+**New env vars:**
+- `AUTOPILOT_SCHEDULER_ENABLED` (default `false`)
+- `AUTOPILOT_SCHEDULER_INTERVAL_MIN` (default `360`)
+
+To turn the scheduler on in prod:
+```
+fly secrets set -a squadpitch-api AUTOPILOT_SCHEDULER_ENABLED=true
+```
+
+**Tests:** 9 new (startRun + finishRun + recordRun success/error
+paths, no_action / skipped / error rows persisted, listRuns
+tenant-scoped + empty-workspace + clamp). Suites: **API 865/865
+passing; Web 272/272 passing; web typecheck clean.**
+
+**Next step:** Phase 6 — final hardening + end-to-end test pass.
+Audit-doc-wide review, integration coverage across the full
+Inbox → Generate → Approve → Schedule chain, and the
+conditional re-introduction of `schedule_approved` / `auto_publish`
+modes behind workspace-level opt-in + a global kill switch.

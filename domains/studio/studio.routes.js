@@ -4850,12 +4850,14 @@ studioRouter.post(
 
 /**
  * POST /api/v1/internal/autopilot/evaluate-all
- * Internal endpoint — runs scheduled autopilot for all enabled workspaces.
- * Intended to be called by an external cron job (e.g. daily).
- * No workspace ownership check — protected by route prefix / API key in production.
+ * Internal endpoint — runs scheduled autopilot for all enabled
+ * workspaces. Intended for an external cron / our BullMQ worker.
+ * Phase 5 added requireInternalAccess so a normal user JWT can't
+ * trigger a fleet-wide evaluation.
  */
 studioRouter.post(
   `${BASE}/internal/autopilot/evaluate-all`,
+  requireInternalAccess,
   async (req, res, next) => {
     try {
       const result = await evaluateAllAutopilotWorkspaces();
@@ -4864,6 +4866,31 @@ studioRouter.post(
       next(err);
     }
   }
+);
+
+/**
+ * GET /api/v1/workspaces/:id/autopilot/runs
+ * Phase 5 — run history. Workspace-owner gated. Most recent
+ * first. Empty list returns 200.
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/autopilot/runs`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { listRuns } = await import("./autopilotRun.service.js");
+      const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 100);
+      const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+      const result = await listRuns({
+        clientId: req.params.id,
+        limit,
+        offset,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 /**

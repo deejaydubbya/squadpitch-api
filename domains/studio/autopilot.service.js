@@ -38,6 +38,7 @@ import {
   upsertRecommendation,
   expireStaleRecommendations,
 } from "./autopilotCampaignRecommendation.service.js";
+import { recordRun } from "./autopilotRun.service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AUTOPILOT_PROVIDER_KEY = "_autopilot_settings";
@@ -604,41 +605,7 @@ async function executeDraftPlan(workspaceId, plan, runMode) {
  * Creates at most one draft.
  */
 export async function runAutopilot(workspaceId, { mode = "event" } = {}) {
-  const preamble = await loadAutopilotContext(workspaceId);
-  if (preamble.action === "no_action") return preamble;
-
-  const { settings, reAssets, enabledChannels } = preamble;
-
-  // Phase 2 — evaluator emits CampaignRecommendation rows
-  // instead of creating Drafts. Draft generation is Phase 3's
-  // job, gated on the user clicking Generate from the Inbox.
-  const triggers = await evaluateTriggers(workspaceId, reAssets, settings);
-  const expired = await expireStaleRecommendations(workspaceId);
-  const summary = await detectAndPersistRecommendations({
-    workspaceId,
-    reAssets,
-    enabledChannels,
-  });
-
-  return {
-    action: summary.recommendationsCreated > 0 || summary.recommendationsUpdated > 0
-      ? "recommended"
-      : "no_action",
-    // Legacy fields preserved (now zero) so existing callers that
-    // iterate over `drafts` don't NPE.
-    drafts: [],
-    draftsCreated: 0,
-    // New fields the Phase 2 UI consumes.
-    recommendationsCreated: summary.recommendationsCreated,
-    recommendationsUpdated: summary.recommendationsUpdated,
-    recommendationsExpired: expired,
-    reason:
-      summary.recommendationsCreated + summary.recommendationsUpdated > 0
-        ? `Surfaced ${summary.recommendationsCreated + summary.recommendationsUpdated} campaign opportunit${summary.recommendationsCreated + summary.recommendationsUpdated === 1 ? "y" : "ies"}`
-        : "No new opportunities detected",
-    triggers,
-    mode,
-  };
+  return runEvaluatorAndRecord(workspaceId, mode === "scheduled" ? "SCHEDULED" : mode === "event" ? "EVENT" : "MANUAL", mode);
 }
 
 // ── Scheduled run (v2) ───────────────────────────────────────────────────
@@ -649,39 +616,71 @@ export async function runAutopilot(workspaceId, { mode = "event" } = {}) {
  * Uses content coverage for diversified planning.
  */
 export async function runScheduledAutopilot(workspaceId) {
-  const preamble = await loadAutopilotContext(workspaceId);
-  if (preamble.action === "no_action") return preamble;
+  return runEvaluatorAndRecord(workspaceId, "SCHEDULED", "scheduled");
+}
 
-  const { reAssets, enabledChannels } = preamble;
+// Shared evaluator body — same logic, single AutopilotRun row.
+// Captures preamble decisions (no_action / skipped) as run rows
+// too, so the activity feed can explain why Autopilot didn't act.
+async function runEvaluatorAndRecord(workspaceId, triggerSource, modeForResponse) {
+  return recordRun(
+    { clientId: workspaceId, triggerSource },
+    async () => {
+      const preamble = await loadAutopilotContext(workspaceId);
+      if (preamble.action === "no_action") {
+        return {
+          status: "SKIPPED",
+          reason: preamble.reason ?? "Preamble blocked the run.",
+          recommendationsCreated: 0,
+          recommendationsUpdated: 0,
+          recommendationsExpired: 0,
+          _runResponse: preamble,
+        };
+      }
+      const { reAssets, enabledChannels } = preamble;
+      const triggers = await evaluateTriggers(workspaceId, reAssets, preamble.settings);
+      const expired = await expireStaleRecommendations(workspaceId);
+      const summary = await detectAndPersistRecommendations({
+        workspaceId,
+        reAssets,
+        enabledChannels,
+      });
 
-  // Phase 2 — same as event-driven run: detect + persist
-  // recommendations + sweep expired. No draft generation here;
-  // the Inbox-side Generate button (Phase 3) creates drafts.
-  const triggers = await evaluateTriggers(workspaceId, reAssets, preamble.settings);
-  const expired = await expireStaleRecommendations(workspaceId);
-  const summary = await detectAndPersistRecommendations({
-    workspaceId,
-    reAssets,
-    enabledChannels,
-  });
+      const totalSurfaced = summary.recommendationsCreated + summary.recommendationsUpdated;
+      const status =
+        summary.recommendationsCreated > 0
+          ? "CREATED_RECOMMENDATIONS"
+          : summary.recommendationsUpdated > 0
+            ? "UPDATED_RECOMMENDATIONS"
+            : "NO_ACTION";
+      const reason =
+        totalSurfaced > 0
+          ? `Surfaced ${totalSurfaced} campaign opportunit${totalSurfaced === 1 ? "y" : "ies"}`
+          : "No new opportunities detected";
 
-  return {
-    action:
-      summary.recommendationsCreated > 0 || summary.recommendationsUpdated > 0
-        ? "recommended"
-        : "no_action",
-    drafts: [],
-    draftsCreated: 0,
-    recommendationsCreated: summary.recommendationsCreated,
-    recommendationsUpdated: summary.recommendationsUpdated,
-    recommendationsExpired: expired,
-    reason:
-      summary.recommendationsCreated + summary.recommendationsUpdated > 0
-        ? `Surfaced ${summary.recommendationsCreated + summary.recommendationsUpdated} campaign opportunit${summary.recommendationsCreated + summary.recommendationsUpdated === 1 ? "y" : "ies"}`
-        : "No new opportunities detected",
-    triggers,
-    mode: "scheduled",
-  };
+      return {
+        status,
+        reason,
+        recommendationsCreated: summary.recommendationsCreated,
+        recommendationsUpdated: summary.recommendationsUpdated,
+        recommendationsExpired: expired,
+        // Carry the user-facing response shape out via a private
+        // key the recordRun helper ignores; finishRun won't try
+        // to serialize it.
+        _runResponse: {
+          action: totalSurfaced > 0 ? "recommended" : "no_action",
+          drafts: [],
+          draftsCreated: 0,
+          recommendationsCreated: summary.recommendationsCreated,
+          recommendationsUpdated: summary.recommendationsUpdated,
+          recommendationsExpired: expired,
+          reason,
+          triggers,
+          mode: modeForResponse,
+        },
+      };
+    },
+  ).then((outcome) => outcome?._runResponse ?? null);
 }
 
 // ── Phase 2 detector — opportunities → recommendations ────────────────
