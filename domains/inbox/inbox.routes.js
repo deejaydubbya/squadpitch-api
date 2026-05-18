@@ -324,26 +324,77 @@ inboxRouter.post(
   },
 );
 
-// ── Twilio inbound webhook (foundation; opt-out handling) ──────────────
+// ── Twilio inbound webhook (signature-verified) ────────────────────────
 //
-// Twilio POSTs here when a contact replies. We handle STOP /
-// HELP / START at the carrier level (Twilio's Advanced Opt-Out
-// also handles these automatically once 10DLC is registered, so
-// this is defense-in-depth). When a STOP arrives we flip
+// Twilio POSTs here when a contact replies. We verify the
+// X-Twilio-Signature header BEFORE any DB write — without it a
+// public caller could flip arbitrary contacts to smsOptOut=true.
+// Signature is HMAC-SHA1 of (URL + sorted form params) using
+// TWILIO_AUTH_TOKEN as the key. The URL must EXACTLY match what
+// Twilio used to call us, so we read it from
+// env.TWILIO_INBOUND_WEBHOOK_URL instead of reconstructing from
+// req — Fly's proxy headers can drift.
+//
+// On STOP/STOPALL/UNSUBSCRIBE/CANCEL/END/QUIT we flip
 // Contact.enrichmentJson.smsOptOut=true so the outbound service
-// short-circuits any future send to that contact.
-//
-// Real inbound message ingestion (turning their reply into a
-// SquadInbox Message) is a follow-up — for now we just record
-// opt-out state. Webhook signature verification is the planned
-// next iteration; the route is public-readable by Twilio so the
-// stub returns 200 OK to satisfy Twilio's delivery check.
+// short-circuits any future send to that contact. Real inbound
+// message ingestion (turning their reply into a SquadInbox
+// Message) is a follow-up.
+// Twilio POSTs application/x-www-form-urlencoded by default. The
+// global body parser in server.js only handles JSON, so we attach
+// an urlencoded parser scoped to JUST this route. extended:false
+// keeps the parsed shape flat (Twilio params are all top-level
+// strings — From, Body, MessageSid, etc.).
+const twilioWebhookBody = express.urlencoded({ extended: false, limit: "256kb" });
+
 inboxRouter.post(
   `${BASE}/inbox/webhooks/twilio/inbound`,
-  // No requireClientOwner — Twilio is the caller. TODO: verify
-  // X-Twilio-Signature header against env.TWILIO_AUTH_TOKEN
-  // before doing any DB write in a future iteration.
+  twilioWebhookBody,
+  // No requireClientOwner — Twilio is the caller. The signature
+  // check below is the only thing that gates this route.
   async (req, res) => {
+    const { env } = await import("../../config/env.js");
+    const signature = req.get?.("x-twilio-signature") ?? null;
+    if (!signature) {
+      return sendError(
+        res,
+        403,
+        "MISSING_SIGNATURE",
+        "X-Twilio-Signature header is required.",
+      );
+    }
+    if (!env.TWILIO_AUTH_TOKEN) {
+      // We can't validate without the secret — refuse rather than
+      // silently accept. (Shouldn't happen in prod; defensive.)
+      return sendError(
+        res,
+        403,
+        "WEBHOOK_NOT_CONFIGURED",
+        "Twilio webhook validation is not configured on the server.",
+      );
+    }
+    let valid = false;
+    try {
+      const twilio = await import("twilio");
+      valid = twilio.default.validateRequest(
+        env.TWILIO_AUTH_TOKEN,
+        signature,
+        env.TWILIO_INBOUND_WEBHOOK_URL,
+        req.body ?? {},
+      );
+    } catch (err) {
+      console.error("[INBOX_INBOUND_SMS] signature verify threw:", err?.message);
+      valid = false;
+    }
+    if (!valid) {
+      return sendError(
+        res,
+        403,
+        "INVALID_SIGNATURE",
+        "Twilio signature failed verification.",
+      );
+    }
+
     try {
       const from = typeof req.body?.From === "string" ? req.body.From : null;
       const text = typeof req.body?.Body === "string" ? req.body.Body : "";

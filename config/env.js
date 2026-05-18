@@ -202,6 +202,17 @@ export const env = {
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
   TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
+  // Exact public URL Twilio uses to POST inbound SMS to us.
+  // Required for X-Twilio-Signature verification — the HMAC is
+  // computed over (URL + sorted form params), and Fly's proxy
+  // headers can make in-process URL reconstruction unreliable
+  // (req.protocol, req.headers.host etc. may not reflect what
+  // Twilio actually called). Default falls back to the prod URL
+  // so a deploy without the secret still validates correctly in
+  // production; dev/staging should override.
+  TWILIO_INBOUND_WEBHOOK_URL:
+    process.env.TWILIO_INBOUND_WEBHOOK_URL ??
+    "https://squadpitch-api.fly.dev/api/v1/inbox/webhooks/twilio/inbound",
   // SMS sending gates. Two independently-flippable flags so the
   // workspace can hold sending back even after A2P approval lands
   // (or vice versa — flip A2P_APPROVED to acknowledge approval
