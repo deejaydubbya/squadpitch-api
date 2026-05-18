@@ -717,7 +717,13 @@ export const ContentPreferencesUpdateSchema = z.object({
 
 export const AutopilotSettingsSchema = z.object({
   enabled: z.boolean().optional(),
-  mode: z.enum(["off", "draft_only", "schedule_approved", "auto_publish"]).optional(),
+  // Only the two supported modes accept saves. schedule_approved
+  // and auto_publish were exposed before the Phase 1 alignment
+  // (docs/AUTOPILOT_PRODUCT_AUDIT.md) — neither was ever wired,
+  // so we refuse the save rather than silently store a value the
+  // evaluator can't honor. Existing rows with the legacy modes
+  // are normalized on read.
+  mode: z.enum(["off", "draft_only"]).optional(),
   // Channel permissions
   preferredChannels: z.array(ChannelEnum).max(6).optional(),
   // Content source permissions

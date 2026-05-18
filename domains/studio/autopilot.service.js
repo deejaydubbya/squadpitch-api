@@ -42,7 +42,7 @@ const AUTOPILOT_PROVIDER_KEY = "_autopilot_settings";
 
 const DEFAULT_SETTINGS = {
   enabled: false,
-  mode: "off",                  // "off" | "draft_only" | "schedule_approved" | "auto_publish"
+  mode: "off",                  // "off" | "draft_only" (Phase 1 — see docs/AUTOPILOT_PRODUCT_AUDIT.md)
   preferredChannels: [],        // e.g. ["FACEBOOK", "INSTAGRAM"]
   maxDraftsPerWeek: 3,
   maxDraftsPerDay: 2,
@@ -66,8 +66,20 @@ export async function getAutopilotSettings(workspaceId) {
     where: { workspaceId_providerKey: { workspaceId, providerKey: AUTOPILOT_PROVIDER_KEY } },
   });
   const merged = { ...DEFAULT_SETTINGS, ...(row?.metadataJson ?? {}) };
-  // Backward compat: map old "draft_assist" → "draft_only"
-  if (merged.mode === "draft_assist") merged.mode = "draft_only";
+  // Backward compat — map legacy / removed modes to the closest
+  // supported one. Phase 1 of the audit pulled schedule_approved
+  // and auto_publish because neither was wired; a workspace
+  // somewhere may still have one of these saved, and we don't want
+  // the UI to render "Schedule Approved" for a mode the evaluator
+  // can't honor. Normalize to draft_only so the workspace stays
+  // in a safe state until they explicitly pick a mode.
+  if (
+    merged.mode === "draft_assist" ||
+    merged.mode === "schedule_approved" ||
+    merged.mode === "auto_publish"
+  ) {
+    merged.mode = "draft_only";
+  }
   return merged;
 }
 
@@ -894,11 +906,10 @@ export async function getAutopilotReadiness(workspaceId) {
   ];
 
   const ready = checks.every((c) => c.met);
+  // Phase 1 — only the two production-ready modes are surfaced.
+  // schedule_approved + auto_publish were pulled (audit doc) until
+  // the recommendation-persistence + scheduler-worker phases land.
   const availableModes = ["off", "draft_only"];
-  if (ready && connectedChannels.length > 0) {
-    availableModes.push("schedule_approved");
-    // auto_publish gated for now
-  }
 
   return {
     ready,

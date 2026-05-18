@@ -1,0 +1,205 @@
+# Autopilot Product Audit
+
+**Status:** Phase 1 shipped. Phases 2–6 still planned.
+**Repos audited:** squadpitch-api, squadpitch-web.
+**Baseline at audit:** API 813 passing, web typecheck clean.
+**After Phase 1:** API 823 passing, web 272 passing, web typecheck clean.
+
+---
+
+## 1. Autopilot Product Definition (canonical)
+
+Squadpitch Autopilot is an **opportunity-driven marketing assistant** for the
+real-estate workspace.
+
+It monitors a workspace's business data, detects timely marketing opportunities,
+recommends campaigns, and generates channel-specific drafts for review.
+**Autopilot does not publish content without user approval in the initial
+production version.** Primary purpose: help businesses consistently market
+important events, listings, offers, reviews, and seasonal opportunities without
+needing to manually decide what to create next.
+
+Autopilot is **not**:
+
+- A random daily AI post generator
+- A generic scheduler
+- An auto-publisher
+- A "set it and forget it" system yet
+- A replacement for user approval in the MVP
+
+**MVP surface:** *Autopilot Campaign Inbox* — the workspace owner sees
+recommendation rows like "Open House this Saturday — generate a 3-post
+campaign?" with a clear explanation, the underlying business object, the
+recommended channels, and an action set (preview, generate, edit,
+approve/schedule, dismiss).
+
+**Industry scope:** Real estate only. Car sales planned, not implemented.
+
+---
+
+## 2. Current Systems Map
+
+| System / File | What it does | FE uses it? | BE route | MVP fit? | Recommendation |
+|---|---|---|---|---|---|
+| `autopilot.service.js` | Scheduled rule-based evaluator. Picks 0–2 angles per run, creates Drafts tagged `createdBy: "system:autopilot"`. Real-estate gated. | Indirectly via `useAutopilotStatus`, `useAutopilotActivity`, `useAutopilotReadiness`, `useAutopilotSettings` | `POST /autopilot/run`, `/scheduled-run`, `/internal/.../evaluate-all`, `GET status\|readiness\|activity`, `GET/PUT settings` | Partial — produces drafts, not campaigns. | **Keep + refactor in Phase 2.** Rewire output target from "create Draft" to "create CampaignRecommendation". |
+| `dataAwareAutopilot.service.js` | User-triggered preview + batch-execute. | `AutopilotPanel.tsx` | `POST /autopilot/preview`, `/execute` | Misaligned — conflates suggest + draft in one click. | **Merge in Phase 3.** Preview side useful; execute should write drafts only after a CampaignRecommendation is approved. |
+| `recommendationEngine.service.js` | Shared scoring/ranking engine used by Dashboard, Create Content, Listing Campaign. ~1950 lines. | Multiple non-autopilot surfaces | Various | Reusable building block. | **Keep.** Extract the "what to recommend" half as the input to the new CampaignRecommendation persister. |
+| `plannerSuggestion.service.js` | Calendar planner ghost suggestions. | Calendar/planner UI | `getPlannerSuggestions`, `planMyWeek`, `swapSuggestion` | Out of scope. | **Keep separate.** |
+| `aiGenerationService.js` | Model-agnostic OpenAI facade. | All draft generation | Indirect | Primitive. | **Keep.** |
+| `draftWorkflow.service.js` | Draft state machine: DRAFT → APPROVED → SCHEDULED/PUBLISHED. | Draft approval surfaces | `POST /drafts/:id/transition` | Yes. | **Keep.** Use as the back half of the campaign approval flow. |
+| `publishingService.js` | Routes to channel adapter. No auto-publish path anywhere. | User-initiated publish | `POST /drafts/:id/publish` | Yes — only user-initiated. | **Keep + don't extend with auto-publish.** |
+| `workers/` autopilot | **None.** External cron hits `/internal/.../evaluate-all`. | n/a | n/a | Acceptable for MVP. | Add BullMQ worker in Phase 5. |
+| Prisma models | `WorkspaceTechStackConnection` with `providerKey="_autopilot_settings"` only. **No model persists recommendation lifecycle.** | n/a | n/a | Misaligned. | **Add `AutopilotCampaignRecommendation` + `AutopilotRun` in Phase 2.** |
+
+---
+
+## 3. Frontend ↔ API Contract
+
+The web side already calls a fully-formed Campaign Inbox API. Most of it
+**did not exist on the backend** — every `useAutopilotCampaign*` hook 404'd
+until Phase 1 gated them behind a feature flag.
+
+| Frontend caller | Endpoint | BE? | Phase 1 status | Recommended fix |
+|---|---|---|---|---|
+| `useAutopilotPreview` | `POST /autopilot/preview` | ✅ | Still wired | Keep; pivot output shape in Phase 2. |
+| `useAutopilotExecute` | `POST /autopilot/execute` | ✅ | Still wired | Phase 3 — replace with `/campaign-recommendations/:id/generate`. |
+| `useAutopilotSettings` GET/PUT | `/autopilot/settings` | ✅ | Mode enum trimmed to `off \| draft_only`. | Keep. |
+| `useAutopilotReadiness` | `GET /autopilot/readiness` | ✅ | `availableModes` trimmed accordingly. | Keep. |
+| `useAutopilotActivity` | `GET /autopilot/activity` | ✅ | Still wired | Keep; augment in Phase 5. |
+| `useAutopilotStatus` | `GET /autopilot/status` | ✅ | Still wired | Keep. |
+| `useAutopilotCampaignRecommendations` | `GET /autopilot/campaign-recommendations` | ❌ | **Gated by `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED`; never fires today.** | Phase 2 — build endpoint + flip flag. |
+| `useAutopilotCampaignStats` | `GET /autopilot/campaign-stats` | ❌ | **Same gate.** | Phase 2. |
+| `useGenerateAutopilotCampaign` | `POST /autopilot/campaign-recommendations/:id/generate` | ❌ | Section never renders; mutation never fires. | Phase 3. |
+| `useApproveAutopilotCampaign` | `POST /autopilot/campaign-recommendations/:id/approve` | ❌ | Same. | Phase 4. |
+| `useDismissAutopilotCampaign` | `POST /autopilot/campaign-recommendations/:id/dismiss` | ❌ | Same. | Phase 2. |
+| `useConvertAutopilotCampaign` | `POST /autopilot/campaign-recommendations/:id/convert` | ❌ | Same. | Defer to Phase 4. |
+
+---
+
+## 4. Campaign Recommendation Lifecycle
+
+```
+detected         — evaluator found a trigger (price drop, new listing, etc.)
+needs_review     — surfaced to the workspace user
+draft_generated  — user clicked "Generate drafts"; channel-specific drafts created
+approved         — user reviewed + approved (drafts → APPROVED)
+scheduled        — approved drafts queued via existing draftWorkflow
+dismissed        — user dismissed
+expired          — opportunity passed; auto-set by next evaluator run
+```
+
+**Storage requirement (Phase 2):** `AutopilotCampaignRecommendation` row per
+opportunity:
+
+- `id`, `clientId`, `createdAt`, `expiresAt`
+- `triggerType` enum (NEW_LISTING / PRICE_DROP / OPEN_HOUSE / JUST_SOLD /
+  STALE_LISTING / NEW_REVIEW / MARKET_UPDATE / SEASONAL / INACTIVITY_GAP)
+- `triggerObjectType` + `triggerObjectId` — what business object kicked it off
+- `status` enum (NEEDS_REVIEW / DRAFT_GENERATED / APPROVED / SCHEDULED /
+  DISMISSED / EXPIRED)
+- `headline`, `whatWeNoticed`, `whyItMatters`
+- `recommendedChannels` String[]
+- `recommendedAngles` Json
+- `generatedDraftIds` String[]
+- `dismissedReason` String?
+- `decidedBy` String?
+- Unique `(clientId, triggerType, triggerObjectId)` to **prevent duplicates**.
+
+---
+
+## 5. Real Estate Opportunity Types
+
+| Trigger | Detects | Object | Default channels |
+|---|---|---|---|
+| NEW_LISTING | New listing added in last N days. | Listing | IG, FB, LinkedIn |
+| PRICE_DROP | Listing price decreased. | Listing | IG, FB |
+| OPEN_HOUSE | Listing open_house in next 7 days. | Listing.events | IG, FB, Threads |
+| JUST_SOLD | Listing status flipped to "sold." | Listing | IG, FB, LinkedIn |
+| STALE_LISTING | Listing active >30 days without refresh. | Listing | IG, FB |
+| NEW_REVIEW | New GBP 4+ star review. | Review | IG, FB, LinkedIn |
+| MARKET_UPDATE | Fresh monthly/weekly market data. | Market data | LinkedIn, FB |
+| SEASONAL | Calendar event (spring buyers, fall family moves). | Calendar | IG, FB |
+| INACTIVITY_GAP | Workspace hasn't published in N days. | n/a | All connected |
+
+---
+
+## 6. What Not To Build Yet
+
+- **No auto-publish.** Pulled from mode enum in Phase 1.
+- **No fully autonomous ads.** SquadAds is separate.
+- **No SMS blast automation.** SMS gated on A2P 10DLC anyway.
+- **No non–real-estate industries.** Backend gated on `industryKey === "real_estate"`.
+- **No random daily content.** Every recommendation points at a concrete
+  business object; INACTIVITY_GAP is the only event-free trigger.
+
+---
+
+## 7. Phased Build Plan
+
+### Phase 1 — Truthful UI/API alignment ✅ SHIPPED (see §9)
+### Phase 2 — Persist campaign recommendations
+- Add `AutopilotCampaignRecommendation` + `AutopilotRun` Prisma models.
+- Wire `GET /autopilot/campaign-recommendations`, `GET /autopilot/campaign-stats`,
+  `POST .../dismiss`.
+- Modify evaluator to emit recommendation rows instead of drafts.
+- Flip `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED=true` after rollout.
+
+### Phase 3 — Generate drafts from a recommendation
+- `POST /campaign-recommendations/:id/generate` fans out across channels.
+- Idempotent: returns existing drafts when called twice.
+- Channel filter intersects with publishable channels.
+
+### Phase 4 — Approval + scheduling workflow
+- `POST /campaign-recommendations/:id/approve` — transitions rec + drafts via
+  existing `draftWorkflow`. Optional `scheduleAt` per draft.
+- Optional `convert` endpoint materializes the rec as a real `Campaign` row.
+
+### Phase 5 — Scheduler, run history, idempotency
+- BullMQ worker `autopilotEvaluatorWorker.js`, repeating every 6h.
+- `AutopilotRun` tracks per-evaluation: `evaluatedAt`, counts, errors.
+- Activity feed augmented with run-level entries.
+
+### Phase 6 — Auto-publish behind kill switch (deferred)
+- Reintroduce `schedule_approved` / `auto_publish` modes guarded by
+  workspace-level opt-in + global env kill switch.
+
+---
+
+## 8. Recommended Next Implementation Prompt
+
+Phase 2: persistent `AutopilotCampaignRecommendation` model + the three
+read/dismiss endpoints that the UI already speaks.
+
+---
+
+## 9. Phase 1 Completion Note
+
+**Shipped (no new backend routes/models/evaluator changes):**
+
+- `AutopilotSettings.mode` enum trimmed to `["off", "draft_only"]` on API
+  schema (rejects `auto_publish` / `schedule_approved` on save).
+- `getAutopilotSettings` normalizes legacy stored modes
+  (`auto_publish` / `schedule_approved` / `draft_assist`) → `draft_only` on
+  read so existing workspaces don't render an unsupported mode.
+- `getAutopilotReadiness.availableModes` no longer surfaces `schedule_approved`.
+- Web `AutopilotMode` union shrunk to match.
+- Mode label maps in `autopilot/page.tsx`, `settings/autopilot/page.tsx`,
+  `AutopilotStatusCard.tsx` reduced to the two supported modes. Copy
+  swapped from "Draft Only" → "Prepare drafts for review."
+- New feature flag `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED`
+  (default false) at `src/lib/autopilotCampaignInbox.ts`.
+- `useAutopilotCampaignRecommendations` + `useAutopilotCampaignStats` are
+  hook-level gated on the flag — the 404-prone queries never fire today.
+- `AutopilotCampaignsSection` renders a coming-soon empty state when the
+  flag is off; component tree preserved so Phase 2 wiring needs no UI
+  rewrite. `AutopilotInboxBanner` returns null behind the same flag.
+
+**No backend routes, no Prisma models, no evaluator changes.**
+
+**Tests:** 10 new API tests (mode-enum + legacy normalization), 3 new web
+tests (flag default + true/false discrimination). Suites:
+**API 823/823 passing; Web 272/272 passing; web typecheck clean.**
+
+**Next step:** Phase 2 — persistent `AutopilotCampaignRecommendation` model
++ read/dismiss endpoints. Flip `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED`
+after rollout.
