@@ -409,3 +409,346 @@ export async function auditRecommendationEvent(req, action, recommendationId, me
     metadata,
   });
 }
+
+// ── Phase 3 — generate drafts from a recommendation ───────────────────
+//
+// Given a NEEDS_REVIEW recommendation (or already DRAFT_GENERATED
+// — idempotent case), plan per channel, call the existing
+// generateDraft primitive once per channel, store the resulting
+// Draft ids back on the recommendation, and flip status to
+// DRAFT_GENERATED.
+//
+// Idempotency: if generatedDraftIds is already non-empty we
+// return those drafts unchanged rather than firing a new
+// fan-out — defense for double-clicks + the user re-opening the
+// panel after a slow generation.
+
+// Trigger-type → draft plan. Returns the per-channel angle, the
+// templateType the existing aiGenerationService recognizes, and
+// the media requirements.
+function planForRecommendation(rec) {
+  const payload =
+    rec.payloadJson && typeof rec.payloadJson === "object" ? rec.payloadJson : {};
+  const dataItemId =
+    rec.triggerObjectType === "listing" ? rec.triggerObjectId : null;
+  const propertyTitle =
+    typeof payload.propertyTitle === "string" ? payload.propertyTitle : "your listing";
+  const baseGuidance = (extra) =>
+    `${rec.whatWeNoticed}\n\n${rec.whyItMatters}${extra ? `\n\n${extra}` : ""}`;
+
+  switch (rec.triggerType) {
+    case "NEW_LISTING":
+      return {
+        defaultChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"],
+        requiresImage: ["INSTAGRAM"],
+        items: [
+          {
+            angle: "just_listed",
+            templateType: "just_listed",
+            kind: "POST",
+            guidance: baseGuidance(
+              `Create a Just Listed post for ${propertyTitle}. Lead with the address + a single standout feature.`,
+            ),
+            dataItemId,
+          },
+        ],
+      };
+    case "OPEN_HOUSE":
+      return {
+        defaultChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"],
+        requiresImage: ["INSTAGRAM"],
+        items: [
+          {
+            angle: "open_house_invite",
+            templateType: "open_house",
+            kind: "POST",
+            guidance: baseGuidance(
+              `Open house invite for ${propertyTitle}. Include date/time + a single reason to attend.`,
+            ),
+            dataItemId,
+          },
+        ],
+      };
+    case "PRICE_DROP":
+      return {
+        defaultChannels: ["INSTAGRAM", "FACEBOOK"],
+        requiresImage: ["INSTAGRAM"],
+        items: [
+          {
+            angle: "price_drop_alert",
+            templateType: "price_drop_alert",
+            kind: "POST",
+            guidance: baseGuidance(
+              `Price reduction alert for ${propertyTitle}. Emphasize the new price + urgency.`,
+            ),
+            dataItemId,
+          },
+        ],
+      };
+    case "JUST_SOLD":
+      return {
+        defaultChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"],
+        requiresImage: ["INSTAGRAM"],
+        items: [
+          {
+            angle: "just_sold",
+            templateType: "listing_post",
+            kind: "POST",
+            guidance: baseGuidance(
+              `Just Sold success post for ${propertyTitle}. Celebrate the close without dollar amounts unless the seller approved sharing.`,
+            ),
+            dataItemId,
+          },
+        ],
+      };
+    case "STALE_LISTING":
+      return {
+        defaultChannels: ["INSTAGRAM", "FACEBOOK"],
+        requiresImage: ["INSTAGRAM"],
+        items: [
+          {
+            angle: "re_feature",
+            templateType: "featured_property",
+            kind: "POST",
+            guidance: baseGuidance(
+              `Re-introduce ${propertyTitle} with a fresh angle — buyer persona, lifestyle, or upgrade highlight.`,
+            ),
+            dataItemId,
+          },
+        ],
+      };
+    case "NEW_REVIEW":
+      return {
+        defaultChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"],
+        requiresImage: [],
+        items: [
+          {
+            angle: "testimonial_quote",
+            templateType: "client_testimonial",
+            kind: "POST",
+            guidance: baseGuidance(
+              `Testimonial post built around the recent ${payload.stars ?? "5"}-star review.`,
+            ),
+          },
+        ],
+      };
+    case "INACTIVITY_GAP":
+      return {
+        defaultChannels: ["INSTAGRAM", "FACEBOOK"],
+        requiresImage: [],
+        items: [
+          {
+            angle: "evergreen_reactivation",
+            templateType: "brand_authority",
+            kind: "POST",
+            // [NO_DATA_IDEA_POST] marker triggers aiGenerationService's
+            // educational/idea path — no listing references invented.
+            guidance:
+              "[NO_DATA_IDEA_POST] " +
+              baseGuidance(
+                "Re-engagement post — share a piece of real-estate expertise that re-introduces your services without referencing a specific property.",
+              ),
+          },
+        ],
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Generate drafts for a recommendation.
+ *
+ * @returns {{
+ *   status: 'success' | 'partial_success' | 'noop' | 'failed',
+ *   drafts: Array<{id, channel, status, templateType}>,
+ *   skipped: Array<{channel, reason}>,
+ *   recommendation: object,
+ *   recommendationId: string,
+ *   alreadyGenerated?: boolean,
+ *   reason?: string,
+ * }}
+ */
+export async function generateDraftsForRecommendation({
+  clientId,
+  recommendationId,
+  userId,
+}) {
+  if (!clientId || !recommendationId) {
+    throw Object.assign(new Error("clientId + recommendationId are required"), {
+      status: 400,
+      code: "BAD_INPUT",
+    });
+  }
+
+  const rec = await prisma.autopilotCampaignRecommendation.findFirst({
+    where: { id: recommendationId, clientId },
+  });
+  if (!rec) {
+    throw Object.assign(new Error("Recommendation not found"), {
+      status: 404,
+      code: "RECOMMENDATION_NOT_FOUND",
+    });
+  }
+  if (rec.status === "DISMISSED" || rec.status === "EXPIRED") {
+    throw Object.assign(
+      new Error(`Cannot generate drafts for a ${rec.status} recommendation.`),
+      { status: 412, code: "RECOMMENDATION_NOT_ELIGIBLE" },
+    );
+  }
+
+  // Idempotency: if drafts already exist, return them unchanged.
+  if (Array.isArray(rec.generatedDraftIds) && rec.generatedDraftIds.length > 0) {
+    const existing = await prisma.draft.findMany({
+      where: { id: { in: rec.generatedDraftIds }, clientId },
+      select: { id: true, channel: true, status: true, bucketKey: true },
+    });
+    return {
+      status: "noop",
+      alreadyGenerated: true,
+      drafts: existing.map((d) => ({
+        id: d.id,
+        channel: d.channel,
+        status: d.status,
+        templateType: d.bucketKey,
+      })),
+      skipped: [],
+      recommendation: toFrontendShape(rec),
+      recommendationId: rec.id,
+    };
+  }
+
+  const plan = planForRecommendation(rec);
+  if (!plan) {
+    throw Object.assign(
+      new Error(`No draft plan for trigger ${rec.triggerType} yet.`),
+      { status: 501, code: "TRIGGER_NOT_SUPPORTED" },
+    );
+  }
+
+  // Channel intersection: recommended ∩ enabled workspace channels.
+  const enabledRows = await prisma.channelSettings.findMany({
+    where: { clientId, isEnabled: true },
+    select: { channel: true },
+  });
+  const enabled = new Set(enabledRows.map((r) => r.channel));
+  const recommended =
+    Array.isArray(rec.recommendedChannels) && rec.recommendedChannels.length > 0
+      ? rec.recommendedChannels
+      : plan.defaultChannels;
+
+  const skipped = [];
+  for (const c of recommended) {
+    if (!enabled.has(c)) {
+      skipped.push({ channel: c, reason: "Channel is not enabled for this workspace." });
+    }
+  }
+  const candidateChannels = recommended.filter((c) => enabled.has(c));
+
+  // Media-requirement gate. Today the only check is Instagram +
+  // a propertyImageUrl in the payload. Future channels extend
+  // via plan.requiresImage.
+  const hasImage =
+    typeof rec.payloadJson?.propertyImageUrl === "string" &&
+    rec.payloadJson.propertyImageUrl.length > 0;
+  const eligibleChannels = candidateChannels.filter((c) => {
+    if (plan.requiresImage.includes(c) && !hasImage) {
+      skipped.push({
+        channel: c,
+        reason: "Recommendation has no image; Instagram drafts need media.",
+      });
+      return false;
+    }
+    return true;
+  });
+
+  if (eligibleChannels.length === 0) {
+    return {
+      status: "failed",
+      drafts: [],
+      skipped,
+      recommendation: toFrontendShape(rec),
+      recommendationId: rec.id,
+      reason:
+        skipped.length > 0
+          ? `No eligible channels: ${skipped.map((s) => `${s.channel} (${s.reason})`).join("; ")}`
+          : "No channels available to generate drafts for.",
+    };
+  }
+
+  const angle = plan.items[0];
+  // Lazy-import to keep the read-side hot path cheap.
+  const { generateDraft } = await import("./generation/aiGenerationService.js");
+  const createdDrafts = [];
+  for (const channel of eligibleChannels) {
+    try {
+      const draft = await generateDraft({
+        clientId,
+        kind: angle.kind,
+        channel,
+        bucketKey: angle.templateType,
+        guidance: angle.guidance,
+        templateType: angle.templateType,
+        createdBy: "system:autopilot",
+        dataItemId: angle.dataItemId ?? undefined,
+        userId,
+        recommendationId: rec.id,
+        contentAngle: angle.angle,
+      });
+      // aiGenerationService returns a Draft with status=FAILED on
+      // provider error rather than throwing. Don't count those.
+      if (!draft || draft.status === "FAILED") {
+        skipped.push({
+          channel,
+          reason: "Draft generation failed; see logs.",
+        });
+        continue;
+      }
+      createdDrafts.push({
+        id: draft.id,
+        channel: draft.channel,
+        status: draft.status,
+        templateType: draft.bucketKey ?? angle.templateType,
+      });
+    } catch (err) {
+      console.error("[autopilot.rec.generate] generateDraft threw:", {
+        clientId,
+        recommendationId: rec.id,
+        channel,
+        err: err?.message,
+      });
+      skipped.push({ channel, reason: err?.message ?? "Generation error" });
+    }
+  }
+
+  if (createdDrafts.length === 0) {
+    // All channels failed — DO NOT flip status. The rec stays
+    // NEEDS_REVIEW so the user can retry once the underlying
+    // issue is resolved.
+    return {
+      status: "failed",
+      drafts: [],
+      skipped,
+      recommendation: toFrontendShape(rec),
+      recommendationId: rec.id,
+      reason: "All channel generations failed.",
+    };
+  }
+
+  // At least one success — store ids + flip status.
+  const updated = await prisma.autopilotCampaignRecommendation.update({
+    where: { id: rec.id },
+    data: {
+      status: "DRAFT_GENERATED",
+      generatedDraftIds: createdDrafts.map((d) => d.id),
+    },
+  });
+
+  return {
+    status: skipped.length > 0 ? "partial_success" : "success",
+    drafts: createdDrafts,
+    skipped,
+    recommendation: toFrontendShape(updated),
+    recommendationId: rec.id,
+  };
+}

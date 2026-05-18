@@ -4958,6 +4958,44 @@ studioRouter.get(
   },
 );
 
+// Phase 3 — generate drafts from a recommendation.
+studioRouter.post(
+  `${BASE}/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/generate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const {
+        generateDraftsForRecommendation,
+        auditRecommendationEvent,
+      } = await import("./autopilotCampaignRecommendation.service.js");
+      const result = await generateDraftsForRecommendation({
+        clientId: req.params.id,
+        recommendationId: req.params.recommendationId,
+        userId: getAuth0Sub(req),
+      });
+      await auditRecommendationEvent(
+        req,
+        `autopilot.recommendation.generate.${result.status}`,
+        req.params.recommendationId,
+        {
+          clientId: req.params.id,
+          draftCount: result.drafts.length,
+          skippedCount: result.skipped.length,
+          alreadyGenerated: Boolean(result.alreadyGenerated),
+        },
+      );
+      const code =
+        result.status === "success" || result.status === "partial_success" ? 201 : 200;
+      res.status(code).json(result);
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
 studioRouter.post(
   `${BASE}/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/dismiss`,
   requireClientOwner,

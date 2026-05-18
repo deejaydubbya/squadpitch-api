@@ -1,10 +1,11 @@
 # Autopilot Product Audit
 
-**Status:** Phases 1 + 2 shipped. Phases 3–6 still planned.
+**Status:** Phases 1 + 2 + 3 shipped. Phases 4–6 still planned.
 **Repos audited:** squadpitch-api, squadpitch-web.
 **Baseline at audit:** API 813 passing, web typecheck clean.
 **After Phase 1:** API 823 passing, web 272 passing, web typecheck clean.
 **After Phase 2:** API 837 passing, web 272 passing, web typecheck clean.
+**After Phase 3:** API 846 passing, web 272 passing, web typecheck clean.
 
 ---
 
@@ -281,3 +282,61 @@ Wires `POST /autopilot/campaign-recommendations/:id/generate` (fan
 out across `recommendedChannels`, store draft ids on the rec,
 transition status to DRAFT_GENERATED). Replaces the Phase 2
 "coming soon" alert on the Generate button.
+
+---
+
+## 11. Phase 3 Completion Note
+
+**Shipped:**
+
+- New service helper
+  `generateDraftsForRecommendation({ clientId, recommendationId, userId })`
+  in `domains/studio/autopilotCampaignRecommendation.service.js`:
+  - Trigger → plan mapping for 7 trigger types: NEW_LISTING,
+    OPEN_HOUSE, PRICE_DROP, JUST_SOLD, STALE_LISTING, NEW_REVIEW,
+    INACTIVITY_GAP. Each plan carries `templateType`, `kind`,
+    `guidance`, `dataItemId`, and `requiresImage` so the channel
+    intersector can drop Instagram when there's no photo.
+  - Channel intersection: `recommendation.recommendedChannels`
+    ∩ `ChannelSettings.isEnabled`. Skipped reasons surfaced in
+    the response (`{ channel, reason }`).
+  - Calls the existing `aiGenerationService.generateDraft` once
+    per eligible channel. Drafts returned with status=FAILED by
+    the provider DO NOT count as success.
+  - Idempotent: if `generatedDraftIds` is already non-empty,
+    return the existing drafts unchanged (no re-fan-out).
+  - Refuses DISMISSED / EXPIRED recommendations (412).
+  - Refuses cross-workspace access (404).
+  - All-channel-failure DOES NOT flip status — the rec stays
+    NEEDS_REVIEW so the user can retry once the underlying
+    issue is resolved.
+  - At least one success → status flips to DRAFT_GENERATED,
+    draft ids stored on `generatedDraftIds`. Returns
+    `{ status, drafts: [...], skipped: [...], recommendation }`
+    with `status` ∈ `success | partial_success | noop | failed`.
+- New route:
+  `POST /api/v1/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/generate`
+  — owner-gated, audit-logged
+  (`autopilot.recommendation.generate.<status>`).
+- Frontend `useGenerateAutopilotCampaign` return type updated to
+  `AutopilotGenerateResult` (was incorrect — the server returns
+  a fan-out result, not just the rec). The Inbox section's
+  Generate click now fires the mutation and renders a summary
+  alert with skipped-channel reasons.
+- Approve / convert still ship in Phase 4 — those click handlers
+  remain on the `notifyComingSoon` path.
+
+**No auto-publish path added.** Every generated draft lands at
+status=DRAFT and the user must approve / schedule / publish via
+the existing flows.
+
+**Tests:** 9 new (idempotency, ineligible-state refusal,
+tenant scoping, partial success with Instagram skip, no-eligible-
+channels, all-channel-failure DOES NOT flip status). Suites:
+**API 846/846 passing; Web 272/272 passing; web typecheck clean.**
+
+**Next step:** Phase 4 — approval + scheduling workflow.
+`POST .../approve` transitions the recommendation and each child
+draft to APPROVED via the existing `draftWorkflow.service`.
+Optional `scheduleAt` per draft. Replaces the Phase 3 coming-soon
+alert on the Approve button.
