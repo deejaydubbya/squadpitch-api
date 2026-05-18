@@ -1,38 +1,46 @@
-// Autopilot Phase 1 — truthful mode enum contract.
+// Autopilot mode-enum contract.
 //
-// docs/AUTOPILOT_PRODUCT_AUDIT.md spec'd shrinking the supported
-// modes to ["off", "draft_only"] until the persistence + scheduler
-// phases land. These tests pin three things:
-//   1. Schema rejects the legacy modes.
-//   2. Schema accepts the two supported modes.
-//   3. getAutopilotSettings normalizes a row stored with a legacy
-//      mode back to draft_only on read.
+// Spinstr01 expanded to the full ladder:
+//   off / recommend_only / draft_on_click /
+//   auto_generate_drafts / schedule_after_approval
+// + draft_only (legacy alias, accepted on wire, normalized
+//   on read to draft_on_click).
+// auto_publish_guarded is REJECTED on save (UI shows it as
+// Coming Soon).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { AutopilotSettingsSchema } from "../domains/studio/studio.schemas.js";
 
 describe("AutopilotSettingsSchema — mode enum", () => {
-  it("accepts off", () => {
+  it.each([
+    "off",
+    "recommend_only",
+    "draft_on_click",
+    "auto_generate_drafts",
+    "schedule_after_approval",
+    // legacy alias still accepted on the wire
+    "draft_only",
+  ])("accepts %s", (mode) => {
+    expect(AutopilotSettingsSchema.safeParse({ mode }).success).toBe(true);
+  });
+
+  it("rejects auto_publish (never implemented)", () => {
     expect(
-      AutopilotSettingsSchema.safeParse({ mode: "off" }).success,
-    ).toBe(true);
+      AutopilotSettingsSchema.safeParse({ mode: "auto_publish" }).success,
+    ).toBe(false);
   });
 
-  it("accepts draft_only", () => {
+  it("rejects schedule_approved (never implemented)", () => {
     expect(
-      AutopilotSettingsSchema.safeParse({ mode: "draft_only" }).success,
-    ).toBe(true);
+      AutopilotSettingsSchema.safeParse({ mode: "schedule_approved" }).success,
+    ).toBe(false);
   });
 
-  it("rejects auto_publish (never implemented; pulled in Phase 1)", () => {
-    const r = AutopilotSettingsSchema.safeParse({ mode: "auto_publish" });
-    expect(r.success).toBe(false);
-  });
-
-  it("rejects schedule_approved (never implemented; pulled in Phase 1)", () => {
-    const r = AutopilotSettingsSchema.safeParse({ mode: "schedule_approved" });
-    expect(r.success).toBe(false);
+  it("rejects auto_publish_guarded — locked behind safety controls", () => {
+    expect(
+      AutopilotSettingsSchema.safeParse({ mode: "auto_publish_guarded" }).success,
+    ).toBe(false);
   });
 
   it("rejects a typo / unknown mode", () => {
@@ -73,36 +81,35 @@ beforeEach(() => {
 });
 
 describe("getAutopilotSettings — legacy mode normalization", () => {
-  it("returns draft_only when the stored row has mode=schedule_approved", async () => {
+  it.each([
+    ["draft_only", "draft_on_click"],
+    ["draft_assist", "draft_on_click"],
+    ["schedule_approved", "draft_on_click"],
+    ["auto_publish", "draft_on_click"],
+    // Defensive: a hand-edited row carrying the locked mode
+    // normalizes back to the safest live mode rather than
+    // pretending it's enabled.
+    ["auto_publish_guarded", "draft_on_click"],
+  ])("normalizes stored mode=%s to %s on read", async (stored, expected) => {
     prismaMock.workspaceTechStackConnection.findUnique.mockResolvedValueOnce({
-      metadataJson: { mode: "schedule_approved", enabled: true },
+      metadataJson: { mode: stored, enabled: true },
     });
     const s = await getAutopilotSettings("client-1");
-    expect(s.mode).toBe("draft_only");
+    expect(s.mode).toBe(expected);
   });
 
-  it("returns draft_only when the stored row has mode=auto_publish", async () => {
+  it.each([
+    "off",
+    "recommend_only",
+    "draft_on_click",
+    "auto_generate_drafts",
+    "schedule_after_approval",
+  ])("passes %s through unchanged", async (mode) => {
     prismaMock.workspaceTechStackConnection.findUnique.mockResolvedValueOnce({
-      metadataJson: { mode: "auto_publish", enabled: true },
+      metadataJson: { mode, enabled: mode !== "off" },
     });
     const s = await getAutopilotSettings("client-1");
-    expect(s.mode).toBe("draft_only");
-  });
-
-  it("returns draft_only when the stored row has mode=draft_assist (older legacy)", async () => {
-    prismaMock.workspaceTechStackConnection.findUnique.mockResolvedValueOnce({
-      metadataJson: { mode: "draft_assist", enabled: true },
-    });
-    const s = await getAutopilotSettings("client-1");
-    expect(s.mode).toBe("draft_only");
-  });
-
-  it("passes off through unchanged", async () => {
-    prismaMock.workspaceTechStackConnection.findUnique.mockResolvedValueOnce({
-      metadataJson: { mode: "off", enabled: false },
-    });
-    const s = await getAutopilotSettings("client-1");
-    expect(s.mode).toBe("off");
+    expect(s.mode).toBe(mode);
   });
 
   it("falls back to default off when no row exists", async () => {

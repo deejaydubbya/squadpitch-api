@@ -60,19 +60,23 @@ Autopilot do nothing on this tick?".
 
 ## 2. Supported Modes
 
-Only two production-ready modes are exposed. The settings UI lists
-exactly these:
+Spinstr01 expanded to the full ladder. Five modes selectable; one
+(`auto_publish_guarded`) intentionally locked.
 
-| Mode | What it does |
-|---|---|
-| `off` | Autopilot is disabled. Nothing fires. |
-| `draft_only` | Evaluator runs; recommendations are persisted to the Campaign Inbox. User clicks Generate to create drafts; user clicks Approve to transition them. |
+| Mode | UI label | Behavior |
+|---|---|---|
+| `off` | Off | Disabled. No recs, no drafts, no scheduling. |
+| `recommend_only` | Recommendations only | Evaluator emits recs; Generate stays a manual click. |
+| `draft_on_click` | Generate drafts manually | MVP baseline. Evaluator emits recs; user clicks Generate. |
+| `auto_generate_drafts` | Auto-prepare drafts for review | After detector emits recs, auto-generate drafts for *high-confidence* ones (has `sourceDataItemId`, non-generic title, not `INACTIVITY_GAP`). Idempotent — already-generated recs are skipped. |
+| `schedule_after_approval` | Auto-schedule approved drafts | On Approve, server picks safe default slots (next 3 weekdays, 10am UTC, quiet-hour aware) and calls `draftWorkflow.scheduleDraft` for each. |
+| `auto_publish_guarded` | Auto-publish (coming soon) | **NOT SELECTABLE.** UI shows a locked Coming Soon card. Schema rejects on save. |
 
-`schedule_approved` and `auto_publish` modes were removed by the audit
-(neither was ever wired through the evaluator + publisher). The API
-schema rejects them on save (`AutopilotSettingsSchema` enum:
-`["off", "draft_only"]`); legacy stored values normalize to `draft_only`
-on read so existing workspaces stay in a safe state.
+Legacy `draft_only` is still accepted on the wire and normalized to
+`draft_on_click` on read. Same for `schedule_approved`, `auto_publish`,
+`draft_assist`, and `auto_publish_guarded` (defensive — schema rejects
+the latter but a hand-edited row still normalizes to draft_on_click).
+Nothing publishes without explicit user approval.
 
 ---
 

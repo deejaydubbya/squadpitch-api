@@ -717,13 +717,27 @@ export const ContentPreferencesUpdateSchema = z.object({
 
 export const AutopilotSettingsSchema = z.object({
   enabled: z.boolean().optional(),
-  // Only the two supported modes accept saves. schedule_approved
-  // and auto_publish were exposed before the Phase 1 alignment
-  // (docs/AUTOPILOT_PRODUCT_AUDIT.md) — neither was ever wired,
-  // so we refuse the save rather than silently store a value the
-  // evaluator can't honor. Existing rows with the legacy modes
-  // are normalized on read.
-  mode: z.enum(["off", "draft_only"]).optional(),
+  // Spinstr01 upgrade — full automation mode ladder.
+  // - off: nothing.
+  // - recommend_only: detector emits recs; no draft generation.
+  // - draft_on_click: MVP behavior. Recs + Generate button.
+  // - auto_generate_drafts: detector auto-generates drafts for
+  //   high-confidence recs after persisting them.
+  // - schedule_after_approval: on approve, system also schedules
+  //   approved drafts into safe default slots.
+  // - auto_publish_guarded: REJECTED on save. Listed in the UI
+  //   as Coming Soon. Backend refuses to persist it.
+  // Legacy "draft_only" still accepted on the wire and normalized
+  //   to "draft_on_click" on read.
+  mode: z.enum([
+    "off",
+    "recommend_only",
+    "draft_on_click",
+    "auto_generate_drafts",
+    "schedule_after_approval",
+    // Accepted on save for backward compat, normalized on read.
+    "draft_only",
+  ]).optional(),
   // Channel permissions
   preferredChannels: z.array(ChannelEnum).max(6).optional(),
   // Content source permissions

@@ -823,8 +823,24 @@ export async function approveRecommendation({
     select: { id: true, status: true, channel: true, scheduledFor: true },
   });
 
+  // Spinstr01 schedule_after_approval — if the caller didn't pass
+  // a scheduleAt AND the workspace's autopilot mode is
+  // schedule_after_approval, pick safe default slots so the
+  // drafts land on the calendar without the user picking dates
+  // by hand. One slot per draft, spread across upcoming weekdays.
+  let perDraftSlots = null;
+  if (!scheduleAt) {
+    const { getAutopilotSettings } = await import("./autopilot.service.js");
+    const settings = await getAutopilotSettings(clientId).catch(() => null);
+    if (settings?.mode === "schedule_after_approval") {
+      perDraftSlots = buildAutoScheduleSlots(childDrafts.length, settings);
+    }
+  }
+
   const outcomes = [];
-  for (const d of childDrafts) {
+  for (let i = 0; i < childDrafts.length; i += 1) {
+    const d = childDrafts[i];
+    const slotForThisDraft = scheduleAt ?? perDraftSlots?.[i] ?? null;
     try {
       let next = d;
       // Approval step — skip when already past DRAFT/PENDING_REVIEW.
@@ -837,13 +853,13 @@ export async function approveRecommendation({
       // try to schedule a published draft. Same-time SCHEDULED
       // is a no-op so a repeat click doesn't churn the row.
       let scheduled = false;
-      if (scheduleAt && next.status !== "PUBLISHED") {
+      if (slotForThisDraft && next.status !== "PUBLISHED") {
         const sameTime =
           next.status === "SCHEDULED" &&
           next.scheduledFor &&
-          new Date(next.scheduledFor).getTime() === new Date(scheduleAt).getTime();
+          new Date(next.scheduledFor).getTime() === new Date(slotForThisDraft).getTime();
         if (!sameTime) {
-          next = await scheduleDraft(d.id, scheduleAt, userId);
+          next = await scheduleDraft(d.id, slotForThisDraft, userId);
         }
         scheduled = true;
       }
@@ -874,13 +890,15 @@ export async function approveRecommendation({
 
   // Recommendation status decision:
   //   - All children at-or-past APPROVED → rec APPROVED
-  //   - All children at-or-past SCHEDULED AND scheduleAt was given → SCHEDULED
+  //   - All children at-or-past SCHEDULED AND we attempted scheduling
+  //     (explicit scheduleAt OR auto-scheduled per perDraftSlots) → SCHEDULED
   //   - Otherwise leave rec status alone
+  const attemptedSchedule = Boolean(scheduleAt) || Boolean(perDraftSlots);
   const allApprovedOrPast = outcomes.every((o) =>
     ["APPROVED", "SCHEDULED", "PUBLISHED"].includes(o.status),
   );
   const allScheduledOrPast =
-    Boolean(scheduleAt) &&
+    attemptedSchedule &&
     outcomes.every((o) => ["SCHEDULED", "PUBLISHED"].includes(o.status));
 
   let nextRecStatus = rec.status;
@@ -909,4 +927,58 @@ export async function approveRecommendation({
     drafts: outcomes,
     scheduledAt: scheduleAt,
   };
+}
+
+// ── Auto-schedule slot picker (Spinstr01) ─────────────────────────────
+//
+// Given N drafts and the workspace's autopilot settings, return
+// N future ISO timestamps spaced one per upcoming weekday at
+// 10am UTC. Respects quietHoursStart/End when set (e.g. if quiet
+// hours cover the 10am slot for some local timezone the operator
+// configured, push to the first non-quiet hour after).
+//
+// Conservative defaults — we don't try to be smart about
+// timezones here. Operators wanting tighter control can pass an
+// explicit scheduleAt per approve call.
+export function buildAutoScheduleSlots(count, settings = {}) {
+  if (count <= 0) return [];
+  const quietStart =
+    typeof settings.quietHoursStart === "number" ? settings.quietHoursStart : null;
+  const quietEnd =
+    typeof settings.quietHoursEnd === "number" ? settings.quietHoursEnd : null;
+
+  const slots = [];
+  const cursor = new Date();
+  cursor.setUTCMinutes(0, 0, 0);
+  // Start "tomorrow" so we never schedule something in the next
+  // few minutes — the publish worker needs lead time.
+  cursor.setUTCDate(cursor.getUTCDate() + 1);
+
+  while (slots.length < count) {
+    // Skip weekends (UTC). Most real-estate audiences are most
+    // active midweek; keeping this simple beats per-workspace
+    // timezone gymnastics.
+    const day = cursor.getUTCDay();
+    if (day === 0 || day === 6) {
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+      continue;
+    }
+    let hour = 10;
+    if (
+      quietStart != null &&
+      quietEnd != null &&
+      ((quietStart < quietEnd && hour >= quietStart && hour < quietEnd) ||
+        (quietStart >= quietEnd && (hour >= quietStart || hour < quietEnd)))
+    ) {
+      // 10am UTC falls inside the workspace's quiet hours; bump
+      // to the first hour past quietEnd (capped at 18:00 UTC so
+      // we don't fall off the end of the day).
+      hour = Math.min(quietEnd, 18);
+    }
+    const slot = new Date(cursor);
+    slot.setUTCHours(hour, 0, 0, 0);
+    slots.push(slot.toISOString());
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return slots;
 }
