@@ -106,12 +106,20 @@ export async function createDataItem(clientId, input) {
 
 export async function listDataItems(
   clientId,
-  { type, status, search, limit } = {}
+  { type, excludeTypes, status, search, limit } = {}
 ) {
   const where = { clientId };
   if (status) where.status = status;
   else where.status = "ACTIVE";
-  if (type) where.type = type;
+  if (type) {
+    where.type = type;
+  } else if (Array.isArray(excludeTypes) && excludeTypes.length > 0) {
+    // Spinstr425 — Content Assets passes excludeTypes=PROPERTY so
+    // property rows stay confined to the Properties tab. Server-side
+    // (not client-side) so pagination doesn't truncate the wrong
+    // bucket on workspaces with lots of listings.
+    where.type = { notIn: excludeTypes };
+  }
   if (search) {
     where.OR = [
       { title: { contains: search, mode: "insensitive" } },

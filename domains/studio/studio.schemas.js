@@ -231,6 +231,23 @@ export const UpdateDataItemSchema = z.object({
 
 export const ListDataItemsQuerySchema = z.object({
   type: DataItemTypeEnum.optional(),
+  // Spinstr425 — Content Assets passes excludeTypes=PROPERTY so
+  // property records (which have their own Properties tab) don't
+  // leak into the generic asset view. Accepted as comma-separated
+  // string OR repeated query param; normalized to a string array
+  // before the handler reads it.
+  excludeTypes: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .transform((value) => {
+      if (!value) return undefined;
+      const list = Array.isArray(value) ? value : value.split(",");
+      const valid = list
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .filter((v) => DataItemTypeEnum.safeParse(v).success);
+      return valid.length > 0 ? valid : undefined;
+    }),
   status: DataItemStatusEnum.optional(),
   search: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),

@@ -78,6 +78,47 @@ Legacy `draft_only` is still accepted on the wire and normalized to
 the latter but a hand-edited row still normalizes to draft_on_click).
 Nothing publishes without explicit user approval.
 
+### 2a-pre. Data page vs Autopilot data (Spinstr425)
+
+Property records and generic content assets are separate
+surfaces, even though both live in `WorkspaceDataItem`:
+
+| Surface | Source query | Includes PROPERTY rows? |
+|---|---|---|
+| **Data → Content Assets** tab | `useDataItems(clientId, { excludeTypes: ['PROPERTY'] })` | **No** — filtered server-side via the new `excludeTypes` query param |
+| **Data → Properties** tab | `useProperties(clientId)` → `useDataItems(clientId, { type: 'PROPERTY' })` | Yes (the only place) |
+| **Autopilot detector** | `getRealEstateListings()` — `where: { type: { in: ['PROPERTY', 'CUSTOM'] } }` | Yes (unchanged) |
+
+Manual property creation goes through
+`POST /api/v1/workspaces/:id/listings/manual` →
+`listingIngestion.ingestManualListing()` →
+`listingToDataItem()` which writes
+`type: "PROPERTY"`. Intake dedup (`checkDuplicate`) matches
+on `sourceId` / `listingUrl` / normalized street address so
+re-adding the same property merges into the existing row
+instead of creating a duplicate.
+
+Edits go through
+`PATCH /api/v1/workspaces/:id/business-data/:itemId` with
+the merged `dataJson`. The item id is preserved so any
+linked Autopilot recommendation rows stay attached.
+
+The `CUSTOM` type continues to be supported by the
+detector for back-compat with legacy rows imported before
+Spinstr425. New manual properties land as `PROPERTY` going
+forward.
+
+**Future industries.** When other industries add their
+own business-object types (e.g. `VEHICLE` for car_sales),
+they should follow the same pattern:
+1. Add the type to the `DataItemType` enum.
+2. Add the type to the `excludeTypes` list the generic
+   asset view passes.
+3. Add a dedicated tab + library component for the new
+   type, like `PropertyLibrary`.
+
+---
+
 ### 2a. Recommendation Quality (Spinstr423 + Spinstr02)
 
 Two layers of dedup keep the Inbox clean:
