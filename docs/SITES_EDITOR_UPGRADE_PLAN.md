@@ -195,19 +195,27 @@ Other property fields unchanged: address parts (`address`/`city`/`state`/`zip`),
 Each phase ships independently, leaves the system in a coherent
 state, and can be reverted without dragging later phases backwards.
 
-### Phase 1 — Source metadata + property page basics
+### Phase 1 — Source metadata + property page basics — ✅ SHIPPED (sites-02)
 
 Goal: when a SitePage has `sourceType: PROPERTY`, the editor knows
 which property and the renderer/editor surface autofill primitives.
 
-- Editor: when `page.sourceType === 'PROPERTY'` + `sourceId` set, fetch the WorkspaceDataItem and surface a "Source: 508 King George Court · 4 bd / 3 ba · $425k" pill in the header. Already partially present — extend to show address + summary.
-- Add a "Pull from property" button on **`hero`** + **`key_details`** + **`gallery`** + **`paragraph`** blocks that one-shot writes the relevant fields (`headline = address`, `items = [{label:'Beds', value:'4'},…]`, `imageUrls = data.images`, `body = description`). Idempotent; rewriting is a re-click.
-- API: extend `from-source` to pre-fill these blocks server-side when `sourceType === 'PROPERTY'` (the LLM still writes the body copy; we deterministically populate the structured fields).
-- No new block types. No schema change.
+**Implementation:**
 
-Files in scope (web): `PageEditor.tsx`, `BlockFields` cluster, `useSites.ts`. (api): `sites.generation.service.js`.
+- **Property normalizer** (`squadpitch-web/src/lib/property/normalize.ts`) — pure helper turning a `WorkspaceDataItem` of type=PROPERTY into a predictable shape (title, address parts, price, beds/baths/sqft, propertyType, yearBuilt, description, primaryImage, images, listingUrl, status, externalListingId). Read precedence preserved (`_photos[isPrimary] > imageUrl > images[0]`). 17 unit tests pin every back-compat path.
+- **Editor source panel** — when `page.sourceType === 'PROPERTY'` + `sourceId`, `PageEditor` fetches via `useDataItem` and renders `PropertySourcePanel`: thumbnail, address, status pill, price, beds/baths/sqft/type, link to Properties tab. Missing source → non-blocking yellow warning ("Linked property not found. Existing page content is safe.").
+- **"Pull from property" actions** — explicit one-shot autofill buttons on `hero` (headline + subheadline + imageUrl), `paragraph` (body via `buildSafeDescription` — never invents facts), `gallery` (imageUrls), `key_details` (items). Re-clicking overwrites. Buttons only render when a property source is resolved.
+- **API deterministic fields** (`sites.generation.service.js → applyPropertyDeterministicFields`) — after the LLM emits a normalized page, rewrites the structured fields from property data: `hero.imageUrl`, `key_details.items`, `gallery.imageUrls`, `image.imageUrl` (only when missing), and `title + slug` from address (only when the LLM left a placeholder). LLM-written narrative copy (headlines, subheadlines, paragraph bodies) is preserved. Idempotent — applying twice is a noop. 13 API tests cover every block + edge case.
 
-Risk: Low. Pure additive UI + server pre-fill that the renderer already knows how to render.
+**Compatibility:** pages without `sourceType` continue to edit normally (panel + buttons don't render). Existing PUBLISHED pages untouched — generation changes only affect new `POST /site/pages/from-source` calls. `IDEA` + `CAMPAIGN` + `DATA_ITEM` source paths unchanged; only PROPERTY gets the deterministic overlay.
+
+**Files changed (sites-02):**
+- web: `src/lib/property/normalize.ts` + `.test.ts`, `src/app/(app)/workspaces/[clientId]/sites/_components/PageEditor.tsx`
+- api: `domains/sites/sites.generation.service.js`, `tests/sitesPropertyDeterministic.test.js`
+
+**Phase 1 limitations / follow-ups:**
+- No automatic re-pull when the source property changes — autofill is one-shot. "Always sync" toggle is a Phase 4 idea.
+- `applyPropertyDeterministicFields` doesn't *add* a gallery block when the LLM didn't include one. Phase 4 templates address that via per-(sourceType, pageGoal) scaffolds.
 
 ### Phase 2 — Media picker + property photos
 

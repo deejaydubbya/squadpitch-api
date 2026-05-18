@@ -227,7 +227,7 @@ export async function generatePageFromSource({
   // 6. Normalize the LLM output. The strict response_format makes
   //    this mostly defensive — but we still trim slugs, drop
   //    invalid blocks, and fill missing defaults.
-  return normalizeGeneratedPage({
+  const normalized = normalizeGeneratedPage({
     raw: result.parsed,
     sourceType,
     sourceId: source.id ?? sourceId,
@@ -236,6 +236,16 @@ export async function generatePageFromSource({
     model: result.model,
     usage: result.usage,
   });
+
+  // 7. Sites-02 — deterministic structured fields for PROPERTY
+  //    sources. The LLM keeps writing the marketing copy; we
+  //    overwrite the *facts* (key_details rows, gallery imageUrls,
+  //    hero imageUrl, title/slug) from the property's dataJson so
+  //    nothing is invented. Idempotent — applying twice is a noop.
+  if (sourceType === "PROPERTY") {
+    normalized.payload = applyPropertyDeterministicFields(normalized.payload, source);
+  }
+  return normalized;
 }
 
 // ── Source resolution ──────────────────────────────────────────────────
@@ -613,6 +623,116 @@ function trimString(s, max) {
   if (typeof s !== "string") return "";
   const trimmed = s.trim();
   return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+}
+
+// Sites-02 — deterministic property field application. Called after
+// the LLM emits a normalized page payload. Walks the blocks and
+// rewrites the structured fields that should come from the
+// property's dataJson rather than the model's imagination:
+//   - hero.imageUrl  → property primary image
+//   - key_details.items → price / beds / baths / sqft / type / year / status
+//   - gallery.imageUrls → property photos
+//   - top-level title + slug → address-derived when available
+// LLM-generated narrative copy (hero headline/subheadline,
+// paragraph body, etc.) is preserved. Idempotent.
+export function applyPropertyDeterministicFields(payload, source) {
+  if (!payload || !source) return payload;
+  const data = source.dataJson && typeof source.dataJson === "object" ? source.dataJson : {};
+  const facts = readPropertyFacts(data, source.title);
+
+  const blocks = Array.isArray(payload.blocksJson) ? payload.blocksJson.slice() : [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (!block || typeof block !== "object") continue;
+    if (block.type === "hero" && facts.primaryImage) {
+      blocks[i] = { ...block, imageUrl: facts.primaryImage };
+    } else if (block.type === "key_details") {
+      const items = buildKeyDetailFacts(facts);
+      if (items.length > 0) blocks[i] = { ...block, items };
+    } else if (block.type === "gallery" && facts.images.length > 0) {
+      blocks[i] = { ...block, imageUrls: facts.images };
+    } else if (block.type === "image" && !block.imageUrl && facts.primaryImage) {
+      blocks[i] = { ...block, imageUrl: facts.primaryImage };
+    }
+  }
+
+  const next = { ...payload, blocksJson: blocks };
+  // Title + slug: overwrite when the LLM left a placeholder title;
+  // otherwise leave the model's pick intact.
+  if (facts.addressLine && (!payload.title || payload.title.startsWith("Untitled"))) {
+    next.title = facts.addressLine.slice(0, 200);
+    next.slug = sanitizeSlug(null, facts.addressLine);
+  }
+  return next;
+}
+
+function readPropertyFacts(data, fallbackTitle) {
+  const num = (v) => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = Number(v.replace(/[^\d.\-]/g, ""));
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  };
+  const str = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const street = str(data.street) ?? str(data.address);
+  const city = str(data.city);
+  const state = str(data.state);
+  const zip = str(data.zip) ?? str(data.zipCode) ?? str(data.postalCode);
+  const addressLine = [street, city, state, zip].filter(Boolean).join(", ") || str(fallbackTitle) || "";
+
+  // Photo precedence: _photos[isPrimary] > imageUrl > images[0].
+  const photoMeta = Array.isArray(data._photos) ? data._photos : [];
+  const primaryFromMeta = photoMeta.find((p) => p && p.isPrimary === true)?.url ?? null;
+  const heroImage = str(data.imageUrl);
+  const imagesRaw = Array.isArray(data.images) ? data.images : [];
+  const seen = new Set();
+  const images = [];
+  for (const url of [
+    primaryFromMeta,
+    heroImage,
+    ...imagesRaw,
+    ...photoMeta.map((p) => (p && p.url) || null),
+  ]) {
+    if (typeof url !== "string" || !url) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    images.push(url);
+  }
+  const primaryImage = primaryFromMeta ?? heroImage ?? images[0] ?? null;
+
+  return {
+    addressLine,
+    primaryImage,
+    images,
+    price: num(data.price),
+    beds: num(data.bedrooms ?? data.beds),
+    baths: num(data.bathrooms ?? data.baths),
+    sqft: num(data.sqft ?? data.squareFeet),
+    propertyType: str(data.propertyType),
+    yearBuilt: num(data.yearBuilt),
+    status: str(data.status),
+  };
+}
+
+function buildKeyDetailFacts(facts) {
+  const out = [];
+  if (facts.price != null) {
+    const formatted = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(facts.price);
+    out.push({ label: "Price", value: formatted });
+  }
+  if (facts.beds != null) out.push({ label: "Beds", value: String(facts.beds) });
+  if (facts.baths != null) out.push({ label: "Baths", value: String(facts.baths) });
+  if (facts.sqft != null) out.push({ label: "Sq Ft", value: facts.sqft.toLocaleString() });
+  if (facts.propertyType) out.push({ label: "Type", value: facts.propertyType });
+  if (facts.yearBuilt != null) out.push({ label: "Year Built", value: String(facts.yearBuilt) });
+  if (facts.status) out.push({ label: "Status", value: facts.status.replace(/_/g, " ") });
+  return out;
 }
 
 function sanitizeSlug(raw, fallback) {
