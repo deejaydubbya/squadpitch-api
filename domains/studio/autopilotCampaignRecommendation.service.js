@@ -365,8 +365,18 @@ export function toFrontendShape(row) {
     triggerType: triggerToFe(row.triggerType),
     triggerReason: row.whatWeNoticed,
     triggeredAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    // After spinstr423, triggerObjectId is a dedup key like
+    // "addr:..." — the real data-item id moved to
+    // payloadJson.sourceDataItemId. FE callers (e.g. Edit in
+    // Builder) expect the data-item id, not the dedup key.
     listingDataItemId:
-      row.triggerObjectType === "listing" ? row.triggerObjectId ?? "" : "",
+      row.triggerObjectType === "listing"
+        ? typeof payload.sourceDataItemId === "string" && payload.sourceDataItemId.length > 0
+          ? payload.sourceDataItemId
+          : typeof row.triggerObjectId === "string" && !row.triggerObjectId.includes(":")
+            ? row.triggerObjectId
+            : ""
+        : "",
     propertyTitle: typeof payload.propertyTitle === "string" ? payload.propertyTitle : row.headline,
     propertyAddress:
       typeof payload.propertyAddress === "string" ? payload.propertyAddress : null,
@@ -429,8 +439,20 @@ export async function auditRecommendationEvent(req, action, recommendationId, me
 function planForRecommendation(rec) {
   const payload =
     rec.payloadJson && typeof rec.payloadJson === "object" ? rec.payloadJson : {};
+  // Phase 2 used triggerObjectId as the workspaceDataItem id
+  // directly. The spinstr423 dedup pass made triggerObjectId a
+  // normalized dedup key (e.g. "addr:508 king george court") and
+  // moved the real data-item id into payloadJson.sourceDataItemId.
+  // Fall through to triggerObjectId for older rows that pre-date
+  // the dedup key.
   const dataItemId =
-    rec.triggerObjectType === "listing" ? rec.triggerObjectId : null;
+    rec.triggerObjectType === "listing"
+      ? typeof payload.sourceDataItemId === "string" && payload.sourceDataItemId.length > 0
+        ? payload.sourceDataItemId
+        : typeof rec.triggerObjectId === "string" && !rec.triggerObjectId.includes(":")
+          ? rec.triggerObjectId
+          : null
+      : null;
   const propertyTitle =
     typeof payload.propertyTitle === "string" ? payload.propertyTitle : "your listing";
   const baseGuidance = (extra) =>

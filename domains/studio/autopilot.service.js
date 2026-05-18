@@ -707,6 +707,70 @@ const REC_LISTING_LOOKBACK_MS = 14 * DAY_MS;
 const REC_INACTIVITY_THRESHOLD_MS = 14 * DAY_MS;
 const REC_OPEN_HOUSE_WINDOW_MS = 7 * DAY_MS;
 const REC_REVIEW_LOOKBACK_MS = 14 * DAY_MS;
+// Cap on how many fresh listing recommendations a single
+// evaluator tick may emit. Without this, a workspace importing
+// 30 listings in one pass would flood the Inbox. Existing recs
+// stay visible across runs — only new emissions are capped.
+const REC_MAX_NEW_LISTINGS_PER_RUN = 3;
+
+// Normalize address-like strings so two records pointing at the
+// same real-world property collapse onto the same dedup key.
+// Lowercased, alphanumerics + spaces only, single-spaced. Keeps
+// "508 King George Court" and "508  king  george court," the
+// same.
+function normalizeAddressKey(value) {
+  if (typeof value !== "string") return "";
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+// Build the dedup key for a listing. Strongest signal first:
+// MLS / external id, then full normalized address (incl. city/
+// state/zip when present), then bare address, then title.
+function listingDedupKey(item) {
+  const data = (item?.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+  const ext = data.externalListingId ?? data.mlsId ?? data.mls_id ?? data.external_id;
+  if (typeof ext === "string" && ext.length > 0) return `ext:${ext}`;
+  if (typeof ext === "number") return `ext:${ext}`;
+  const parts = [
+    normalizeAddressKey(data.address),
+    normalizeAddressKey(data.city),
+    normalizeAddressKey(data.state),
+    normalizeAddressKey(data.zip ?? data.zipCode ?? data.postalCode),
+  ].filter(Boolean);
+  if (parts.length > 0) return `addr:${parts.join(" ")}`;
+  const title = normalizeAddressKey(data.title);
+  if (title) return `title:${title}`;
+  return null;
+}
+
+// Score a listing for "richness" — used to pick which duplicate
+// wins. Higher = better. Photos are the biggest signal because
+// the channel-intersection step in generate drops Instagram
+// without an image.
+function listingRichnessScore(item) {
+  const data = (item?.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+  let score = 0;
+  if (typeof data.imageUrl === "string" && data.imageUrl.length > 0) score += 10;
+  if (Array.isArray(data.images) && data.images.length > 0) score += 5;
+  if (data.price != null) score += 2;
+  if (data.bedrooms != null || data.beds != null) score += 1;
+  if (data.bathrooms != null || data.baths != null) score += 1;
+  if (data.sqft != null || data.squareFeet != null) score += 1;
+  if (typeof data.description === "string" && data.description.length > 40) score += 1;
+  return score;
+}
+
+// Build a launch headline + whatWeNoticed for a listing, using
+// the address whenever present. Falls back to a clear neutral
+// label only when no identifying string exists.
+function listingTitleFor(data) {
+  if (typeof data?.address === "string" && data.address.trim()) return data.address.trim();
+  if (typeof data?.title === "string" && data.title.trim()) return data.title.trim();
+  return null;
+}
 
 async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledChannels }) {
   let created = 0;
@@ -724,44 +788,99 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
   const listings = Array.isArray(reAssets?.listings) ? reAssets.listings : [];
 
   // ── NEW_LISTING ─────────────────────────────────────────────
+  //
+  // Three-step funnel:
+  //   1. Filter to listings created in the lookback window.
+  //   2. Group by dedup key (MLS id / normalized address / title)
+  //      and pick the richest record in each group.
+  //   3. Rank by richness desc, then by createdAt desc.
+  //   4. Cap at REC_MAX_NEW_LISTINGS_PER_RUN.
+  const recentListings = [];
   for (const entry of listings) {
     const item = entry?.source;
     if (!item?.id) continue;
-    const createdAt = item.createdAt ? new Date(item.createdAt).getTime() : 0;
-    if (!createdAt || now - createdAt > REC_LISTING_LOOKBACK_MS) continue;
+    const ts = item.createdAt ? new Date(item.createdAt).getTime() : 0;
+    if (!ts || now - ts > REC_LISTING_LOOKBACK_MS) continue;
+    recentListings.push({ item, ts });
+  }
+  // Group by dedup key; pick the richest item per key. A null
+  // dedup key (no address/title/mls) gets its own slot keyed
+  // by item.id so it isn't lost.
+  const byKey = new Map();
+  for (const { item, ts } of recentListings) {
+    const key = listingDedupKey(item) ?? `id:${item.id}`;
+    const richness = listingRichnessScore(item);
+    const existing = byKey.get(key);
+    if (!existing || richness > existing.richness) {
+      byKey.set(key, { item, ts, richness, dedupKey: key });
+    }
+  }
+  // Rank: richness desc, then newest first.
+  const ranked = [...byKey.values()].sort((a, b) => {
+    if (b.richness !== a.richness) return b.richness - a.richness;
+    return b.ts - a.ts;
+  });
+  const newListingPicks = ranked.slice(0, REC_MAX_NEW_LISTINGS_PER_RUN);
+
+  for (const pick of newListingPicks) {
+    const item = pick.item;
     const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
-    const title =
-      typeof data.address === "string"
-        ? data.address
-        : typeof data.title === "string"
-          ? data.title
-          : "New listing";
+    const title = listingTitleFor(data) ?? "your new listing";
     const priceText =
       typeof data.price === "string" || typeof data.price === "number"
-        ? ` listed at ${data.price}`
+        ? ` (listed at ${data.price})`
         : "";
+    const channelsForCopy = channels.slice(0, 4);
+    const channelText =
+      channelsForCopy.length > 0
+        ? channelsForCopy.join(", ")
+        : "your connected social channels";
     tally(
       await upsertRecommendation({
         clientId: workspaceId,
         triggerType: "NEW_LISTING",
         triggerObjectType: "listing",
-        triggerObjectId: item.id,
-        headline: `New listing launch — ${title}`,
-        whatWeNoticed: `You added a new listing${priceText} on ${new Date(createdAt).toLocaleDateString()}.`,
-        whyItMatters:
-          "New listings get the most engagement in their first 7 days. Posting now maximizes views, saves, and inquiry volume.",
-        recommendedChannels: channels.slice(0, 4),
+        // Use the dedup key as the trigger object id so two
+        // workspace data items pointing at the same property
+        // collapse onto one recommendation. The richer record
+        // wins the headline + payload.
+        triggerObjectId: pick.dedupKey,
+        headline: `New Listing: ${title}`,
+        whatWeNoticed: `Autopilot noticed ${title}${priceText} is an active listing that hasn't been promoted yet.`,
+        whyItMatters: `A launch campaign now can drive buyer interest while the listing is still fresh. Autopilot can prepare drafts for ${channelText} with a clear showing CTA.`,
+        recommendedChannels: channelsForCopy,
         recommendedAngles: [
           "Just listed announcement",
           "Property highlight reel",
           "Neighborhood + price hook",
         ],
-        expiresAt: new Date(createdAt + REC_LISTING_LOOKBACK_MS),
+        expiresAt: new Date(pick.ts + REC_LISTING_LOOKBACK_MS),
         payloadJson: {
           propertyTitle: title,
           propertyAddress: typeof data.address === "string" ? data.address : null,
-          propertyImageUrl: typeof data.imageUrl === "string" ? data.imageUrl : null,
+          propertyCity: typeof data.city === "string" ? data.city : null,
+          propertyState: typeof data.state === "string" ? data.state : null,
+          propertyZip:
+            typeof data.zip === "string"
+              ? data.zip
+              : typeof data.zipCode === "string"
+                ? data.zipCode
+                : typeof data.postalCode === "string"
+                  ? data.postalCode
+                  : null,
+          propertyPrice: data.price ?? null,
+          propertyBeds: data.bedrooms ?? data.beds ?? null,
+          propertyBaths: data.bathrooms ?? data.baths ?? null,
+          propertySqft: data.sqft ?? data.squareFeet ?? null,
+          propertyImageUrl:
+            typeof data.imageUrl === "string" && data.imageUrl.length > 0
+              ? data.imageUrl
+              : Array.isArray(data.images) && typeof data.images[0] === "string"
+                ? data.images[0]
+                : null,
           propertyData: data,
+          sourceDataItemId: item.id,
+          dedupKey: pick.dedupKey,
           confidence: "high",
         },
       }),
@@ -769,44 +888,70 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
   }
 
   // ── OPEN_HOUSE ──────────────────────────────────────────────
+  // Same dedup approach as NEW_LISTING so two property records
+  // for the same address don't both spawn an open-house rec.
+  const openHouseCandidates = [];
   for (const entry of listings) {
     const item = entry?.source;
     if (!item?.id) continue;
     const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
     const events = Array.isArray(data.events) ? data.events : [];
-    const upcomingOpenHouse = events.find((e) => {
+    const upcoming = events.find((e) => {
       if (!e || typeof e !== "object") return false;
       if (e.type !== "open_house") return false;
       const t = e.date ? new Date(e.date).getTime() : 0;
       return t && t > now && t - now < REC_OPEN_HOUSE_WINDOW_MS;
     });
-    if (!upcomingOpenHouse) continue;
-    const title =
-      typeof data.address === "string" ? data.address : "your listing";
-    const dateLabel = new Date(upcomingOpenHouse.date).toLocaleDateString();
+    if (!upcoming) continue;
+    openHouseCandidates.push({ item, event: upcoming, richness: listingRichnessScore(item) });
+  }
+  const byOpenHouseKey = new Map();
+  for (const c of openHouseCandidates) {
+    const key = listingDedupKey(c.item) ?? `id:${c.item.id}`;
+    const existing = byOpenHouseKey.get(key);
+    if (!existing || c.richness > existing.richness) {
+      byOpenHouseKey.set(key, { ...c, dedupKey: key });
+    }
+  }
+  for (const pick of byOpenHouseKey.values()) {
+    const item = pick.item;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const title = listingTitleFor(data) ?? "your listing";
+    const dateLabel = new Date(pick.event.date).toLocaleDateString();
+    const channelsForCopy = channels.slice(0, 4);
+    const channelText =
+      channelsForCopy.length > 0
+        ? channelsForCopy.join(", ")
+        : "your connected social channels";
     tally(
       await upsertRecommendation({
         clientId: workspaceId,
         triggerType: "OPEN_HOUSE",
         triggerObjectType: "listing",
-        triggerObjectId: item.id,
-        headline: `Open house this week — ${title}`,
+        triggerObjectId: pick.dedupKey,
+        headline: `Open House: ${title}`,
         whatWeNoticed: `${title} has an open house scheduled for ${dateLabel}.`,
-        whyItMatters:
-          "Open-house posts shared 3–5 days out drive the most foot traffic and qualified showings.",
-        recommendedChannels: channels.slice(0, 4),
+        whyItMatters: `Open-house posts shared 3–5 days out drive the most foot traffic. Autopilot can prepare reminder drafts for ${channelText}.`,
+        recommendedChannels: channelsForCopy,
         recommendedAngles: [
           "Open-house invite + map",
           "What to expect on the tour",
           "Reminder post day-of",
         ],
-        expiresAt: new Date(new Date(upcomingOpenHouse.date).getTime() + DAY_MS),
+        expiresAt: new Date(new Date(pick.event.date).getTime() + DAY_MS),
         payloadJson: {
           propertyTitle: title,
           propertyAddress: typeof data.address === "string" ? data.address : null,
-          propertyImageUrl: typeof data.imageUrl === "string" ? data.imageUrl : null,
+          propertyImageUrl:
+            typeof data.imageUrl === "string" && data.imageUrl.length > 0
+              ? data.imageUrl
+              : Array.isArray(data.images) && typeof data.images[0] === "string"
+                ? data.images[0]
+                : null,
           propertyData: data,
-          openHouseDate: upcomingOpenHouse.date,
+          sourceDataItemId: item.id,
+          openHouseDate: pick.event.date,
+          dedupKey: pick.dedupKey,
           confidence: "high",
         },
       }),
@@ -831,17 +976,21 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
         : typeof review.reviewerName === "string"
           ? review.reviewerName
           : "A recent client";
+    const channelsForCopy = channels.slice(0, 3);
+    const channelText =
+      channelsForCopy.length > 0
+        ? channelsForCopy.join(", ")
+        : "your connected social channels";
     tally(
       await upsertRecommendation({
         clientId: workspaceId,
         triggerType: "NEW_REVIEW",
         triggerObjectType: "review",
         triggerObjectId: reviewId,
-        headline: `New ${stars}-star review — turn it into a testimonial post`,
-        whatWeNoticed: `${reviewerName} left a ${stars}-star review.`,
-        whyItMatters:
-          "Testimonial posts build trust at the top of the funnel. A weekly cadence of social-proof content lifts inquiry rates.",
-        recommendedChannels: channels.slice(0, 3),
+        headline: `Testimonial: ${stars}-star review from ${reviewerName}`,
+        whatWeNoticed: `${reviewerName} left a ${stars}-star review for your business.`,
+        whyItMatters: `Testimonial posts build trust at the top of the funnel. Autopilot can prepare a social-proof draft for ${channelText} that quotes the review without revealing private client details.`,
+        recommendedChannels: channelsForCopy,
         recommendedAngles: ["Testimonial quote graphic", "Thank-you reply post"],
         expiresAt: new Date(now + 30 * DAY_MS),
         payloadJson: {
@@ -867,19 +1016,23 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
   const lastPostMs = lastDraft?.createdAt ? new Date(lastDraft.createdAt).getTime() : 0;
   if (!lastPostMs || now - lastPostMs > REC_INACTIVITY_THRESHOLD_MS) {
     const days = lastPostMs ? Math.round((now - lastPostMs) / DAY_MS) : null;
+    const channelsForCopy = channels.slice(0, 3);
+    const channelText =
+      channelsForCopy.length > 0
+        ? channelsForCopy.join(", ")
+        : "your connected social channels";
     tally(
       await upsertRecommendation({
         clientId: workspaceId,
         triggerType: "INACTIVITY_GAP",
         triggerObjectType: null,
         triggerObjectId: null,
-        headline: "It's been a while — time to post something",
+        headline: "Re-engagement post — your audience hasn't heard from you",
         whatWeNoticed: days
           ? `It's been ${days} days since your last approved or published post.`
           : "We haven't seen any approved or published posts from this workspace yet.",
-        whyItMatters:
-          "Audiences quickly forget brands that go quiet. A weekly post keeps you top-of-mind without overwhelming your followers.",
-        recommendedChannels: channels.slice(0, 3),
+        whyItMatters: `Audiences quickly forget brands that go quiet. Autopilot can prepare an evergreen draft for ${channelText} to get you back in the feed without inventing property details.`,
+        recommendedChannels: channelsForCopy,
         recommendedAngles: [
           "Catch-up market update",
           "Spotlight a best-selling listing",
