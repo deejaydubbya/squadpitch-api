@@ -545,3 +545,91 @@ without a backfill.
 prioritization (the Spinstr423 work continues here:
 listing-aware sort, per-rec specificity score, surface
 "why this rec" in the Inbox card).
+
+---
+
+## 15. Spinstr02 — Recommendation Quality Pass Completion Note
+
+**Date:** 2026-05-18
+
+Spinstr423 already shipped the bulk of the Spinstr02 quality
+pass: listing dedup (MLS / street / title), `listingRichnessScore`
+to pick the richer record on collapse, `REC_MAX_NEW_LISTINGS_PER_RUN
+= 3` cap, address-first headlines (`New Listing: <address>` /
+`Open House: <address>`), per-trigger specific copy
+(NEW_LISTING / OPEN_HOUSE / NEW_REVIEW / INACTIVITY_GAP each
+explain what was noticed, why it matters, and what channels
+Autopilot can prepare), and the UI label cleanup ("Recommended"
+tab, "Drafts Ready" badge, "Generate Drafts" button).
+
+This pass closes the residual gaps:
+
+**1. Intake-time dedup for the generic import path.**
+
+The dedicated `listingIngestion.service.js` path already
+dedups by sourceId / listingUrl / normalized street
+(`checkDuplicate`). The generic `dataImport.service.js`
+`saveImportedItems()` path used by the Property Library URL /
+text / Sheets / Notion importers was calling `createMany`
+blindly, so the same listing imported twice via different
+paths landed as two rows (e.g. "508 King George Court" — once
+with photos, once without).
+
+Fix: for PROPERTY items only, `saveImportedItems()` now
+builds a dedup key (`externalListingId` / `mlsId` /
+`listingUrl` / normalized street address / normalized title)
+and either merges into an existing ACTIVE workspace PROPERTY
+or onto an earlier row in the same batch. The merge is
+"prefer richer" — non-null fields from the new payload fill
+gaps in the existing `dataJson` but don't clobber non-null
+existing values. The return shape now includes
+`propertyMerged` so the importer UI can surface
+"3 imported, 2 merged into existing properties."
+
+Non-PROPERTY items continue to bulk-insert unchanged.
+
+**2. Autopilot page subtitle cleanup.**
+
+The Autopilot page header was still showing the misleading
+old subtitle `"Automated content generation and scheduling"`,
+which implied auto-publish. Replaced with
+`"AI campaign opportunities prepared for your review"` to
+match the actual product behavior.
+
+**3. The in-Autopilot dedup remains.**
+
+`listingDedupKey()` + `listingRichnessScore()` in the
+NEW_LISTING / OPEN_HOUSE detectors stay as a defense-in-depth
+layer. Legacy duplicate rows in existing workspaces still
+collapse onto a single recommendation without a backfill
+migration.
+
+**Files changed:**
+
+- `domains/studio/dataImport.service.js` — `saveImportedItems`
+  now dedups PROPERTY items; new `propertyDedupKey` +
+  `mergePreferRicher` helpers.
+- `docs/AUTOPILOT_MVP_IMPLEMENTATION.md` — new §2a
+  "Recommendation Quality" subsection.
+- `tests/dataImportPropertyDedup.test.js` — 5 cases (same
+  batch / cross-batch / MLS id / non-PROPERTY pass-through /
+  distinct addresses don't collapse).
+- web `src/app/(app)/workspaces/[clientId]/autopilot/page.tsx`
+  — subtitle change.
+
+**Tests:** API 898/898 passing; Web 272/272 passing; web
+typecheck clean. No skipped tests.
+
+**Remaining known limitations:**
+
+- Library-level dedup is now intake-only — legacy duplicate
+  rows already in a workspace's `WorkspaceDataItem` table
+  are not touched. The Autopilot dedup keeps the Inbox
+  correct, but the Property Library UI may still show two
+  rows until a future backfill / merge tool ships.
+- `propertyMerged` is returned by the service but no
+  importer UI surface consumes it yet — surfacing
+  "n imported, m merged" in the importer review screen is
+  a small follow-up.
+
+**Safety:** unchanged — no auto-publish path was added.

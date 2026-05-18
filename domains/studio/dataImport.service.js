@@ -182,6 +182,64 @@ export async function extractFromNotion(integrationId, { hint } = {}) {
 
 // ── Save ─────────────────────────────────────────────────────────────────
 
+// Spinstr02 — keep PROPERTY rows unique at intake.
+//
+// The dedicated listingIngestion path already dedups by sourceId /
+// listingUrl / normalized street address before insert
+// (domains/studio/listingIngestion.service.js:checkDuplicate).
+// The generic import path used by the Property Library UI bypassed
+// that check and called createMany blindly, so the same listing
+// imported via URL extraction + manual paste landed as two rows
+// (e.g. "508 King George Court" — once with photos, once without).
+// We now run the same family of dedup keys for PROPERTY items here.
+// Non-PROPERTY items continue to bulk-insert unchanged: testimonials,
+// FAQs, and other generic data may legitimately repeat.
+
+function normalizePropertyKeySegment(value) {
+  if (typeof value !== "string") return "";
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function streetFromPropertyTitle(title) {
+  if (typeof title !== "string" || title.trim().length === 0) return "";
+  return title.split(",")[0].trim();
+}
+
+function propertyDedupKey(item) {
+  const data = (item?.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+  const ext = data.externalListingId ?? data.mlsId ?? data.mls_id ?? data.sourceId ?? data.external_id;
+  if (typeof ext === "string" && ext.length > 0) return `ext:${ext}`;
+  if (typeof ext === "number") return `ext:${ext}`;
+  if (typeof data.listingUrl === "string" && data.listingUrl.length > 0) {
+    return `url:${data.listingUrl.toLowerCase()}`;
+  }
+  const street =
+    normalizePropertyKeySegment(data.street) ||
+    normalizePropertyKeySegment(data.address) ||
+    normalizePropertyKeySegment(streetFromPropertyTitle(item?.title)) ||
+    normalizePropertyKeySegment(streetFromPropertyTitle(data.title));
+  if (street && street.length > 5) return `addr:${street}`;
+  const titleKey = normalizePropertyKeySegment(item?.title) || normalizePropertyKeySegment(data.title);
+  if (titleKey && titleKey.length > 5) return `title:${titleKey}`;
+  return null;
+}
+
+function mergePreferRicher(existingData, incomingData) {
+  const merged = { ...(existingData ?? {}) };
+  for (const [k, v] of Object.entries(incomingData ?? {})) {
+    if (v == null || v === "") continue;
+    const cur = merged[k];
+    if (cur == null || cur === "") {
+      merged[k] = v;
+      continue;
+    }
+    if (Array.isArray(cur) && Array.isArray(v) && v.length > cur.length) {
+      merged[k] = v;
+    }
+  }
+  return merged;
+}
+
 /**
  * Save reviewed/confirmed items to the database.
  */
@@ -199,20 +257,86 @@ export async function saveImportedItems(clientId, { items, sourceType, sourceUrl
     },
   });
 
-  // Bulk create items
-  const created = await prisma.workspaceDataItem.createMany({
-    data: items.map((item) => ({
-      clientId,
-      dataSourceId: dataSource.id,
-      type: item.type,
-      title: item.title,
-      summary: item.summary || null,
-      dataJson: item.dataJson || {},
-      tags: item.tags || [],
-      priority: item.priority ?? 0,
-      expiresAt: item.expiresAt ? new Date(item.expiresAt) : null,
-    })),
-  });
+  // Split PROPERTY items from the rest so dedup only touches
+  // listings. Other types pass through unchanged.
+  const propertyItems = [];
+  const otherItems = [];
+  for (const item of items) {
+    if (item.type === "PROPERTY") propertyItems.push(item);
+    else otherItems.push(item);
+  }
+
+  // Resolve PROPERTY duplicates against existing rows and within
+  // this same batch.
+  let propertyCreated = 0;
+  let propertyMerged = 0;
+  const seenKeys = new Map(); // dedup key → id of within-batch row we already created
+
+  if (propertyItems.length > 0) {
+    const existing = await prisma.workspaceDataItem.findMany({
+      where: { clientId, type: "PROPERTY", status: "ACTIVE" },
+      select: { id: true, title: true, dataJson: true },
+      take: 500,
+    });
+    const existingByKey = new Map();
+    for (const row of existing) {
+      const k = propertyDedupKey(row);
+      if (k && !existingByKey.has(k)) existingByKey.set(k, row);
+    }
+
+    for (const item of propertyItems) {
+      const key = propertyDedupKey(item);
+      const dupId = key ? (seenKeys.get(key) ?? existingByKey.get(key)?.id) : null;
+      if (dupId) {
+        const target = await prisma.workspaceDataItem.findUnique({
+          where: { id: dupId },
+          select: { dataJson: true },
+        });
+        const mergedData = mergePreferRicher(target?.dataJson ?? {}, item.dataJson ?? {});
+        await prisma.workspaceDataItem.update({
+          where: { id: dupId },
+          data: { dataJson: mergedData },
+        });
+        propertyMerged += 1;
+        continue;
+      }
+      const row = await prisma.workspaceDataItem.create({
+        data: {
+          clientId,
+          dataSourceId: dataSource.id,
+          type: item.type,
+          title: item.title,
+          summary: item.summary || null,
+          dataJson: item.dataJson || {},
+          tags: item.tags || [],
+          priority: item.priority ?? 0,
+          expiresAt: item.expiresAt ? new Date(item.expiresAt) : null,
+        },
+        select: { id: true },
+      });
+      propertyCreated += 1;
+      if (key) seenKeys.set(key, row.id);
+    }
+  }
+
+  // Bulk create the non-PROPERTY items unchanged.
+  let otherCreated = 0;
+  if (otherItems.length > 0) {
+    const created = await prisma.workspaceDataItem.createMany({
+      data: otherItems.map((item) => ({
+        clientId,
+        dataSourceId: dataSource.id,
+        type: item.type,
+        title: item.title,
+        summary: item.summary || null,
+        dataJson: item.dataJson || {},
+        tags: item.tags || [],
+        priority: item.priority ?? 0,
+        expiresAt: item.expiresAt ? new Date(item.expiresAt) : null,
+      })),
+    });
+    otherCreated = created.count;
+  }
 
   // Fetch back created items so callers can get their IDs
   const savedItems = await prisma.workspaceDataItem.findMany({
@@ -221,5 +345,10 @@ export async function saveImportedItems(clientId, { items, sourceType, sourceUrl
     orderBy: { createdAt: "asc" },
   });
 
-  return { created: created.count, dataSourceId: dataSource.id, items: savedItems };
+  return {
+    created: propertyCreated + otherCreated,
+    propertyMerged,
+    dataSourceId: dataSource.id,
+    items: savedItems,
+  };
 }

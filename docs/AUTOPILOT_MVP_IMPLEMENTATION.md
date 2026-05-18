@@ -78,6 +78,47 @@ Legacy `draft_only` is still accepted on the wire and normalized to
 the latter but a hand-edited row still normalizes to draft_on_click).
 Nothing publishes without explicit user approval.
 
+### 2a. Recommendation Quality (Spinstr423 + Spinstr02)
+
+Two layers of dedup keep the Inbox clean:
+
+1. **Intake dedup.** `saveImportedItems()` in
+   `dataImport.service.js` now matches the dedicated
+   `listingIngestion.service.js` path: PROPERTY items with the
+   same `externalListingId` / `mlsId` / `listingUrl` /
+   normalized street address collapse onto the existing row
+   instead of creating a second WorkspaceDataItem. The merge
+   is "prefer richer" — non-null fields from the new payload
+   fill gaps in the existing `dataJson` but don't clobber
+   non-null existing values, so a sparse re-import never
+   strips photos off an enriched row. Non-PROPERTY items
+   bulk-insert unchanged (testimonials, FAQs, etc. may
+   legitimately repeat).
+
+2. **Autopilot detector dedup.** Even when two PROPERTY rows
+   sneak through (legacy data, two providers), the NEW_LISTING
+   and OPEN_HOUSE detectors collapse by `listingDedupKey()` —
+   MLS id > normalized street address > normalized title — and
+   pick the richest record via `listingRichnessScore()`
+   (images worth +10, price/beds/baths/sqft +1 each, long
+   description +1). At most `REC_MAX_NEW_LISTINGS_PER_RUN = 3`
+   new listing recs per evaluator tick; existing recs stay
+   visible across runs.
+
+Recommendation payload always carries: `propertyTitle`,
+`propertyAddress`, `propertyCity/State/Zip`, `propertyPrice`,
+`propertyBeds/Baths/Sqft`, `propertyImageUrl`,
+`sourceDataItemId`, `dedupKey`, `confidence`. The UI uses
+these to render `"New Listing: 508 King George Court"` instead
+of the old generic `"your new listing"` headline.
+
+Per-trigger copy (`whatWeNoticed` / `whyItMatters`) is
+type-specific — NEW_LISTING speaks to launch / buyer interest
+/ showing CTA, OPEN_HOUSE to event reminder / urgency,
+NEW_REVIEW to trust / social proof, INACTIVITY_GAP to
+consistency / re-engagement. Generic placeholder copy is
+gone.
+
 ---
 
 ## 3. Endpoints
