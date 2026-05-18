@@ -34,6 +34,10 @@ import { generateDraft } from "./generation/aiGenerationService.js";
 import { formatDraft } from "./draft.service.js";
 import { pickAngleForSource } from "./contentAngles.js";
 import { getGBPSignals } from "./gbpSync.service.js";
+import {
+  upsertRecommendation,
+  expireStaleRecommendations,
+} from "./autopilotCampaignRecommendation.service.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AUTOPILOT_PROVIDER_KEY = "_autopilot_settings";
@@ -605,36 +609,34 @@ export async function runAutopilot(workspaceId, { mode = "event" } = {}) {
 
   const { settings, reAssets, enabledChannels } = preamble;
 
-  // v1 trigger evaluation
+  // Phase 2 — evaluator emits CampaignRecommendation rows
+  // instead of creating Drafts. Draft generation is Phase 3's
+  // job, gated on the user clicking Generate from the Inbox.
   const triggers = await evaluateTriggers(workspaceId, reAssets, settings);
-
-  // v1 single-decision engine
-  const eligible = triggers.filter((t) => t.eligible);
-  if (eligible.length === 0) {
-    return { action: "no_action", reason: "No eligible triggers", triggers, mode };
-  }
-
-  // Use the coverage-aware planner but cap at 1 for event-driven runs
-  const coverage = await evaluateContentCoverage(workspaceId, enabledChannels, reAssets, settings);
-  const plans = planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannels, maxPlans: 1 });
-
-  if (plans.length === 0) {
-    return { action: "no_action", reason: "No suitable action found", triggers, coverage: summarizeCoverage(coverage), mode };
-  }
-
-  const draft = await executeDraftPlan(workspaceId, plans[0], mode);
-  if (!draft) {
-    return { action: "no_action", reason: "Draft generation skipped (duplicate or failed)", triggers, mode };
-  }
+  const expired = await expireStaleRecommendations(workspaceId);
+  const summary = await detectAndPersistRecommendations({
+    workspaceId,
+    reAssets,
+    enabledChannels,
+  });
 
   return {
-    action: "generated",
-    drafts: [draft],
-    draftsCreated: 1,
-    reason: `Generated ${plans[0].templateType} for ${plans[0].channel}`,
+    action: summary.recommendationsCreated > 0 || summary.recommendationsUpdated > 0
+      ? "recommended"
+      : "no_action",
+    // Legacy fields preserved (now zero) so existing callers that
+    // iterate over `drafts` don't NPE.
+    drafts: [],
+    draftsCreated: 0,
+    // New fields the Phase 2 UI consumes.
+    recommendationsCreated: summary.recommendationsCreated,
+    recommendationsUpdated: summary.recommendationsUpdated,
+    recommendationsExpired: expired,
+    reason:
+      summary.recommendationsCreated + summary.recommendationsUpdated > 0
+        ? `Surfaced ${summary.recommendationsCreated + summary.recommendationsUpdated} campaign opportunit${summary.recommendationsCreated + summary.recommendationsUpdated === 1 ? "y" : "ies"}`
+        : "No new opportunities detected",
     triggers,
-    plans,
-    coverage: summarizeCoverage(coverage),
     mode,
   };
 }
@@ -650,58 +652,250 @@ export async function runScheduledAutopilot(workspaceId) {
   const preamble = await loadAutopilotContext(workspaceId);
   if (preamble.action === "no_action") return preamble;
 
-  const { settings, reAssets, enabledChannels, guardrail } = preamble;
-  const maxPlans = Math.min(settings.maxDraftsPerScheduledRun ?? 2, guardrail.remaining);
+  const { reAssets, enabledChannels } = preamble;
 
-  if (maxPlans <= 0) {
-    return { action: "no_action", reason: guardrail.reason ?? "No capacity remaining", mode: "scheduled" };
-  }
-
-  // Evaluate triggers + coverage
-  const triggers = await evaluateTriggers(workspaceId, reAssets, settings);
-  const coverage = await evaluateContentCoverage(workspaceId, enabledChannels, reAssets, settings);
-
-  // Plan multi-draft batch
-  const plans = planMultiDraft({ triggers, coverage, reAssets, settings, enabledChannels, maxPlans });
-
-  if (plans.length === 0) {
-    return {
-      action: "no_action",
-      reason: "No suitable actions — content coverage is adequate",
-      triggers,
-      coverage: summarizeCoverage(coverage),
-      mode: "scheduled",
-    };
-  }
-
-  // Execute plans sequentially (respect spacing — but within a batch run, allow adjacent)
-  const drafts = [];
-  for (const plan of plans) {
-    const draft = await executeDraftPlan(workspaceId, plan, "scheduled");
-    if (draft) drafts.push(draft);
-  }
-
-  if (drafts.length === 0) {
-    return {
-      action: "no_action",
-      reason: "All plans skipped (duplicate assets or generation failures)",
-      triggers,
-      plans,
-      coverage: summarizeCoverage(coverage),
-      mode: "scheduled",
-    };
-  }
+  // Phase 2 — same as event-driven run: detect + persist
+  // recommendations + sweep expired. No draft generation here;
+  // the Inbox-side Generate button (Phase 3) creates drafts.
+  const triggers = await evaluateTriggers(workspaceId, reAssets, preamble.settings);
+  const expired = await expireStaleRecommendations(workspaceId);
+  const summary = await detectAndPersistRecommendations({
+    workspaceId,
+    reAssets,
+    enabledChannels,
+  });
 
   return {
-    action: "generated",
-    drafts,
-    draftsCreated: drafts.length,
-    reason: `Scheduled run created ${drafts.length} draft${drafts.length === 1 ? "" : "s"}`,
+    action:
+      summary.recommendationsCreated > 0 || summary.recommendationsUpdated > 0
+        ? "recommended"
+        : "no_action",
+    drafts: [],
+    draftsCreated: 0,
+    recommendationsCreated: summary.recommendationsCreated,
+    recommendationsUpdated: summary.recommendationsUpdated,
+    recommendationsExpired: expired,
+    reason:
+      summary.recommendationsCreated + summary.recommendationsUpdated > 0
+        ? `Surfaced ${summary.recommendationsCreated + summary.recommendationsUpdated} campaign opportunit${summary.recommendationsCreated + summary.recommendationsUpdated === 1 ? "y" : "ies"}`
+        : "No new opportunities detected",
     triggers,
-    plans,
-    coverage: summarizeCoverage(coverage),
     mode: "scheduled",
   };
+}
+
+// ── Phase 2 detector — opportunities → recommendations ────────────────
+//
+// One detection pass per workspace. Each detector emits via
+// upsertRecommendation (idempotent on clientId × triggerType ×
+// triggerObjectId), so re-runs on the same opportunity touch
+// updatedAt + payload rather than duplicating the row.
+//
+// Wired triggers today:
+//   - NEW_LISTING     (per listing item)
+//   - OPEN_HOUSE      (per listing with a future open_house event)
+//   - NEW_REVIEW      (per recent review)
+//   - INACTIVITY_GAP  (workspace-scoped fallback)
+//
+// Planned, documented in docs/AUTOPILOT_PRODUCT_AUDIT.md §5 but
+// not yet wired:
+//   - PRICE_DROP      (needs listing priceHistory tracking)
+//   - STALE_LISTING   (needs last-engagement tracking)
+//   - JUST_SOLD       (needs status-flip event tracking)
+//   - MARKET_UPDATE   (needs cadence rules)
+//   - SEASONAL        (needs calendar)
+const REC_LISTING_LOOKBACK_MS = 14 * DAY_MS;
+const REC_INACTIVITY_THRESHOLD_MS = 14 * DAY_MS;
+const REC_OPEN_HOUSE_WINDOW_MS = 7 * DAY_MS;
+const REC_REVIEW_LOOKBACK_MS = 14 * DAY_MS;
+
+async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledChannels }) {
+  let created = 0;
+  let updated = 0;
+  const channels = Array.isArray(enabledChannels) ? enabledChannels : [];
+
+  // Helper: bump counters off the upsert result.
+  const tally = (res) => {
+    if (!res) return;
+    if (res.status === "created") created += 1;
+    else if (res.status === "updated") updated += 1;
+  };
+
+  const now = Date.now();
+  const listings = Array.isArray(reAssets?.listings) ? reAssets.listings : [];
+
+  // ── NEW_LISTING ─────────────────────────────────────────────
+  for (const entry of listings) {
+    const item = entry?.source;
+    if (!item?.id) continue;
+    const createdAt = item.createdAt ? new Date(item.createdAt).getTime() : 0;
+    if (!createdAt || now - createdAt > REC_LISTING_LOOKBACK_MS) continue;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const title =
+      typeof data.address === "string"
+        ? data.address
+        : typeof data.title === "string"
+          ? data.title
+          : "New listing";
+    const priceText =
+      typeof data.price === "string" || typeof data.price === "number"
+        ? ` listed at ${data.price}`
+        : "";
+    tally(
+      await upsertRecommendation({
+        clientId: workspaceId,
+        triggerType: "NEW_LISTING",
+        triggerObjectType: "listing",
+        triggerObjectId: item.id,
+        headline: `New listing launch — ${title}`,
+        whatWeNoticed: `You added a new listing${priceText} on ${new Date(createdAt).toLocaleDateString()}.`,
+        whyItMatters:
+          "New listings get the most engagement in their first 7 days. Posting now maximizes views, saves, and inquiry volume.",
+        recommendedChannels: channels.slice(0, 4),
+        recommendedAngles: [
+          "Just listed announcement",
+          "Property highlight reel",
+          "Neighborhood + price hook",
+        ],
+        expiresAt: new Date(createdAt + REC_LISTING_LOOKBACK_MS),
+        payloadJson: {
+          propertyTitle: title,
+          propertyAddress: typeof data.address === "string" ? data.address : null,
+          propertyImageUrl: typeof data.imageUrl === "string" ? data.imageUrl : null,
+          propertyData: data,
+          confidence: "high",
+        },
+      }),
+    );
+  }
+
+  // ── OPEN_HOUSE ──────────────────────────────────────────────
+  for (const entry of listings) {
+    const item = entry?.source;
+    if (!item?.id) continue;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const events = Array.isArray(data.events) ? data.events : [];
+    const upcomingOpenHouse = events.find((e) => {
+      if (!e || typeof e !== "object") return false;
+      if (e.type !== "open_house") return false;
+      const t = e.date ? new Date(e.date).getTime() : 0;
+      return t && t > now && t - now < REC_OPEN_HOUSE_WINDOW_MS;
+    });
+    if (!upcomingOpenHouse) continue;
+    const title =
+      typeof data.address === "string" ? data.address : "your listing";
+    const dateLabel = new Date(upcomingOpenHouse.date).toLocaleDateString();
+    tally(
+      await upsertRecommendation({
+        clientId: workspaceId,
+        triggerType: "OPEN_HOUSE",
+        triggerObjectType: "listing",
+        triggerObjectId: item.id,
+        headline: `Open house this week — ${title}`,
+        whatWeNoticed: `${title} has an open house scheduled for ${dateLabel}.`,
+        whyItMatters:
+          "Open-house posts shared 3–5 days out drive the most foot traffic and qualified showings.",
+        recommendedChannels: channels.slice(0, 4),
+        recommendedAngles: [
+          "Open-house invite + map",
+          "What to expect on the tour",
+          "Reminder post day-of",
+        ],
+        expiresAt: new Date(new Date(upcomingOpenHouse.date).getTime() + DAY_MS),
+        payloadJson: {
+          propertyTitle: title,
+          propertyAddress: typeof data.address === "string" ? data.address : null,
+          propertyImageUrl: typeof data.imageUrl === "string" ? data.imageUrl : null,
+          propertyData: data,
+          openHouseDate: upcomingOpenHouse.date,
+          confidence: "high",
+        },
+      }),
+    );
+  }
+
+  // ── NEW_REVIEW ──────────────────────────────────────────────
+  const reviews = Array.isArray(reAssets?.reviews) ? reAssets.reviews : [];
+  for (const review of reviews) {
+    if (!review?.id && !review?.reviewId) continue;
+    const reviewId = String(review.id ?? review.reviewId);
+    const createdAt = review.createdAt ? new Date(review.createdAt).getTime() : 0;
+    if (createdAt && now - createdAt > REC_REVIEW_LOOKBACK_MS) continue;
+    const stars =
+      typeof review.starRating === "number" && review.starRating >= 4
+        ? review.starRating
+        : null;
+    if (!stars) continue;
+    const reviewerName =
+      typeof review.reviewer === "string"
+        ? review.reviewer
+        : typeof review.reviewerName === "string"
+          ? review.reviewerName
+          : "A recent client";
+    tally(
+      await upsertRecommendation({
+        clientId: workspaceId,
+        triggerType: "NEW_REVIEW",
+        triggerObjectType: "review",
+        triggerObjectId: reviewId,
+        headline: `New ${stars}-star review — turn it into a testimonial post`,
+        whatWeNoticed: `${reviewerName} left a ${stars}-star review.`,
+        whyItMatters:
+          "Testimonial posts build trust at the top of the funnel. A weekly cadence of social-proof content lifts inquiry rates.",
+        recommendedChannels: channels.slice(0, 3),
+        recommendedAngles: ["Testimonial quote graphic", "Thank-you reply post"],
+        expiresAt: new Date(now + 30 * DAY_MS),
+        payloadJson: {
+          reviewerName,
+          stars,
+          confidence: "medium",
+        },
+      }),
+    );
+  }
+
+  // ── INACTIVITY_GAP (workspace-scoped) ───────────────────────
+  // Fallback so the Inbox never sits empty for long. Idempotent
+  // by the fallback object id baked into upsertRecommendation.
+  const lastDraft = await prisma.draft.findFirst({
+    where: {
+      clientId: workspaceId,
+      status: { in: ["APPROVED", "SCHEDULED", "PUBLISHED"] },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  const lastPostMs = lastDraft?.createdAt ? new Date(lastDraft.createdAt).getTime() : 0;
+  if (!lastPostMs || now - lastPostMs > REC_INACTIVITY_THRESHOLD_MS) {
+    const days = lastPostMs ? Math.round((now - lastPostMs) / DAY_MS) : null;
+    tally(
+      await upsertRecommendation({
+        clientId: workspaceId,
+        triggerType: "INACTIVITY_GAP",
+        triggerObjectType: null,
+        triggerObjectId: null,
+        headline: "It's been a while — time to post something",
+        whatWeNoticed: days
+          ? `It's been ${days} days since your last approved or published post.`
+          : "We haven't seen any approved or published posts from this workspace yet.",
+        whyItMatters:
+          "Audiences quickly forget brands that go quiet. A weekly post keeps you top-of-mind without overwhelming your followers.",
+        recommendedChannels: channels.slice(0, 3),
+        recommendedAngles: [
+          "Catch-up market update",
+          "Spotlight a best-selling listing",
+          "Reintroduce yourself + your services",
+        ],
+        expiresAt: new Date(now + 7 * DAY_MS),
+        payloadJson: {
+          daysSinceLastPost: days,
+          confidence: "low",
+        },
+      }),
+    );
+  }
+
+  return { recommendationsCreated: created, recommendationsUpdated: updated };
 }
 
 // ── Evaluate all enabled workspaces (for external cron/scheduler) ────────

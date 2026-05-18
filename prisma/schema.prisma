@@ -224,6 +224,7 @@ model Client {
   contacts             Contact[]
   conversations        Conversation[]
   adPackages           AdPackage[]
+  autopilotCampaignRecommendations AutopilotCampaignRecommendation[]
 
   @@index([status])
   @@map("clients")
@@ -2188,4 +2189,88 @@ model AuditLog {
   @@index([action, createdAt])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// ── Autopilot Campaign Recommendations (spinstr/Phase 2) ───────────────
+//
+// Persistent campaign-recommendation rows. Each represents one
+// opportunity the evaluator detected (a new listing, an open
+// house this week, a 5-star review, etc.). The workspace owner
+// reviews / dismisses / generates drafts from them via the
+// Campaign Inbox UI.
+//
+// Idempotency: every detector emits via (clientId, triggerType,
+// triggerObjectId). A re-run on the same opportunity touches
+// updatedAt + expiresAt rather than creating a duplicate row.
+// The composite unique enforces that at the DB layer.
+//
+// Lifecycle (docs/AUTOPILOT_PRODUCT_AUDIT.md §4):
+//   NEEDS_REVIEW → (DRAFT_GENERATED) → APPROVED → SCHEDULED
+//   NEEDS_REVIEW → DISMISSED
+//   any → EXPIRED (set by the next evaluator run when the
+//                  underlying opportunity has passed)
+model AutopilotCampaignRecommendation {
+  id                String                                @id @default(cuid())
+  clientId          String
+  createdAt         DateTime                              @default(now())
+  updatedAt         DateTime                              @updatedAt
+  expiresAt         DateTime?
+  triggerType       AutopilotTriggerType
+  // The business object that kicked this recommendation off.
+  // Nullable on triggers that don't reference a specific object
+  // (e.g. INACTIVITY_GAP, SEASONAL).
+  triggerObjectType String?
+  triggerObjectId   String?
+  status            AutopilotRecommendationStatus         @default(NEEDS_REVIEW)
+  // Surface copy the inbox renders verbatim.
+  headline          String                                @db.Text
+  whatWeNoticed     String                                @db.Text
+  whyItMatters      String                                @db.Text
+  // Channel + angle hints — Phase 3's generator consumes these.
+  recommendedChannels String[]
+  recommendedAngles   Json
+  // Populated once Phase 3 generates drafts from this rec. Array
+  // of Draft ids so the inbox can show "3 drafts ready" without
+  // an extra join.
+  generatedDraftIds String[]
+  dismissedReason   String?                               @db.Text
+  decidedBy         String?
+  // Free-form per-trigger payload (e.g. price-drop deltas, open-
+  // house date). Whitelist-shaped per detector — never echoes
+  // arbitrary upstream JSON.
+  payloadJson       Json?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  // Idempotency: one row per (workspace × triggerType × business object).
+  // triggerObjectId nullable means triggers without a specific
+  // object (INACTIVITY_GAP) can only have one open rec per
+  // workspace per type — exactly what we want.
+  @@unique([clientId, triggerType, triggerObjectId], name: "uniq_rec_per_trigger_object")
+  // Hot list query: open recs for a workspace, newest first.
+  @@index([clientId, status, createdAt])
+  // Expiry sweep: find recs to mark EXPIRED.
+  @@index([expiresAt])
+  @@map("autopilot_campaign_recommendations")
+}
+
+enum AutopilotTriggerType {
+  NEW_LISTING
+  PRICE_DROP
+  OPEN_HOUSE
+  JUST_SOLD
+  STALE_LISTING
+  NEW_REVIEW
+  MARKET_UPDATE
+  SEASONAL
+  INACTIVITY_GAP
+}
+
+enum AutopilotRecommendationStatus {
+  NEEDS_REVIEW
+  DRAFT_GENERATED
+  APPROVED
+  SCHEDULED
+  DISMISSED
+  EXPIRED
 }

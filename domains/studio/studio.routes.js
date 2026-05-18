@@ -4901,6 +4901,116 @@ studioRouter.get(
   }
 );
 
+// ── Autopilot Campaign Recommendations (Phase 2) ─────────────────────
+//
+// Read + dismiss endpoints for the Campaign Inbox surface. Phase 3
+// will add generate/approve/convert. All three routes are
+// real-estate-gated at the service layer indirectly via the
+// evaluator (non-real-estate workspaces don't get recommendations
+// written, so the list comes back empty — no special-case here).
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/autopilot/campaign-recommendations`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { listRecommendations, getStats } = await import(
+        "./autopilotCampaignRecommendation.service.js"
+      );
+      const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
+      const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+      // Optional status filter — accepts comma-separated FE-style
+      // values, mapped back to BE enum names for the query.
+      const statusFilter = parseStatusFilter(req.query.status);
+      const [{ recommendations }, stats] = await Promise.all([
+        listRecommendations({
+          clientId: req.params.id,
+          status: statusFilter,
+          limit,
+          offset,
+        }),
+        getStats(req.params.id),
+      ]);
+      res.json({
+        recommendations,
+        pendingCount: stats.pendingCount,
+        readyCount: stats.readyCount,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/autopilot/campaign-stats`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { getStats } = await import(
+        "./autopilotCampaignRecommendation.service.js"
+      );
+      const stats = await getStats(req.params.id);
+      res.json(stats);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/dismiss`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { dismissRecommendation, auditRecommendationEvent } = await import(
+        "./autopilotCampaignRecommendation.service.js"
+      );
+      const reason =
+        typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : null;
+      const recommendation = await dismissRecommendation({
+        clientId: req.params.id,
+        recommendationId: req.params.recommendationId,
+        reason,
+        actorSub: getAuth0Sub(req),
+      });
+      await auditRecommendationEvent(
+        req,
+        "autopilot.recommendation.dismissed",
+        req.params.recommendationId,
+        { clientId: req.params.id, reason },
+      );
+      res.json({ recommendation });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+// FE sends status filter as the lowercase strings the UI uses
+// (pending / ready / approved / dismissed / expired / all).
+// Map to the BE enum names for the query.
+function parseStatusFilter(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const map = {
+    pending: "NEEDS_REVIEW",
+    ready: "DRAFT_GENERATED",
+    approved: "APPROVED",
+    scheduled: "SCHEDULED",
+    dismissed: "DISMISSED",
+    expired: "EXPIRED",
+  };
+  const out = [];
+  for (const token of raw.split(",").map((t) => t.trim().toLowerCase())) {
+    if (token === "all") return null;
+    if (map[token]) out.push(map[token]);
+  }
+  return out.length > 0 ? out : null;
+}
+
 // ── Planner Suggestions ──────────────────────────────────────────────────
 
 studioRouter.post(

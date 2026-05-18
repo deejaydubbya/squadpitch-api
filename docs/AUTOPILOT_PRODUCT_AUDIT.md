@@ -1,9 +1,10 @@
 # Autopilot Product Audit
 
-**Status:** Phase 1 shipped. Phases 2–6 still planned.
+**Status:** Phases 1 + 2 shipped. Phases 3–6 still planned.
 **Repos audited:** squadpitch-api, squadpitch-web.
 **Baseline at audit:** API 813 passing, web typecheck clean.
 **After Phase 1:** API 823 passing, web 272 passing, web typecheck clean.
+**After Phase 2:** API 837 passing, web 272 passing, web typecheck clean.
 
 ---
 
@@ -203,3 +204,80 @@ tests (flag default + true/false discrimination). Suites:
 **Next step:** Phase 2 — persistent `AutopilotCampaignRecommendation` model
 + read/dismiss endpoints. Flip `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED`
 after rollout.
+
+---
+
+## 10. Phase 2 Completion Note
+
+**Shipped:**
+
+- New Prisma model `AutopilotCampaignRecommendation` with two enums
+  (`AutopilotTriggerType`, `AutopilotRecommendationStatus`) + a
+  composite unique on `(clientId, triggerType, triggerObjectId)` for
+  idempotency. Migration `20260518000001_autopilot_campaign_recommendations`.
+  Pure additive; no other tables touched.
+- New service `domains/studio/autopilotCampaignRecommendation.service.js`:
+  - `upsertRecommendation` — idempotent. **User-decided rows
+    (DISMISSED / APPROVED / SCHEDULED / DRAFT_GENERATED) are sticky** —
+    a re-detection touches `updatedAt` + `expiresAt` but never
+    re-opens the row.
+  - `listRecommendations` — paginated; default filter excludes EXPIRED.
+  - `getStats` — empty workspace returns zeros (not 404).
+  - `dismissRecommendation` — idempotent + tenant-scoped.
+  - `expireStaleRecommendations` — sweeps NEEDS_REVIEW /
+    DRAFT_GENERATED rows past `expiresAt` to EXPIRED on every tick.
+  - `toFrontendShape` — maps the BE row to the existing FE
+    `AutopilotCampaignRecommendation` interface so Phase 2 doesn't
+    require a UI rewrite.
+- New routes (all requireClientOwner, no FE shape change):
+  - `GET /api/v1/workspaces/:id/autopilot/campaign-recommendations` —
+    supports `?status=pending,ready,...` + `?limit` + `?offset`.
+  - `GET /api/v1/workspaces/:id/autopilot/campaign-stats`.
+  - `POST /api/v1/workspaces/:id/autopilot/campaign-recommendations/:id/dismiss` —
+    audit-logged via `inbox`-style writeAudit (action
+    `autopilot.recommendation.dismissed`).
+- Evaluator rewired. `runAutopilot` + `runScheduledAutopilot` no
+  longer create Drafts. They now run `detectAndPersistRecommendations`
+  + `expireStaleRecommendations`. Detector covers four triggers in
+  this phase:
+  - NEW_LISTING (per listing, last 14 days)
+  - OPEN_HOUSE (per listing with a future open_house event)
+  - NEW_REVIEW (per recent 4+ star review)
+  - INACTIVITY_GAP (workspace-scoped, fallback)
+  Planned but not yet wired (need data we don't track today):
+  PRICE_DROP, STALE_LISTING, JUST_SOLD, MARKET_UPDATE, SEASONAL.
+- Response shape of `/autopilot/run` updated:
+  - `drafts: []`, `draftsCreated: 0` (preserved for old callers)
+  - `recommendationsCreated`, `recommendationsUpdated`,
+    `recommendationsExpired` (new)
+  - `action`: `"recommended"` when at least one rec was emitted,
+    else `"no_action"`.
+- Frontend `AutopilotCampaignsSection` Live branch wired:
+  - Reads from the three new endpoints when
+    `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED=true`.
+  - **Dismiss** mutation fires for real (route exists).
+  - **Generate / Approve** click handlers route to a `notifyComingSoon`
+    alert — the routes ship in Phase 3 / Phase 4.
+  - **Convert** still navigates to the existing create-campaign
+    flow (manual materialization until Phase 4 server-side).
+  - Empty state preserved when the flag is off.
+
+**No changes to publishing, draft generation from approved Drafts,
+auto-publish, or the existing /preview /execute paths.**
+
+**Tests:** 14 new (idempotency, sticky user decisions,
+tenant-scoping, dismiss flow, list/stats defaults, FE shape mapping).
+Suites: **API 837/837 passing; Web 272/272 passing; web typecheck clean.**
+
+**To roll out:**
+1. Deploy API + run migration.
+2. Deploy web (no env flag change required to ship the code).
+3. When ready to surface the Campaign Inbox to users, set
+   `NEXT_PUBLIC_AUTOPILOT_CAMPAIGN_INBOX_ENABLED=true` on the
+   web Fly secrets and redeploy the web app.
+
+**Next step:** Phase 3 — generate drafts from a recommendation.
+Wires `POST /autopilot/campaign-recommendations/:id/generate` (fan
+out across `recommendedChannels`, store draft ids on the rec,
+transition status to DRAFT_GENERATED). Replaces the Phase 2
+"coming soon" alert on the Generate button.
