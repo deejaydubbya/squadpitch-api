@@ -831,22 +831,33 @@ async function autoGenerateForHighConfidence(workspaceId) {
 //   - NEW_REVIEW      (per recent review)
 //   - INACTIVITY_GAP  (workspace-scoped fallback)
 //
-// Planned, documented in docs/AUTOPILOT_PRODUCT_AUDIT.md §5 but
-// not yet wired:
-//   - PRICE_DROP      (needs listing priceHistory tracking)
-//   - STALE_LISTING   (needs last-engagement tracking)
-//   - JUST_SOLD       (needs status-flip event tracking)
-//   - MARKET_UPDATE   (needs cadence rules)
-//   - SEASONAL        (needs calendar)
+// Spinstr05 — wired:
+//   - PRICE_DROP      (uses dataJson._events.price_drop)
+//   - JUST_SOLD       (uses dataJson.status + _statusHistory)
+//   - STALE_LISTING   (uses dataJson._events.stale_listing, with
+//                      conflict suppression vs NEW_LISTING /
+//                      PRICE_DROP / OPEN_HOUSE for same property)
+//   - SEASONAL        (built-in calendar, one per workspace per
+//                      active window)
+//
+// Still planned:
+//   - MARKET_UPDATE   (needs real market data — deferred)
 const REC_LISTING_LOOKBACK_MS = 14 * DAY_MS;
 const REC_INACTIVITY_THRESHOLD_MS = 14 * DAY_MS;
 const REC_OPEN_HOUSE_WINDOW_MS = 7 * DAY_MS;
 const REC_REVIEW_LOOKBACK_MS = 14 * DAY_MS;
+const REC_PRICE_DROP_LOOKBACK_MS = 14 * DAY_MS;
+const REC_JUST_SOLD_LOOKBACK_MS = 30 * DAY_MS;
+const REC_STALE_LISTING_EVENT_LOOKBACK_MS = 14 * DAY_MS;
 // Cap on how many fresh listing recommendations a single
 // evaluator tick may emit. Without this, a workspace importing
 // 30 listings in one pass would flood the Inbox. Existing recs
 // stay visible across runs — only new emissions are capped.
 const REC_MAX_NEW_LISTINGS_PER_RUN = 3;
+const REC_MAX_PRICE_DROPS_PER_RUN = 3;
+const REC_MAX_JUST_SOLDS_PER_RUN = 3;
+const REC_MAX_STALE_PER_RUN = 2;
+const REC_SOFT_RUN_LIMIT_BEFORE_SEASONAL = 3;
 
 // Normalize address-like strings so two records pointing at the
 // same real-world property collapse onto the same dedup key.
@@ -913,6 +924,115 @@ function listingRichnessScore(item) {
   return score;
 }
 
+// Pretty-print a price for copy. Numbers render with $ + commas;
+// strings (already-formatted strings from older imports) pass
+// through verbatim. Returns "the previous price" / "the new
+// price" placeholders only if the input is missing entirely so
+// copy never says "the price dropped from undefined to undefined".
+function formatPrice(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `$${value.toLocaleString("en-US")}`;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim().startsWith("$") ? value.trim() : `$${value.trim()}`;
+  }
+  return "the previous price";
+}
+
+// Find the most recent sold timestamp on a listing for the
+// payload. Used for FE display only.
+function soldStampOf(data) {
+  const history = Array.isArray(data?._statusHistory) ? data._statusHistory : [];
+  for (const entry of [...history].reverse()) {
+    if ((entry?.status ?? "").toLowerCase() === "sold" && entry?.recordedAt) {
+      return entry.recordedAt;
+    }
+  }
+  return null;
+}
+
+// Seasonal library — conservative. Each window is keyed by a
+// stable slug + year so the unique constraint on
+// (clientId, triggerType, triggerObjectId) gives us idempotency.
+// Months are 0-indexed (Date.getUTCMonth). One window per month
+// at most; if a workspace already has a SEASONAL rec for the same
+// (key, year), the upsert just touches updatedAt.
+const SEASONAL_WINDOWS = [
+  {
+    key: "spring_buyer_campaign",
+    months: [1, 2], // Feb–Mar
+    headline: "Spring Buyer Campaign",
+    whatWeNoticed:
+      "Spring is one of the busiest seasons for real-estate buyers.",
+    whyItMatters:
+      "A spring-focused buyer post lets you ride peak search demand without inventing market stats.",
+    angles: [
+      "What spring buyers are looking for",
+      "Open-house preparation checklist",
+      "Loan pre-approval reminder",
+    ],
+  },
+  {
+    key: "summer_open_house",
+    months: [4, 5], // May–Jun
+    headline: "Summer Open House Campaign",
+    whatWeNoticed:
+      "Summer brings more in-person showings — open houses tend to get higher attendance.",
+    whyItMatters:
+      "A summer-themed open-house push can drive foot traffic to any of your active listings.",
+    angles: [
+      "Weekend open-house roundup",
+      "What to expect on tour day",
+      "Sunday-evening recap post",
+    ],
+  },
+  {
+    key: "fall_seller_prep",
+    months: [8, 9], // Sep–Oct
+    headline: "Fall Seller Prep Campaign",
+    whatWeNoticed:
+      "Fall is when many sellers start preparing to list before the holidays.",
+    whyItMatters:
+      "Educational seller-prep content positions you as the trusted local agent at the moment owners begin researching.",
+    angles: [
+      "Curb-appeal checklist for fall",
+      "How to time a winter listing",
+      "Pre-listing inspection primer",
+    ],
+  },
+  {
+    key: "year_end_market_recap",
+    months: [11], // Dec
+    headline: "Year-End Market Recap",
+    whatWeNoticed:
+      "December is a natural moment to summarize the year's activity and look ahead.",
+    whyItMatters:
+      "A year-end recap re-engages your audience without requiring a new listing.",
+    angles: [
+      "Thank-you / year-in-review post",
+      "What buyers should watch in Q1",
+      "Reflection on a memorable transaction",
+    ],
+  },
+];
+
+// Spinstr05 — exposed for tests only. Internal callers use the
+// unprefixed names.
+export const __TEST_formatPrice = formatPrice;
+export const __TEST_soldStampOf = soldStampOf;
+export const __TEST_currentSeasonalWindow = currentSeasonalWindow;
+
+function currentSeasonalWindow(date) {
+  const month = date.getUTCMonth();
+  const year = date.getUTCFullYear();
+  const window = SEASONAL_WINDOWS.find((w) => w.months.includes(month));
+  if (!window) return null;
+  // Expire at the end of the latest month in the window.
+  const lastMonth = window.months[window.months.length - 1];
+  const expiresAt = new Date(Date.UTC(year, lastMonth + 1, 1));
+  return { ...window, year, expiresAt };
+}
+
 // Build a launch headline + whatWeNoticed for a listing, using
 // the address whenever present. Falls back through:
 //   dataJson.address → item.title → dataJson.title → null
@@ -946,6 +1066,12 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
     reviewsConsidered: 0,
     reviewsEmitted: 0,
     inactivityEmitted: false,
+    // Spinstr05
+    priceDropsEmitted: 0,
+    justSoldsEmitted: 0,
+    staleEmitted: 0,
+    staleSuppressed: 0,
+    seasonalEmitted: false,
     noActionReason: null,
   };
 
@@ -1189,6 +1315,333 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
         },
       }),
     );
+  }
+
+  // ── PRICE_DROP ──────────────────────────────────────────────
+  // Spinstr05. Walks listings whose _events array carries a
+  // price_drop entry within the lookback window. Dedup by the
+  // listing's normalized address key — two records for the same
+  // property collapse onto one rec. Headlines + copy quote
+  // oldPrice / newPrice from the event so nothing is invented.
+  const priceDropCandidates = [];
+  for (const entry of listings) {
+    const item = entry?.source;
+    if (!item?.id) continue;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const events = Array.isArray(data._events) ? data._events : [];
+    let latestDrop = null;
+    for (const ev of events) {
+      if (!ev || ev.type !== "price_drop") continue;
+      const ts = ev.detectedAt ? new Date(ev.detectedAt).getTime() : 0;
+      if (!ts || now - ts > REC_PRICE_DROP_LOOKBACK_MS) continue;
+      if (!latestDrop || ts > latestDrop.ts) latestDrop = { ev, ts };
+    }
+    if (latestDrop && latestDrop.ev?.data?.oldPrice && latestDrop.ev?.data?.newPrice) {
+      priceDropCandidates.push({
+        item,
+        event: latestDrop.ev,
+        ts: latestDrop.ts,
+        richness: listingRichnessScore(item),
+      });
+    }
+  }
+  const byPriceDropKey = new Map();
+  for (const c of priceDropCandidates) {
+    const key = listingDedupKey(c.item) ?? `id:${c.item.id}`;
+    const existing = byPriceDropKey.get(key);
+    if (!existing || c.ts > existing.ts) {
+      byPriceDropKey.set(key, { ...c, dedupKey: key });
+    }
+  }
+  const priceDropPicks = [...byPriceDropKey.values()]
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, REC_MAX_PRICE_DROPS_PER_RUN);
+  for (const pick of priceDropPicks) {
+    const item = pick.item;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const title = listingTitleFor(item) ?? "your listing";
+    const channelsForCopy = channels.filter((c) => c !== "LINKEDIN").slice(0, 3);
+    const channelText =
+      channelsForCopy.length > 0 ? channelsForCopy.join(", ") : "your connected social channels";
+    const { oldPrice, newPrice, dropPercent } = pick.event.data ?? {};
+    const oldP = formatPrice(oldPrice);
+    const newP = formatPrice(newPrice);
+    const pctText = typeof dropPercent === "number" ? ` (${dropPercent}% off)` : "";
+    tally(
+      await upsertRecommendation({
+        clientId: workspaceId,
+        triggerType: "PRICE_DROP",
+        triggerObjectType: "listing",
+        triggerObjectId: pick.dedupKey,
+        headline: `Price Drop: ${title}`,
+        whatWeNoticed: `The price on ${title} dropped from ${oldP} to ${newP}${pctText}.`,
+        whyItMatters: `A price-update campaign can re-engage buyers who passed when the listing was higher. Autopilot can prepare drafts for ${channelText} that lead with the new price + a fresh CTA.`,
+        recommendedChannels: channelsForCopy,
+        recommendedAngles: [
+          "New-price announcement",
+          "Side-by-side then-vs-now",
+          "Urgency / acting-now reminder",
+        ],
+        expiresAt: new Date(pick.ts + REC_PRICE_DROP_LOOKBACK_MS),
+        payloadJson: {
+          propertyTitle: title,
+          propertyAddress:
+            typeof data.address === "string"
+              ? data.address
+              : typeof item.title === "string"
+                ? item.title
+                : null,
+          propertyImageUrl:
+            typeof data.imageUrl === "string" && data.imageUrl.length > 0
+              ? data.imageUrl
+              : Array.isArray(data.images) && typeof data.images[0] === "string"
+                ? data.images[0]
+                : null,
+          propertyData: data,
+          sourceDataItemId: item.id,
+          dedupKey: pick.dedupKey,
+          oldPrice: oldPrice ?? null,
+          newPrice: newPrice ?? null,
+          dropPercent: dropPercent ?? null,
+          dropDetectedAt: pick.event.detectedAt ?? null,
+          confidence: "high",
+        },
+      }),
+    );
+  }
+  summary.priceDropsEmitted = priceDropPicks.length;
+
+  // ── JUST_SOLD ───────────────────────────────────────────────
+  // Spinstr05. Status must currently be "sold" AND the flip must
+  // be recent — we look at _statusHistory for the most recent
+  // entry transitioning to "sold" and gate on REC_JUST_SOLD_LOOKBACK_MS.
+  // Historical bulk imports (status already sold, no recent flip)
+  // are intentionally skipped — that's the prompt's specific guard.
+  const justSoldCandidates = [];
+  for (const entry of listings) {
+    const item = entry?.source;
+    if (!item?.id) continue;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const status = typeof data.status === "string" ? data.status.toLowerCase() : null;
+    if (status !== "sold") continue;
+    const history = Array.isArray(data._statusHistory) ? data._statusHistory : [];
+    const soldEntry = [...history].reverse().find((h) => (h?.status ?? "").toLowerCase() === "sold");
+    if (!soldEntry?.recordedAt) continue;
+    const ts = new Date(soldEntry.recordedAt).getTime();
+    if (!ts || now - ts > REC_JUST_SOLD_LOOKBACK_MS) continue;
+    justSoldCandidates.push({
+      item,
+      ts,
+      richness: listingRichnessScore(item),
+    });
+  }
+  const byJustSoldKey = new Map();
+  for (const c of justSoldCandidates) {
+    const key = listingDedupKey(c.item) ?? `id:${c.item.id}`;
+    const existing = byJustSoldKey.get(key);
+    if (!existing || c.ts > existing.ts) {
+      byJustSoldKey.set(key, { ...c, dedupKey: key });
+    }
+  }
+  const justSoldPicks = [...byJustSoldKey.values()]
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, REC_MAX_JUST_SOLDS_PER_RUN);
+  for (const pick of justSoldPicks) {
+    const item = pick.item;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const title = listingTitleFor(item) ?? "this property";
+    const channelsForCopy = channels.slice(0, 3);
+    const channelText =
+      channelsForCopy.length > 0 ? channelsForCopy.join(", ") : "your connected social channels";
+    tally(
+      await upsertRecommendation({
+        clientId: workspaceId,
+        triggerType: "JUST_SOLD",
+        triggerObjectType: "listing",
+        triggerObjectId: pick.dedupKey,
+        headline: `Just Sold: ${title}`,
+        whatWeNoticed: `${title} was marked sold in the last ${Math.max(
+          1,
+          Math.round((now - pick.ts) / DAY_MS),
+        )} days.`,
+        whyItMatters: `Just-sold posts build social proof and attract future sellers. Autopilot can prepare drafts for ${channelText} that celebrate the close without quoting sale price unless you opt in.`,
+        recommendedChannels: channelsForCopy,
+        recommendedAngles: [
+          "Just sold celebration",
+          "Thank the seller / buyer",
+          "Future-seller call to action",
+        ],
+        expiresAt: new Date(pick.ts + REC_JUST_SOLD_LOOKBACK_MS),
+        payloadJson: {
+          propertyTitle: title,
+          propertyAddress:
+            typeof data.address === "string"
+              ? data.address
+              : typeof item.title === "string"
+                ? item.title
+                : null,
+          propertyImageUrl:
+            typeof data.imageUrl === "string" && data.imageUrl.length > 0
+              ? data.imageUrl
+              : Array.isArray(data.images) && typeof data.images[0] === "string"
+                ? data.images[0]
+                : null,
+          propertyData: data,
+          sourceDataItemId: item.id,
+          dedupKey: pick.dedupKey,
+          soldAt: soldStampOf(data),
+          confidence: "high",
+        },
+      }),
+    );
+  }
+  summary.justSoldsEmitted = justSoldPicks.length;
+
+  // ── STALE_LISTING ───────────────────────────────────────────
+  // Spinstr05. We trust the upstream stale_listing event produced
+  // by listingEvents.evaluateStaleListings (daily job). Each event
+  // already encodes daysActive. We additionally suppress STALE_LISTING
+  // when a stronger active rec (NEW_LISTING / PRICE_DROP /
+  // OPEN_HOUSE) exists for the same dedup key — the workspace
+  // owner doesn't need two cards about the same property.
+  const activeStrongRecKeys = new Set();
+  if (listings.length > 0) {
+    const activeRows = await prisma.autopilotCampaignRecommendation.findMany({
+      where: {
+        clientId: workspaceId,
+        status: { in: ["NEEDS_REVIEW", "DRAFT_GENERATED"] },
+        triggerType: { in: ["NEW_LISTING", "PRICE_DROP", "OPEN_HOUSE"] },
+      },
+      select: { triggerObjectId: true },
+    });
+    for (const r of activeRows) {
+      if (r.triggerObjectId) activeStrongRecKeys.add(r.triggerObjectId);
+    }
+  }
+  const staleCandidates = [];
+  for (const entry of listings) {
+    const item = entry?.source;
+    if (!item?.id) continue;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const status = typeof data.status === "string" ? data.status.toLowerCase() : "active";
+    if (status !== "active") continue;
+    const events = Array.isArray(data._events) ? data._events : [];
+    let latestStale = null;
+    for (const ev of events) {
+      if (!ev || ev.type !== "stale_listing") continue;
+      const ts = ev.detectedAt ? new Date(ev.detectedAt).getTime() : 0;
+      if (!ts || now - ts > REC_STALE_LISTING_EVENT_LOOKBACK_MS) continue;
+      if (!latestStale || ts > latestStale.ts) latestStale = { ev, ts };
+    }
+    if (!latestStale) continue;
+    staleCandidates.push({
+      item,
+      event: latestStale.ev,
+      ts: latestStale.ts,
+      richness: listingRichnessScore(item),
+    });
+  }
+  const byStaleKey = new Map();
+  for (const c of staleCandidates) {
+    const key = listingDedupKey(c.item) ?? `id:${c.item.id}`;
+    const existing = byStaleKey.get(key);
+    if (!existing || c.richness > existing.richness) {
+      byStaleKey.set(key, { ...c, dedupKey: key });
+    }
+  }
+  const stalePicks = [];
+  for (const c of byStaleKey.values()) {
+    if (activeStrongRecKeys.has(c.dedupKey)) {
+      summary.staleSuppressed += 1;
+      continue;
+    }
+    stalePicks.push(c);
+    if (stalePicks.length >= REC_MAX_STALE_PER_RUN) break;
+  }
+  for (const pick of stalePicks) {
+    const item = pick.item;
+    const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+    const title = listingTitleFor(item) ?? "an active listing";
+    const daysActive = pick.event?.data?.daysActive ?? null;
+    const channelsForCopy = channels.filter((c) => c !== "LINKEDIN").slice(0, 3);
+    const channelText =
+      channelsForCopy.length > 0 ? channelsForCopy.join(", ") : "your connected social channels";
+    tally(
+      await upsertRecommendation({
+        clientId: workspaceId,
+        triggerType: "STALE_LISTING",
+        triggerObjectType: "listing",
+        triggerObjectId: pick.dedupKey,
+        headline: `Refresh Campaign: ${title}`,
+        whatWeNoticed: daysActive
+          ? `${title} has been active for ${daysActive} days and hasn't had a recent campaign.`
+          : `${title} has been active for a while and hasn't had a recent campaign.`,
+        whyItMatters: `A refresh post can bring an active listing back in front of buyers without inventing a new selling point. Autopilot can prepare drafts for ${channelText} using a fresh angle — lifestyle, neighborhood, or upgrade highlight.`,
+        recommendedChannels: channelsForCopy,
+        recommendedAngles: [
+          "Lifestyle re-feature",
+          "Neighborhood spotlight",
+          "Best-of recent photos",
+        ],
+        expiresAt: new Date(pick.ts + REC_STALE_LISTING_EVENT_LOOKBACK_MS),
+        payloadJson: {
+          propertyTitle: title,
+          propertyAddress:
+            typeof data.address === "string"
+              ? data.address
+              : typeof item.title === "string"
+                ? item.title
+                : null,
+          propertyImageUrl:
+            typeof data.imageUrl === "string" && data.imageUrl.length > 0
+              ? data.imageUrl
+              : Array.isArray(data.images) && typeof data.images[0] === "string"
+                ? data.images[0]
+                : null,
+          propertyData: data,
+          sourceDataItemId: item.id,
+          dedupKey: pick.dedupKey,
+          daysActive,
+          confidence: "medium",
+        },
+      }),
+    );
+  }
+  summary.staleEmitted = stalePicks.length;
+
+  // ── SEASONAL ────────────────────────────────────────────────
+  // Spinstr05. Conservative built-in calendar — at most one
+  // active window per UTC month, at most one rec per workspace
+  // per window per year. Suppressed when the run has already
+  // emitted enough stronger recs.
+  const totalEmitted = created + updated;
+  if (totalEmitted < REC_SOFT_RUN_LIMIT_BEFORE_SEASONAL) {
+    const season = currentSeasonalWindow(new Date(now));
+    if (season) {
+      const channelsForCopy = channels.slice(0, 3);
+      const channelText =
+        channelsForCopy.length > 0 ? channelsForCopy.join(", ") : "your connected social channels";
+      tally(
+        await upsertRecommendation({
+          clientId: workspaceId,
+          triggerType: "SEASONAL",
+          triggerObjectType: null,
+          triggerObjectId: `season:${season.key}:${season.year}`,
+          headline: season.headline,
+          whatWeNoticed: season.whatWeNoticed,
+          whyItMatters: `${season.whyItMatters} Autopilot can prepare drafts for ${channelText} that match the moment without inventing data.`,
+          recommendedChannels: channelsForCopy,
+          recommendedAngles: season.angles,
+          expiresAt: season.expiresAt,
+          payloadJson: {
+            seasonKey: season.key,
+            seasonYear: season.year,
+            confidence: "medium",
+          },
+        }),
+      );
+      summary.seasonalEmitted = true;
+    }
   }
 
   // ── INACTIVITY_GAP (workspace-scoped) ───────────────────────

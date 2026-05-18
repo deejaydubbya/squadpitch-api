@@ -276,6 +276,56 @@ whitelisted is present.
   inactivity signals in the lookback window." so the empty
   hero isn't dead air after a scan.
 
+### 2d. Trigger catalog (Spinstr05)
+
+| Trigger | Status | Source data | Lookback | Per-run cap | Conflict suppression |
+|---|---|---|---|---|---|
+| `NEW_LISTING` | live | `WorkspaceDataItem.createdAt` + dedup by address | 14 days | 3 | — |
+| `OPEN_HOUSE` | live | `dataJson.events[].type=='open_house'` future date | 7 days | (de-duped per property) | — |
+| `PRICE_DROP` | **new** | `dataJson._events[].type=='price_drop'` with `oldPrice/newPrice/dropPercent` from the upstream event | 14 days | 3 | — |
+| `JUST_SOLD` | **new** | `dataJson.status=='sold'` AND `_statusHistory` shows the flip within window | 30 days | 3 | Ignores historical bulk-imported sold listings (no recent status flip) |
+| `STALE_LISTING` | **new** | `dataJson._events[].type=='stale_listing'` produced by the daily `evaluateStaleListings` job | 14 days | 2 | Skipped when an active `NEW_LISTING` / `PRICE_DROP` / `OPEN_HOUSE` rec already exists for the same property dedup key |
+| `NEW_REVIEW` | live | review with `starRating >= 4` | 14 days | (one per review id) | — |
+| `SEASONAL` | **new** | built-in calendar library (`SEASONAL_WINDOWS`) | matches the window's month range | 1 per workspace per window per year | Skipped when the run has already emitted ≥3 stronger recs |
+| `INACTIVITY_GAP` | live | `Draft` table — no approved/scheduled/published in last 14 days | 14 days | 1 per workspace | — |
+| `MARKET_UPDATE` | **deferred** | requires real local-market data the app doesn't track | — | — | — |
+
+**Prioritization order** (settled in the legacy
+`autopilotCampaignMapping.shouldReplaceTrigger` priority
+map and matched by detector run order):
+
+1. OPEN_HOUSE (soon)
+2. PRICE_DROP
+3. NEW_LISTING with photos
+4. JUST_SOLD
+5. NEW_REVIEW
+6. STALE_LISTING
+7. SEASONAL
+8. INACTIVITY_GAP (fallback)
+
+**Seasonal library** (`SEASONAL_WINDOWS` in
+`autopilot.service.js`):
+
+| Key | Months (UTC) | Headline |
+|---|---|---|
+| `spring_buyer_campaign` | Feb–Mar | Spring Buyer Campaign |
+| `summer_open_house` | May–Jun | Summer Open House Campaign |
+| `fall_seller_prep` | Sep–Oct | Fall Seller Prep Campaign |
+| `year_end_market_recap` | Dec | Year-End Market Recap |
+
+The seasonal triggerObjectId is
+`season:<key>:<UTC year>` — the unique constraint on
+`(clientId, triggerType, triggerObjectId)` guarantees one
+rec per workspace per window per year.
+
+**Auto-generation eligibility:**
+`HIGH_CONFIDENCE_TRIGGERS` (in `autoGenerateForHighConfidence`)
+includes `NEW_LISTING`, `OPEN_HOUSE`, `PRICE_DROP`,
+`JUST_SOLD`, `NEW_REVIEW`. `STALE_LISTING`, `SEASONAL`, and
+`INACTIVITY_GAP` are intentionally excluded — they're more
+exploratory and benefit from a human review before drafts
+are generated.
+
 ---
 
 ## 3. Endpoints

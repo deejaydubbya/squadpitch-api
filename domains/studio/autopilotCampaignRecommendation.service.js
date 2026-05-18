@@ -43,7 +43,10 @@ const STATUS_BE_TO_FE = {
 // a server change.
 function triggerToFe(t) {
   if (t === "OPEN_HOUSE") return "open_house_added";
-  if (t === "JUST_SOLD") return "status_changed";
+  // Spinstr05 — JUST_SOLD used to alias to status_changed
+  // because the FE had no specific icon/label. Now that the FE
+  // ships a dedicated 'just_sold' case (and stale_listing /
+  // seasonal), pass them through unchanged.
   return String(t).toLowerCase();
 }
 
@@ -551,6 +554,25 @@ function planForRecommendation(rec) {
             guidance: baseGuidance(
               `Testimonial post built around the recent ${payload.stars ?? "5"}-star review.`,
             ),
+          },
+        ],
+      };
+    case "SEASONAL":
+      return {
+        defaultChannels: ["INSTAGRAM", "FACEBOOK"],
+        requiresImage: [],
+        items: [
+          {
+            angle: "seasonal_campaign",
+            templateType: "brand_authority",
+            kind: "POST",
+            // [NO_DATA_IDEA_POST] marker — seasonal recs are
+            // calendar-driven, not tied to a specific listing.
+            guidance:
+              "[NO_DATA_IDEA_POST] " +
+              baseGuidance(
+                `${rec.headline} — write a timely seasonal post for real-estate clients. Avoid inventing market stats; use the angle for structure.`,
+              ),
           },
         ],
       };

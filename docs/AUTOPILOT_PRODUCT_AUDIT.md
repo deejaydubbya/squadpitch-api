@@ -633,3 +633,93 @@ typecheck clean. No skipped tests.
   a small follow-up.
 
 **Safety:** unchanged — no auto-publish path was added.
+
+---
+
+## 16. Spinstr05 — Trigger Expansion Completion Note
+
+**Date:** 2026-05-18
+
+Added four new triggers using only data the app already
+tracks; deferred the one that depends on external data.
+
+**Implemented:**
+
+| Trigger | Source data | Why now |
+|---|---|---|
+| `PRICE_DROP` | `dataJson._events[].type=='price_drop'` (produced by `listingEvents.detectIngestionEvents`) with structured `{ oldPrice, newPrice, dropPercent }` payload | Re-engages buyers who passed at the higher price |
+| `JUST_SOLD` | `dataJson.status=='sold'` + `_statusHistory` showing flip within 30d | Social proof + attracts future sellers |
+| `STALE_LISTING` | `dataJson._events[].type=='stale_listing'` (produced by the daily `evaluateStaleListings` job) | Brings active listings back in front of buyers |
+| `SEASONAL` | Built-in `SEASONAL_WINDOWS` calendar (spring buyer / summer open house / fall seller / year-end recap) | Keeps the inbox active in calmer windows without inventing market stats |
+
+Conflict suppression: `STALE_LISTING` is skipped when an
+active `NEW_LISTING` / `PRICE_DROP` / `OPEN_HOUSE` rec
+already exists for the same property dedup key. `SEASONAL`
+is suppressed when the run has already emitted ≥3 stronger
+recs.
+
+Idempotency: each new trigger uses the existing
+`(clientId, triggerType, triggerObjectId)` unique key.
+PRICE_DROP / JUST_SOLD / STALE_LISTING dedup by the
+listing's normalized address (`listingDedupKey`); SEASONAL
+dedups by `season:<key>:<year>`.
+
+**Deferred:**
+
+- `MARKET_UPDATE` — requires real local-market data (median
+  price, days-on-market, inventory). The app doesn't track
+  any of those. Defer rather than invent; revisit when a
+  market-data integration ships.
+
+**Per-trigger expiration windows:**
+
+| Trigger | Window |
+|---|---|
+| NEW_LISTING | 14 days from listing import |
+| OPEN_HOUSE | until day after event |
+| PRICE_DROP | 14 days from price-drop event |
+| JUST_SOLD | 30 days from sold flip |
+| STALE_LISTING | 14 days from stale-listing event |
+| NEW_REVIEW | 30 days from now |
+| SEASONAL | end of the latest active month in the window |
+| INACTIVITY_GAP | 7 days from now |
+
+**Priority order** (applied via run order + the
+`shouldReplaceTrigger` map on the FE):
+
+OPEN_HOUSE → PRICE_DROP → NEW_LISTING (with photos) →
+JUST_SOLD → NEW_REVIEW → STALE_LISTING → SEASONAL →
+INACTIVITY_GAP (fallback).
+
+**FE changes:**
+
+- `AutopilotTriggerType` union extended with `just_sold`,
+  `stale_listing`, `seasonal`, `new_review`,
+  `inactivity_gap` (previously these passed through to the
+  UI as untyped lowercase strings).
+- `OpportunityHero.tsx` + `OpportunityQueue.tsx` ship
+  dedicated icons + labels for each new type (Trophy /
+  Clock / Sun / Star / Megaphone).
+- The legacy `AutopilotCampaignCard.tsx` (kept for
+  non-command-center surfaces) gets fallback entries too.
+- `autopilotCampaignMapping.shouldReplaceTrigger` priority
+  map updated to the new order.
+
+**Tests:**
+
+- `tests/autopilotTriggerExpansion.test.js` — 18 cases
+  (seasonal calendar windows, price formatter, sold-stamp
+  extractor)
+- `tests/autopilotTriggerDetectors.test.js` — 11 integration
+  cases (PRICE_DROP positive / negative / stale-event;
+  JUST_SOLD positive / historical / active-status guards;
+  STALE_LISTING positive / suppression / sold-status guard;
+  SEASONAL one-per-window + soft-cap suppression)
+
+Suites: API **932/932 passing**; Web **291/291 passing**;
+web typecheck clean. No skipped tests.
+
+**Safety:** unchanged — no auto-publish path was added.
+The new triggers feed the same NEEDS_REVIEW → user-click
+generate → DRAFT_GENERATED → user-click approve →
+APPROVED/SCHEDULED workflow as the existing four.

@@ -137,6 +137,10 @@ function makePrisma() {
         return r;
       }),
       updateMany: vi.fn(async () => ({ count: 0 })),
+      // Spinstr05 — STALE_LISTING detector reads existing active
+      // recs to suppress conflicting cards. Default to empty set;
+      // the existing tests don't care about this code path.
+      findMany: vi.fn(async () => []),
     },
     autopilotRun: {
       create: vi.fn(async ({ data, select }) => {
