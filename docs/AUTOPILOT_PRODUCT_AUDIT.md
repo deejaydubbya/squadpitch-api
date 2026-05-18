@@ -465,3 +465,83 @@ Audit-doc-wide review, integration coverage across the full
 Inbox → Generate → Approve → Schedule chain, and the
 conditional re-introduction of `schedule_approved` / `auto_publish`
 modes behind workspace-level opt-in + a global kill switch.
+
+---
+
+## 14. Spinstr01 — Mode Ladder Upgrade Completion Note
+
+**Date:** 2026-05-16
+
+Expanded the Autopilot mode system from the two-mode MVP
+(`off` / `draft_only`) to the full automation ladder.
+
+**Modes (all selectable except the last):**
+
+| Mode | UI label | Behavior |
+|---|---|---|
+| `off` | Off | Disabled. |
+| `recommend_only` | Recommendations only | Detector emits recs. No drafts. |
+| `draft_on_click` | Generate drafts manually | MVP baseline. Replaces / aliases `draft_only`. |
+| `auto_generate_drafts` | Auto-prepare drafts for review | After detect, auto-generate drafts for *high-confidence* recs only (concrete `sourceDataItemId`, non-generic title, trigger in NEW_LISTING / OPEN_HOUSE / PRICE_DROP / JUST_SOLD / NEW_REVIEW). Idempotent. |
+| `schedule_after_approval` | Auto-schedule approved drafts | On Approve with no explicit `scheduleAt`, picks safe default slots (next N weekdays at 10am UTC, quiet-hour aware) and calls `draftWorkflow.scheduleDraft` per draft. |
+| `auto_publish_guarded` | Auto-publish guarded campaigns | **NOT SELECTABLE.** Schema rejects on save. UI shows a locked Coming Soon card. |
+
+**Backward compatibility:** `draft_only`, `draft_assist`,
+`schedule_approved`, `auto_publish`, `auto_publish_guarded` all
+normalize to `draft_on_click` on read. Existing workspaces with
+any of these stored modes load into a safe live mode without
+manual intervention. The on-the-wire enum accepts `draft_only`
+explicitly so a saved settings PATCH from an older client
+doesn't 400.
+
+**Auto-generate guardrails:**
+
+- Skipped if `sourceDataItemId` is absent.
+- Skipped if `INACTIVITY_GAP` (content quality bar too low).
+- Skipped if the title looks generic (no address / no
+  signal — defensive against the "your new listing" class of
+  bug fixed in Spinstr423).
+- Skipped if the recommendation already has
+  `generatedDraftIds` (idempotency — repeated detector runs
+  don't pile on).
+- Skipped if the existing `checkGuardrails` returns `block`
+  (daily draft cap, recent send cooldown).
+- Skip reasons recorded in the `AutopilotRun.metadata.steps`
+  array so the Activity tab can show "1 generated, 2
+  skipped — INACTIVITY_GAP, no source data item".
+
+**Schedule-after-approval guardrails:**
+
+- Only runs when `scheduleAt` is not explicitly passed (an
+  explicit calendar pick from the UI always wins).
+- `buildAutoScheduleSlots` skips Sat/Sun and any hour in the
+  configured quiet window.
+- Per-draft slots are passed to `draftWorkflow.scheduleDraft`
+  individually so existing per-draft channel routing /
+  collision detection runs unmodified.
+- If scheduling fails for any draft, the rec stays in
+  `APPROVED` and the failure surfaces — no silent partial
+  schedule.
+
+**Safety guarantee preserved:** no auto-publish path was
+added. `auto_publish_guarded` is enum-only and intentionally
+unreachable. The scheduled-publish worker continues to be the
+only thing that flips `SCHEDULED → PUBLISHED`, and it only
+sees rows the user explicitly approved.
+
+**Tests:** 21 mode-enum + normalization cases
+(`autopilotPhase1.test.js` expanded), 8 new mode-behavior
+cases (`autopilotModesUpgrade.test.js` — auto-gen happy path,
+skip rules, idempotency, `buildAutoScheduleSlots` weekday /
+quiet-hour / count). Suites: **API 893/893 passing; Web
+272/272 passing; web typecheck clean.**
+
+**Migration needed?** No. Legacy stored values normalize on
+read; the on-the-wire schema accepts `draft_only` as a legacy
+alias, so existing settings rows continue to round-trip
+without a backfill.
+
+**Next step:** Spinstr02 — recommendation quality / dedup /
+prioritization (the Spinstr423 work continues here:
+listing-aware sort, per-rec specificity score, surface
+"why this rec" in the Inbox card).
