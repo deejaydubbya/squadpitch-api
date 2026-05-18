@@ -726,23 +726,38 @@ function normalizeAddressKey(value) {
     .trim();
 }
 
+// Pull the street-address chunk out of a title like
+// "508 King George Court, Springboro, OH, 45066" so two records
+// — one with the address in dataJson, one with the address only
+// in item.title — collapse onto the same dedup key. Returns the
+// first comma-separated chunk, or the whole string when there
+// are no commas.
+function streetFromTitle(title) {
+  if (typeof title !== "string" || title.trim().length === 0) return "";
+  const first = title.split(",")[0];
+  return first.trim();
+}
+
 // Build the dedup key for a listing. Strongest signal first:
-// MLS / external id, then full normalized address (incl. city/
-// state/zip when present), then bare address, then title.
+// MLS / external id, then bare street address (so a record
+// missing city/state still collapses with a richer record at
+// the same street), then full normalized title.
 function listingDedupKey(item) {
   const data = (item?.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
   const ext = data.externalListingId ?? data.mlsId ?? data.mls_id ?? data.external_id;
   if (typeof ext === "string" && ext.length > 0) return `ext:${ext}`;
   if (typeof ext === "number") return `ext:${ext}`;
-  const parts = [
-    normalizeAddressKey(data.address),
-    normalizeAddressKey(data.city),
-    normalizeAddressKey(data.state),
-    normalizeAddressKey(data.zip ?? data.zipCode ?? data.postalCode),
-  ].filter(Boolean);
-  if (parts.length > 0) return `addr:${parts.join(" ")}`;
-  const title = normalizeAddressKey(data.title);
-  if (title) return `title:${title}`;
+  // Prefer the street-address-only key over a full city/state/zip
+  // composite. Different records of the same property may carry
+  // different levels of address detail (just street vs. full
+  // postal), and we want all of them to collapse.
+  const street =
+    normalizeAddressKey(data.address) ||
+    normalizeAddressKey(streetFromTitle(item?.title)) ||
+    normalizeAddressKey(streetFromTitle(data.title));
+  if (street) return `addr:${street}`;
+  const titleKey = normalizeAddressKey(item?.title) || normalizeAddressKey(data.title);
+  if (titleKey) return `title:${titleKey}`;
   return null;
 }
 
@@ -764,11 +779,17 @@ function listingRichnessScore(item) {
 }
 
 // Build a launch headline + whatWeNoticed for a listing, using
-// the address whenever present. Falls back to a clear neutral
-// label only when no identifying string exists.
-function listingTitleFor(data) {
-  if (typeof data?.address === "string" && data.address.trim()) return data.address.trim();
-  if (typeof data?.title === "string" && data.title.trim()) return data.title.trim();
+// the address whenever present. Falls back through:
+//   dataJson.address → item.title → dataJson.title → null
+// item.title is the top-level WorkspaceDataItem.title column —
+// the property-importer puts the full address ("508 King George
+// Court, Springboro, OH, 45066") there even when dataJson is
+// sparse.
+function listingTitleFor(item) {
+  const data = (item?.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
+  if (typeof data.address === "string" && data.address.trim()) return data.address.trim();
+  if (typeof item?.title === "string" && item.title.trim()) return item.title.trim();
+  if (typeof data.title === "string" && data.title.trim()) return data.title.trim();
   return null;
 }
 
@@ -825,7 +846,7 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
   for (const pick of newListingPicks) {
     const item = pick.item;
     const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
-    const title = listingTitleFor(data) ?? "your new listing";
+    const title = listingTitleFor(item) ?? "your new listing";
     const priceText =
       typeof data.price === "string" || typeof data.price === "number"
         ? ` (listed at ${data.price})`
@@ -857,7 +878,12 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
         expiresAt: new Date(pick.ts + REC_LISTING_LOOKBACK_MS),
         payloadJson: {
           propertyTitle: title,
-          propertyAddress: typeof data.address === "string" ? data.address : null,
+          propertyAddress:
+            typeof data.address === "string"
+              ? data.address
+              : typeof item.title === "string"
+                ? item.title
+                : null,
           propertyCity: typeof data.city === "string" ? data.city : null,
           propertyState: typeof data.state === "string" ? data.state : null,
           propertyZip:
@@ -916,7 +942,7 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
   for (const pick of byOpenHouseKey.values()) {
     const item = pick.item;
     const data = (item.dataJson && typeof item.dataJson === "object") ? item.dataJson : {};
-    const title = listingTitleFor(data) ?? "your listing";
+    const title = listingTitleFor(item) ?? "your listing";
     const dateLabel = new Date(pick.event.date).toLocaleDateString();
     const channelsForCopy = channels.slice(0, 4);
     const channelText =
@@ -941,7 +967,12 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
         expiresAt: new Date(new Date(pick.event.date).getTime() + DAY_MS),
         payloadJson: {
           propertyTitle: title,
-          propertyAddress: typeof data.address === "string" ? data.address : null,
+          propertyAddress:
+            typeof data.address === "string"
+              ? data.address
+              : typeof item.title === "string"
+                ? item.title
+                : null,
           propertyImageUrl:
             typeof data.imageUrl === "string" && data.imageUrl.length > 0
               ? data.imageUrl

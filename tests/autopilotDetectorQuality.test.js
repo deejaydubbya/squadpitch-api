@@ -162,9 +162,9 @@ beforeEach(() => {
   prismaMock = makePrisma();
 });
 
-function listing(id, dataJson, createdAt = new Date()) {
+function listing(id, dataJson, createdAt = new Date(), title = null) {
   return {
-    source: { id, dataJson, createdAt },
+    source: { id, dataJson, createdAt, title },
     normalized: {},
   };
 }
@@ -236,6 +236,48 @@ describe("detectAndPersistRecommendations — headlines + copy", () => {
     await runAutopilot("client-x", { mode: "manual" });
     const rec = [...recs.values()][0];
     expect(rec.headline).toBe("New Listing: 508 King George Court");
+  });
+
+  it("falls through to item.title when dataJson lacks address (real importer shape)", async () => {
+    // The property importer puts the full address on the
+    // top-level item.title column ("508 King George Court,
+    // Springboro, OH, 45066") even when dataJson is sparse.
+    // The detector has to read both spots to give a useful
+    // headline.
+    reAssetsFixture.ref = {
+      listings: [
+        listing("a", {}, new Date(), "508 King George Court, Springboro, OH, 45066"),
+      ],
+      reviews: [],
+    };
+    await runAutopilot("client-x", { mode: "manual" });
+    const rec = [...recs.values()][0];
+    expect(rec.headline).toContain("508 King George Court");
+    expect(rec.headline).not.toContain("your new listing");
+  });
+
+  it("dedupes title-only and dataJson-address records of the same property", async () => {
+    // Same property in the library twice: once with full
+    // dataJson.address + image, once with only item.title. Both
+    // must collapse onto a single rec so the inbox doesn't show
+    // the property twice.
+    reAssetsFixture.ref = {
+      listings: [
+        listing("with-image", {
+          address: "508 King George Court",
+          imageUrl: "https://example.com/x.jpg",
+        }),
+        listing("title-only", {}, new Date(), "508 King George Court, Springboro, OH, 45066"),
+      ],
+      reviews: [],
+    };
+    await runAutopilot("client-x", { mode: "manual" });
+    const newListingRecs = [...recs.values()].filter(
+      (r) => r.triggerType === "NEW_LISTING",
+    );
+    expect(newListingRecs.length).toBe(1);
+    // Richer record (with image) wins the payload.
+    expect(newListingRecs[0].payloadJson.sourceDataItemId).toBe("with-image");
   });
 
   it("whyItMatters references the specific recommended channels, not generic copy", async () => {
