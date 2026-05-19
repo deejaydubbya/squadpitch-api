@@ -637,10 +637,13 @@ describe("exportPackage — gating + bundle", () => {
     expect(result.bundle.compliance.notLaunchedDisclaimer).toMatch(/NOT LAUNCHED BY SQUADPITCH/);
 
     // Side effects: status flips, exportsJson appended.
+    // Ads-04 — the history records the canonical format name
+    // (squadads_json), even when called via the legacy `json`
+    // alias. What got rendered is what gets logged.
     const pkg = fixtures.prisma.state.adPackages.get("pkg-ready");
     expect(pkg.status).toBe("EXPORTED");
     expect(pkg.exportsJson).toHaveLength(1);
-    expect(pkg.exportsJson[0].format).toBe("json");
+    expect(pkg.exportsJson[0].format).toBe("squadads_json");
   });
 
   it("renders markdown with all compliance disclaimers when format=markdown", async () => {
@@ -813,7 +816,9 @@ describe("exportPackage — preview vs download mode", () => {
     const pkg = fixtures.prisma.state.adPackages.get("pkg-prv");
     expect(pkg.status).toBe("EXPORTED");
     expect(pkg.exportsJson).toHaveLength(1);
-    expect(pkg.exportsJson[0].format).toBe("markdown");
+    // Ads-04 — recorded as the canonical format name even when
+    // the request used the `markdown` alias.
+    expect(pkg.exportsJson[0].format).toBe("agency_markdown");
     expect(pkg.exportsJson[0].generatedBy).toBe("auth0|u1");
   });
 

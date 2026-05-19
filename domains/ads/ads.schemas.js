@@ -1,6 +1,7 @@
 // Zod schemas for the authenticated SquadAds API.
 
 import { z } from "zod";
+import { SUPPORTED_FORMATS } from "./exporters/index.js";
 
 export const AdObjectiveEnum = z.enum([
   "AWARENESS",
@@ -212,8 +213,20 @@ export const DestinationPatchSchema = z.object({
 // no READY→EXPORTED transition. Download keeps the existing
 // behavior (history + status flip). Default is preview so a
 // button labelled "Preview" cannot mark a package as exported.
+//
+// Ads-04 — `format` accepts every entry from the exporter registry
+// (./exporters/index.js). The default is `squadads_json` — the
+// canonical internal bundle that the old `json` alias still maps
+// to. Old callers passing `json` or `markdown` resolve to the
+// same renderers (squadads_json + agency_markdown) so existing
+// integrations are not broken.
+
+// Cast the registry's string[] to z.enum's tuple shape. The
+// registry guarantees at least two entries (json + markdown), so
+// the cast is safe.
+const FORMAT_ENUM = z.enum(SUPPORTED_FORMATS);
 
 export const ExportRequestSchema = z.object({
-  format: z.enum(["json", "markdown"]).optional().default("json"),
+  format: FORMAT_ENUM.optional().default("squadads_json"),
   mode: z.enum(["preview", "download"]).optional().default("preview"),
 });
