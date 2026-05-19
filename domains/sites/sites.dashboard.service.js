@@ -274,6 +274,33 @@ export async function getForm(clientId, formId) {
   });
 }
 
+// Spinstr427 — lightweight form stats for the editor's lead-form
+// block context card. Tenant-scoped via the form existence check;
+// optional pageId narrows the count to a single page.
+export async function getFormStats(clientId, formId, { pageId } = {}) {
+  const form = await prisma.leadForm.findFirst({
+    where: { id: formId, clientId },
+    select: { id: true },
+  });
+  if (!form) return null;
+  const where = { clientId, formId };
+  if (pageId) where.pageId = pageId;
+  const [count, last] = await Promise.all([
+    prisma.formSubmission.count({ where }),
+    prisma.formSubmission.findFirst({
+      where,
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
+  ]);
+  return {
+    formId,
+    pageId: pageId ?? null,
+    count,
+    lastSubmissionAt: last?.createdAt ?? null,
+  };
+}
+
 export async function createForm(clientId, createdBy, input) {
   const site = await getOrCreateSite(clientId, createdBy);
   return prisma.leadForm.create({
@@ -327,10 +354,14 @@ export async function deleteForm(clientId, formId) {
 
 // ── FormSubmission ──────────────────────────────────────────────────────
 
-export async function listSubmissions(clientId, { status, formId, limit, cursor }) {
+export async function listSubmissions(clientId, { status, formId, pageId, limit, cursor }) {
   const where = { clientId };
   if (status) where.status = status;
   if (formId) where.formId = formId;
+  // Spinstr427 — pageId filter. `clientId` on the WHERE already
+  // tenant-scopes the result; a cross-workspace pageId matches no
+  // rows so the response is empty rather than an error.
+  if (pageId) where.pageId = pageId;
   const rows = await prisma.formSubmission.findMany({
     where,
     orderBy: { createdAt: "desc" },
@@ -367,9 +398,61 @@ export async function listSubmissions(clientId, { status, formId, limit, cursor 
   const convBySubmission = new Map(
     convs.map((c) => [c.sourceFormSubmissionId, c.id]),
   );
+
+  // Spinstr427 — enrich each submission with page + source summary
+  // by joining through pageId. Avoids denormalizing
+  // inquiryAboutPropertyId onto the row (per Phase 5 §4 decision):
+  // the source is queryable through the page, so we resolve it
+  // here in batch instead of writing it to the DB.
+  const pageIds = Array.from(
+    new Set(rows.map((r) => r.pageId).filter((id) => typeof id === "string")),
+  );
+  const pages = pageIds.length
+    ? await prisma.sitePage.findMany({
+        where: { clientId, id: { in: pageIds } },
+        select: {
+          id: true,
+          title: true,
+          slug: true,
+          sourceType: true,
+          sourceId: true,
+        },
+      })
+    : [];
+  // Resolve sourceTitle for PROPERTY sources in batch so the
+  // submissions page can render "Property: 508 King George Court"
+  // without an N+1 round-trip.
+  const propertySourceIds = pages
+    .filter((p) => p.sourceType === "PROPERTY" && typeof p.sourceId === "string")
+    .map((p) => p.sourceId);
+  const propertyItems = propertySourceIds.length
+    ? await prisma.workspaceDataItem.findMany({
+        where: { clientId, id: { in: propertySourceIds } },
+        select: { id: true, title: true },
+      })
+    : [];
+  const propertyTitleById = new Map(propertyItems.map((p) => [p.id, p.title]));
+  const pageById = new Map(
+    pages.map((p) => [
+      p.id,
+      {
+        pageId: p.id,
+        pageTitle: p.title,
+        pageSlug: p.slug,
+        sourceType: p.sourceType ?? null,
+        sourceId: p.sourceId ?? null,
+        sourceTitle:
+          p.sourceType === "PROPERTY" && p.sourceId
+            ? propertyTitleById.get(p.sourceId) ?? null
+            : null,
+      },
+    ]),
+  );
+
   const submissions = rows.map((r) => ({
     ...r,
     inboxConversationId: convBySubmission.get(r.id) ?? null,
+    sourceContext: r.pageId ? pageById.get(r.pageId) ?? null : null,
   }));
   return { submissions, nextCursor };
 }

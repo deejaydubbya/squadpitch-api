@@ -286,8 +286,18 @@ export const UpdateSubmissionSchema = z.object({
 export const ListSubmissionsQuerySchema = z.object({
   status: SubmissionStatusEnum.optional(),
   formId: z.string().max(64).optional(),
+  // Spinstr427 — pageId filter so the lead-form block can deep-link
+  // a submissions view to a single page. Tenant-scoped at the service
+  // layer (cross-workspace pageIds match nothing → empty result).
+  pageId: z.string().max(64).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),
   cursor: z.string().max(64).optional(),
+});
+
+// Spinstr427 — form stats endpoint query (optional pageId for
+// page-scoped stats).
+export const FormStatsQuerySchema = z.object({
+  pageId: z.string().max(64).optional(),
 });
 
 // ── Page generation ────────────────────────────────────────────────────

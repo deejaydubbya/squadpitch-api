@@ -539,3 +539,95 @@ in order, each independently shippable. Phase 6 hardens the result.
 
 No mandatory migration. No breakage of existing pages. No deletion
 of page data. The plan respects every guardrail in the prompt.
+
+---
+
+## 9. Spinstr427 — Phase 5 deferred items completion
+
+**Date:** 2026-05-18. After Phase 5 (block UX + form integration), four items were explicitly deferred. Spinstr427 ships all four.
+
+### 1. pageId filter on submissions list — ✅ shipped
+
+- `ListSubmissionsQuerySchema.pageId` (optional, max 64 chars).
+- `listSubmissions(clientId, { ...pageId })` includes `where.pageId` when provided. Tenant-scope is already enforced by `where.clientId`, so a cross-workspace `pageId` silently returns an empty result (not a 404 / error — bots and stale URLs shouldn't blow up the page).
+- `useSubmissions(clientId, { ...pageId })` on the FE accepts the filter and serializes it to `?pageId=…`.
+- The lead-form block's "View submissions" deep-link now includes both `formId` and `pageId`.
+
+### 2. Form stats endpoint — ✅ shipped
+
+- `GET /api/v1/workspaces/:id/site/forms/:formId/stats?pageId=…` returns `{ formId, pageId, count, lastSubmissionAt }`. Tenant-scoped via the form existence check (cross-workspace formId → 404). Optional `pageId` narrows to a single page.
+- `useFormStats(clientId, formId, pageId?)` on the FE — `retry: false` + `staleTime: 30s`. Stats failure is silent; the lead-form context card just hides the stats line rather than blocking the editor.
+- The lead-form block's context card shows: form name + field count + notify email (existing); plus **submissions count + last submission date** when stats load.
+
+### 3. Inline "Create new form" from the lead-form block — ✅ shipped
+
+- New `CreateLeadFormModal` component opens from the lead-form block's "+ Create a new form" link.
+- Four templates with sensible default fields:
+  - **General lead form** (name, email, phone, message)
+  - **Property inquiry** — default when `pageSourceType === 'PROPERTY'` (name, email, phone, "Question about this property")
+  - **Seller lead** (name, email, phone, address, timeline)
+  - **Buyer lead** (name, email, phone, budget, preferences)
+- Uses the existing `useCreateForm` mutation — no backend changes needed.
+- On create, sets the new `formId` onto the block, updates local editor state, closes the modal. Doesn't publish automatically.
+- Per-template default name (e.g. "Property inquiry form") so the form is recognizable in the submissions panel.
+
+### 4. inquiryAboutPropertyId — intentionally NOT denormalized
+
+Per the prompt's "Decision" guidance:
+
+- **Did not add `inquiryAboutPropertyId` / `inquiryAboutPropertyTitle` columns to `FormSubmission`**.
+- Instead, enriched the submissions list response with a `sourceContext` block joined through `pageId`:
+  ```ts
+  sourceContext: {
+    pageId: string;
+    pageTitle: string;
+    pageSlug: string;
+    sourceType: 'CAMPAIGN' | 'PROPERTY' | 'DATA_ITEM' | 'IDEA' | null;
+    sourceId: string | null;
+    sourceTitle: string | null;  // resolved for PROPERTY sources
+  } | null;
+  ```
+- For property pages, `sourceType === 'PROPERTY'` and `sourceId` is the property `WorkspaceDataItem.id`; `sourceTitle` is the property's title resolved in batch.
+- Resolution is batched (one `sitePage.findMany` + one `workspaceDataItem.findMany` per submissions page) — no N+1.
+- Old submissions without `pageId` still work; their `sourceContext` is `null`.
+- **No schema migration. No backfill. Fully additive.**
+
+The denormalized columns would have been:
+- redundant (the data is already in `SitePage.sourceType` + `sourceId`)
+- a write-path complication for every existing FormSubmission writer
+- a stale-data risk if the page's source ever changed
+
+The joined-response approach gives the same UI affordance (the submissions row knows "this lead asked about 508 King George Court") with none of those downsides.
+
+### 5. UI polish — ✅ shipped
+
+- Submissions panel reads `?pageId` and `?formId` from the URL.
+- Filter-chip row renders above the table when either filter is active: `Form: <name>` / `Page: <title>` (resolved via `useForms` + the first submission's `sourceContext`).
+- **Clear filters** action removes both query params via `router.replace`.
+- Empty-state copy adapts: *"No submissions for this page yet."* / *"No submissions for this form yet."*
+
+### Files changed (spinstr427)
+
+- api: `domains/sites/sites.schemas.js`, `domains/sites/sites.dashboard.service.js`, `domains/sites/sites.dashboard.routes.js`, `tests/sitesSubmissionsAndStats.test.js` (new, **10 tests**)
+- web: `src/hooks/useSites.ts` (`FormStats`, `SubmissionSourceContext`, `useFormStats`, `SubmissionFilters.pageId`), `src/app/(app)/workspaces/[clientId]/sites/_components/PageEditor.tsx` (`LeadFormBlockFields` + `CreateLeadFormModal` + form-template defaults; `pageId` + `pageSourceType` threaded through `SortableBlockCard` + `BlockFields`), `src/app/(app)/workspaces/[clientId]/sites/_components/SubmissionsPanel.tsx` (URL-driven filters, chip row, Clear-filters action, adaptive empty state)
+
+### Migration?
+
+**No.** Every change is additive. Pre-existing `FormSubmission` rows without `pageId` continue to surface; the new `sourceContext` is computed at read-time and is `null` when there's no `pageId` to join through.
+
+### Tests baseline (post-spinstr427)
+
+- API: **994/994 passing** (10 new in `sitesSubmissionsAndStats.test.js`)
+- Web: **340/340 passing**, typecheck clean
+- Sites: **43/43 passing**, typecheck clean
+
+### Outstanding Phase 5 / sites-06 items, now closed by spinstr427
+
+| Item | Status |
+|---|---|
+| pageId filter on submissions list | ✅ shipped |
+| "Create new form" inline in the lead-form block | ✅ shipped |
+| Per-form submissions count + last-submission date | ✅ shipped (via `useFormStats`) |
+| `inquiryAboutPropertyId` denormalization | ❌ intentionally not done — `sourceContext` join used instead |
+
+The Sites Editor MVP is now feature-complete relative to all seven phases + the deferred polish pass. Remaining known limitations live in `SITES_EDITOR_MVP_IMPLEMENTATION.md` §12.
