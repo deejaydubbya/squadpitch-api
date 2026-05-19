@@ -78,13 +78,13 @@ export async function exportPackage(clientId, packageId, userId, { format = "jso
     throw new ExportError("Package has no creatives", { status: 400, code: "NO_CREATIVES" });
   }
 
-  const sourceSummary = await resolveSourceSummaryForExport(pkg);
+  const sourceSummary = await resolveSourceSummaryForExport(pkg, pkg.clientId);
   // For SITE_PAGE destinations we resolve a real public URL up
   // front. If the page doesn't exist, belongs to another workspace,
   // or isn't PUBLISHED, we fail the export here — never emit a
   // squadsite:// placeholder or a URL the lead can't click.
   const destinationUrl = await buildDestinationUrl(pkg.destination, pkg.clientId);
-  const mediaList = await resolveMediaList(pkg.creatives);
+  const mediaList = await resolveMediaList(pkg.creatives, pkg.clientId);
 
   const bundle = {
     schemaVersion: 1,
@@ -173,36 +173,38 @@ export async function exportPackage(clientId, packageId, userId, { format = "jso
   return { filename, mimeType, content, bundle };
 }
 
-async function resolveSourceSummaryForExport(pkg) {
+async function resolveSourceSummaryForExport(pkg, clientId) {
   if (!pkg.sourceType) return null;
   if (pkg.sourceType === "IDEA") return { kind: "IDEA", text: pkg.sourceIdea ?? null };
   if (!pkg.sourceId) return { kind: pkg.sourceType, id: null };
+  // Ads-01 — tenant-scope every lookup so an export bundle never
+  // serializes source details that don't belong to the workspace.
   switch (pkg.sourceType) {
     case "CAMPAIGN": {
-      const row = await prisma.campaign.findUnique({
-        where: { id: pkg.sourceId },
+      const row = await prisma.campaign.findFirst({
+        where: { id: pkg.sourceId, clientId },
         select: { id: true, name: true, campaignType: true },
       });
       return row ? { kind: "CAMPAIGN", ...row } : null;
     }
     case "SITE_PAGE": {
-      const row = await prisma.sitePage.findUnique({
-        where: { id: pkg.sourceId },
+      const row = await prisma.sitePage.findFirst({
+        where: { id: pkg.sourceId, clientId },
         select: { id: true, title: true, slug: true },
       });
       return row ? { kind: "SITE_PAGE", ...row } : null;
     }
     case "DRAFT": {
-      const row = await prisma.draft.findUnique({
-        where: { id: pkg.sourceId },
+      const row = await prisma.draft.findFirst({
+        where: { id: pkg.sourceId, clientId },
         select: { id: true, channel: true },
       });
       return row ? { kind: "DRAFT", ...row } : null;
     }
     case "PROPERTY":
     case "CONTENT_ASSET": {
-      const row = await prisma.workspaceDataItem.findUnique({
-        where: { id: pkg.sourceId },
+      const row = await prisma.workspaceDataItem.findFirst({
+        where: { id: pkg.sourceId, clientId },
         select: { id: true, type: true, title: true },
       });
       return row ? { kind: pkg.sourceType, ...row } : null;
@@ -212,7 +214,7 @@ async function resolveSourceSummaryForExport(pkg) {
   }
 }
 
-async function resolveMediaList(creatives) {
+async function resolveMediaList(creatives, clientId) {
   const out = { byCreativeId: {} };
   // Bulk-fetch all primary asset ids so the export is O(1) DB hits
   // regardless of variant count.
@@ -227,8 +229,12 @@ async function resolveMediaList(creatives) {
     for (const c of creatives) out.byCreativeId[c.id] = { primary: null, additional: [] };
     return out;
   }
+  // Ads-01 — tenant-scope by clientId so a creative that somehow
+  // stored a cross-workspace asset id (legacy / pre-validation
+  // rows) never resolves to a foreign media URL in the export
+  // bundle. Post-validation new creatives can't get here anyway.
   const assets = await prisma.mediaAsset.findMany({
-    where: { id: { in: [...ids] } },
+    where: { id: { in: [...ids] }, clientId },
     select: { id: true, url: true, thumbnailUrl: true, mimeType: true, assetType: true, altText: true },
   });
   const byId = new Map(assets.map((a) => [a.id, a]));

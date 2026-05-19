@@ -251,20 +251,55 @@ function buildPrismaMock(initial = {}) {
     },
     campaign: {
       findUnique: vi.fn(async ({ where }) => state.campaigns.get(where.id) ?? null),
+      // Ads-01 — tenant-scoped lookup. Returns null when the row's
+      // clientId doesn't match the where filter, mirroring real
+      // Prisma + Postgres behavior.
+      findFirst: vi.fn(async ({ where }) => {
+        const row = state.campaigns.get(where.id);
+        if (!row) return null;
+        if (where.clientId && row.clientId !== where.clientId) return null;
+        return row;
+      }),
     },
     sitePage: {
       findUnique: vi.fn(async ({ where }) => state.sitePages.get(where.id) ?? null),
+      findFirst: vi.fn(async ({ where }) => {
+        const row = state.sitePages.get(where.id);
+        if (!row) return null;
+        if (where.clientId && row.clientId !== where.clientId) return null;
+        return row;
+      }),
     },
     draft: {
       findUnique: vi.fn(async ({ where }) => state.drafts.get(where.id) ?? null),
+      findFirst: vi.fn(async ({ where }) => {
+        const row = state.drafts.get(where.id);
+        if (!row) return null;
+        if (where.clientId && row.clientId !== where.clientId) return null;
+        return row;
+      }),
     },
     workspaceDataItem: {
       findUnique: vi.fn(async ({ where }) => state.workspaceDataItems.get(where.id) ?? null),
+      findFirst: vi.fn(async ({ where }) => {
+        const row = state.workspaceDataItems.get(where.id);
+        if (!row) return null;
+        if (where.clientId && row.clientId !== where.clientId) return null;
+        if (where.type) {
+          if (typeof where.type === "string" && row.type !== where.type) return null;
+          if (where.type?.not && row.type === where.type.not) return null;
+        }
+        return row;
+      }),
     },
     mediaAsset: {
       findMany: vi.fn(async ({ where }) => {
         const ids = new Set(where.id?.in ?? []);
-        return [...state.mediaAssets.values()].filter((a) => ids.has(a.id));
+        return [...state.mediaAssets.values()].filter((a) => {
+          if (!ids.has(a.id)) return false;
+          if (where.clientId && a.clientId !== where.clientId) return false;
+          return true;
+        });
       }),
     },
   };
@@ -278,7 +313,13 @@ describe("createPackage — special category auto-tagging", () => {
   });
 
   it("auto-tags HOUSING when sourceType is PROPERTY", async () => {
-    fixtures = { prisma: buildPrismaMock() };
+    fixtures = {
+      prisma: buildPrismaMock({
+        workspaceDataItems: [
+          ["data-1", { id: "data-1", clientId: CLIENT_ID, type: "PROPERTY", title: "508" }],
+        ],
+      }),
+    };
     const pkg = await service.createPackage(CLIENT_ID, "auth0|u1", {
       name: "508 King George",
       objective: "LEADS",
@@ -292,6 +333,7 @@ describe("createPackage — special category auto-tagging", () => {
     fixtures = {
       prisma: buildPrismaMock({
         brandProfiles: [[CLIENT_ID, { clientId: CLIENT_ID, industry: "real_estate" }]],
+        campaigns: [["camp-1", { id: "camp-1", clientId: CLIENT_ID, name: "Spring", campaignType: "general_promotion", status: "ACTIVE" }]],
       }),
     };
     const pkg = await service.createPackage(CLIENT_ID, "auth0|u1", {
@@ -455,6 +497,7 @@ describe("generatePackage — prompt grounding + side effects", () => {
             "data-1",
             {
               id: "data-1",
+              clientId: CLIENT_ID,
               type: "PROPERTY",
               title: "508 King George Court",
               summary: "Renovated 4-bed in Cary, NC.",

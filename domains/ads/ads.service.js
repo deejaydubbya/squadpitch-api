@@ -118,24 +118,27 @@ async function resolveDestinationPreview(pkg) {
 
 async function resolveSourceSummary(pkg) {
   if (!pkg.sourceId && pkg.sourceType !== "IDEA") return null;
+  // Ads-01 — tenant-scope every lookup so a stale / spoofed sourceId
+  // pointing at another workspace returns null instead of leaking
+  // the source row. The package's own clientId is the trust anchor.
   switch (pkg.sourceType) {
     case "CAMPAIGN": {
-      const row = await prisma.campaign.findUnique({
-        where: { id: pkg.sourceId },
+      const row = await prisma.campaign.findFirst({
+        where: { id: pkg.sourceId, clientId: pkg.clientId },
         select: { id: true, name: true, campaignType: true, status: true },
       });
       return row ? { kind: "campaign", ...row } : null;
     }
     case "SITE_PAGE": {
-      const row = await prisma.sitePage.findUnique({
-        where: { id: pkg.sourceId },
+      const row = await prisma.sitePage.findFirst({
+        where: { id: pkg.sourceId, clientId: pkg.clientId },
         select: { id: true, title: true, slug: true, status: true },
       });
       return row ? { kind: "site_page", ...row } : null;
     }
     case "DRAFT": {
-      const row = await prisma.draft.findUnique({
-        where: { id: pkg.sourceId },
+      const row = await prisma.draft.findFirst({
+        where: { id: pkg.sourceId, clientId: pkg.clientId },
         select: { id: true, channel: true, body: true, status: true },
       });
       if (!row) return null;
@@ -149,8 +152,8 @@ async function resolveSourceSummary(pkg) {
     }
     case "PROPERTY":
     case "CONTENT_ASSET": {
-      const row = await prisma.workspaceDataItem.findUnique({
-        where: { id: pkg.sourceId },
+      const row = await prisma.workspaceDataItem.findFirst({
+        where: { id: pkg.sourceId, clientId: pkg.clientId },
         select: { id: true, type: true, title: true, summary: true },
       });
       return row ? { kind: "data_item", ...row } : null;
@@ -165,9 +168,28 @@ async function resolveSourceSummary(pkg) {
 // ── Create ─────────────────────────────────────────────────────────────
 
 export async function createPackage(clientId, userId, input) {
+  // Ads-01 — tenant-scope the source before persisting. IDEA sources
+  // skip the DB lookup but still require a non-empty sourceIdea.
+  await assertSourceOwned(clientId, input.sourceType, input.sourceId, input.sourceIdea);
+
   // Auto-tag HOUSING for property-sourced packages and for real-
   // estate workspaces. Users can manually override via PATCH.
   const specialCategory = await deriveInitialSpecialCategory(clientId, input);
+
+  // Ads-01 — when the wizard pre-seeds a destination with a
+  // SITE_PAGE, validate that the sitePage belongs to this client too.
+  if (input.destination?.kind === "SITE_PAGE" && input.destination.sitePageId) {
+    const sp = await prisma.sitePage.findFirst({
+      where: { id: input.destination.sitePageId, clientId },
+      select: { id: true },
+    });
+    if (!sp) {
+      const err = new Error("Destination site page not found in this workspace");
+      err.status = 404;
+      err.code = "SOURCE_NOT_FOUND_OR_FORBIDDEN";
+      throw err;
+    }
+  }
 
   const created = await prisma.adPackage.create({
     data: {
@@ -309,6 +331,13 @@ function assertReadyTransitionAllowed(pkg) {
 
 export async function upsertCreative(clientId, packageId, input) {
   await assertPackageOwned(clientId, packageId);
+  // Ads-01 — validate every media-asset id belongs to this
+  // workspace before persisting. Atomic: any one cross-workspace id
+  // rejects the whole upsert.
+  await assertAssetsOwned(clientId, [
+    input.primaryAssetId,
+    ...(Array.isArray(input.additionalAssetIds) ? input.additionalAssetIds : []),
+  ]);
   return prisma.adCreative.upsert({
     where: {
       adPackageId_variantIndex: {
@@ -342,18 +371,24 @@ export async function upsertCreative(clientId, packageId, input) {
 }
 
 export async function deleteCreative(clientId, packageId, creativeId) {
-  await assertPackageOwned(clientId, packageId);
-  return prisma.adCreative
-    .delete({ where: { id: creativeId } })
-    .catch((err) => {
-      if (err.code === "P2025") {
-        const e = new Error("Creative not found");
-        e.status = 404;
-        e.code = "CREATIVE_NOT_FOUND";
-        throw e;
-      }
-      throw err;
-    });
+  // Ads-01 — scoped delete. The WHERE pins all three: creative id,
+  // parent package id, AND the parent package's clientId via a
+  // nested filter. A creativeId from another workspace silently
+  // matches zero rows even if the caller spoofs a known packageId.
+  const result = await prisma.adCreative.deleteMany({
+    where: {
+      id: creativeId,
+      adPackageId: packageId,
+      adPackage: { clientId },
+    },
+  });
+  if (result.count === 0) {
+    const err = new Error("Creative not found");
+    err.status = 404;
+    err.code = "CREATIVE_NOT_FOUND";
+    throw err;
+  }
+  return { id: creativeId, deleted: true };
 }
 
 // ── Audience ───────────────────────────────────────────────────────────
@@ -642,13 +677,16 @@ export async function generatePackage(clientId, packageId, userId, { tone = "pro
 // across surfaces.
 export async function loadPackageSourceContext(pkg) {
   if (!pkg) return null;
+  // Ads-01 — every lookup tenant-scoped via pkg.clientId. Cross-
+  // workspace ids return null so the LLM context never sees foreign
+  // workspace data.
   switch (pkg.sourceType) {
     case "CAMPAIGN":
       if (!pkg.sourceId) return null;
       return {
         kind: "campaign",
-        row: await prisma.campaign.findUnique({
-          where: { id: pkg.sourceId },
+        row: await prisma.campaign.findFirst({
+          where: { id: pkg.sourceId, clientId: pkg.clientId },
           select: {
             id: true,
             name: true,
@@ -663,8 +701,8 @@ export async function loadPackageSourceContext(pkg) {
       if (!pkg.sourceId) return null;
       return {
         kind: "site_page",
-        row: await prisma.sitePage.findUnique({
-          where: { id: pkg.sourceId },
+        row: await prisma.sitePage.findFirst({
+          where: { id: pkg.sourceId, clientId: pkg.clientId },
           select: {
             id: true,
             title: true,
@@ -681,8 +719,8 @@ export async function loadPackageSourceContext(pkg) {
       if (!pkg.sourceId) return null;
       return {
         kind: "draft",
-        row: await prisma.draft.findUnique({
-          where: { id: pkg.sourceId },
+        row: await prisma.draft.findFirst({
+          where: { id: pkg.sourceId, clientId: pkg.clientId },
           select: {
             id: true,
             channel: true,
@@ -697,8 +735,8 @@ export async function loadPackageSourceContext(pkg) {
       if (!pkg.sourceId) return null;
       return {
         kind: "data_item",
-        row: await prisma.workspaceDataItem.findUnique({
-          where: { id: pkg.sourceId },
+        row: await prisma.workspaceDataItem.findFirst({
+          where: { id: pkg.sourceId, clientId: pkg.clientId },
           select: {
             id: true,
             type: true,
@@ -894,6 +932,107 @@ async function assertPackageOwned(clientId, packageId, withInclude = false) {
     throw err;
   }
   return row;
+}
+
+// Ads-01 — tenant-scoped source lookup for createPackage. Every
+// non-IDEA sourceType has a parent table with its own clientId
+// column; we check that the source row belongs to the current
+// workspace before we let it land on the AdPackage.
+//
+// Returns the resolved source row (handy for derived fields like
+// auto-tagging). Throws SOURCE_NOT_FOUND_OR_FORBIDDEN with a 404
+// when the id doesn't exist or belongs to another workspace.
+async function assertSourceOwned(clientId, sourceType, sourceId, sourceIdea) {
+  if (sourceType === "IDEA") {
+    if (!sourceIdea || typeof sourceIdea !== "string" || !sourceIdea.trim()) {
+      const err = new Error("IDEA source requires a non-empty sourceIdea");
+      err.status = 400;
+      err.code = "MISSING_SOURCE_IDEA";
+      throw err;
+    }
+    return null;
+  }
+  if (!sourceId || typeof sourceId !== "string") {
+    const err = new Error(`${sourceType} source requires a sourceId`);
+    err.status = 400;
+    err.code = "MISSING_SOURCE_ID";
+    throw err;
+  }
+
+  let row = null;
+  switch (sourceType) {
+    case "CAMPAIGN":
+      row = await prisma.campaign.findFirst({
+        where: { id: sourceId, clientId },
+        select: { id: true },
+      });
+      break;
+    case "SITE_PAGE":
+      row = await prisma.sitePage.findFirst({
+        where: { id: sourceId, clientId },
+        select: { id: true },
+      });
+      break;
+    case "DRAFT":
+      row = await prisma.draft.findFirst({
+        where: { id: sourceId, clientId },
+        select: { id: true },
+      });
+      break;
+    case "PROPERTY":
+      row = await prisma.workspaceDataItem.findFirst({
+        where: { id: sourceId, clientId, type: "PROPERTY" },
+        select: { id: true },
+      });
+      break;
+    case "CONTENT_ASSET":
+      row = await prisma.workspaceDataItem.findFirst({
+        where: { id: sourceId, clientId, type: { not: "PROPERTY" } },
+        select: { id: true },
+      });
+      break;
+    default: {
+      const err = new Error(`Unknown sourceType: ${sourceType}`);
+      err.status = 400;
+      err.code = "INVALID_SOURCE_TYPE";
+      throw err;
+    }
+  }
+  if (!row) {
+    const err = new Error(`${sourceType} source not found in this workspace`);
+    err.status = 404;
+    err.code = "SOURCE_NOT_FOUND_OR_FORBIDDEN";
+    throw err;
+  }
+  return row;
+}
+
+// Ads-01 — tenant-scope every media asset id before it lands on a
+// creative. Atomic: any one cross-workspace id rejects the whole
+// upsert (we never want a creative with a mix of valid + invalid
+// asset references).
+async function assertAssetsOwned(clientId, assetIds) {
+  const ids = Array.from(
+    new Set(
+      (assetIds ?? []).filter((id) => typeof id === "string" && id.length > 0),
+    ),
+  );
+  if (ids.length === 0) return;
+  const rows = await prisma.mediaAsset.findMany({
+    where: { id: { in: ids }, clientId },
+    select: { id: true },
+  });
+  const found = new Set(rows.map((r) => r.id));
+  const missing = ids.filter((id) => !found.has(id));
+  if (missing.length > 0) {
+    const err = new Error(
+      `Media asset(s) not found in this workspace: ${missing.join(", ")}`,
+    );
+    err.status = 404;
+    err.code = "MEDIA_ASSET_NOT_FOUND_OR_FORBIDDEN";
+    err.missingAssetIds = missing;
+    throw err;
+  }
 }
 
 function truncate(s, max) {
