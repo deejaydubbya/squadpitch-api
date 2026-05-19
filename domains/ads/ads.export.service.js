@@ -14,6 +14,7 @@
 
 import { prisma } from "../../prisma.js";
 import { buildPublicSitePageUrl } from "../sites/sites.service.js";
+import { validatePackageReady } from "./ads.service.js";
 
 export class ExportError extends Error {
   constructor(message, { status = 400, code = "EXPORT_FAILED" } = {}) {
@@ -76,6 +77,25 @@ export async function exportPackage(clientId, packageId, userId, { format = "jso
   }
   if (!pkg.creatives || pkg.creatives.length === 0) {
     throw new ExportError("Package has no creatives", { status: 400, code: "NO_CREATIVES" });
+  }
+
+  // Ads-02 — defense in depth. A package may have been READY at
+  // status-flip time but had its destination unpublished, its
+  // copy edited to include a risky phrase, etc. Re-run the full
+  // validator at export time so we never ship a non-compliant
+  // bundle. Translate the validator's typed errors into
+  // ExportError so the route layer sees the same shape it
+  // already handles.
+  try {
+    await validatePackageReady(pkg);
+  } catch (err) {
+    if (err.code === "READY_PRECONDITIONS_FAILED" || err.code === "COMPLIANCE_COPY_REVIEW_FAILED") {
+      const exportErr = new ExportError(err.message, { status: 400, code: err.code });
+      if (err.missing) exportErr.missing = err.missing;
+      if (err.findings) exportErr.findings = err.findings;
+      throw exportErr;
+    }
+    throw err;
   }
 
   const sourceSummary = await resolveSourceSummaryForExport(pkg, pkg.clientId);

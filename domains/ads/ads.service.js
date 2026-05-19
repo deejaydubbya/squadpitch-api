@@ -13,6 +13,7 @@ import { loadClientGenerationContext } from "../studio/generation/clientOrchestr
 import { generateStructuredContent } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { buildPublicSitePageUrl } from "../sites/sites.service.js";
+import { lintCreativeCopy } from "./ads.compliance.js";
 
 // ── List + detail ──────────────────────────────────────────────────────
 
@@ -260,7 +261,7 @@ export async function updatePackage(clientId, packageId, userId, patch) {
   // EXPORTED is service-managed (set by the export endpoint).
   if (patch.status) {
     if (patch.status === "READY") {
-      assertReadyTransitionAllowed(existing);
+      await validatePackageReady(existing);
     }
     if (existing.status === "EXPORTED" && patch.status !== "ARCHIVED") {
       const err = new Error("Exported packages can only be archived");
@@ -298,31 +299,187 @@ export async function updatePackage(clientId, packageId, userId, patch) {
   });
 }
 
-// Readiness checklist enforced before status can flip to READY.
-// Mirrors the spec: ≥1 creative, audience + budget + destination
-// populated, compliance acknowledged when special category is set.
-function assertReadyTransitionAllowed(pkg) {
+// Ads-02 — production-grade READY/export gate. Replaces the
+// previous existence-only check (≥1 creative, audience populated,
+// etc.) with content + compliance validation:
+//
+//   - Creative content non-empty after trim.
+//   - Budget has at least one positive amount + currency.
+//   - Destination is a real, public destination (SITE_PAGE must
+//     exist, belong to this client, AND be PUBLISHED).
+//   - Audience has at least one location (or explicit nationwide).
+//   - Age/gender numbers are sane.
+//   - Special-category packages enforce housing-restricted
+//     constraints: clamp age 18–65, force gender=all, reject
+//     postal-code targeting + narrow custom audiences.
+//   - Copy linter (ads.compliance.js) blocks risky phrases in
+//     headline/primaryText/description.
+//   - Special-category packages still need explicit review
+//     acknowledgment (unchanged).
+//   - Large-budget acknowledgment gate (unchanged).
+//
+// Called by updatePackage (READY transition) AND by exportPackage
+// (defense in depth — never ship a stale READY row that no longer
+// satisfies the contract).
+export async function validatePackageReady(pkg) {
   const missing = [];
-  if (!pkg.creatives || pkg.creatives.length === 0) missing.push("at least one creative");
-  if (!pkg.audience) missing.push("audience");
-  if (!pkg.budget) missing.push("budget");
-  if (!pkg.destination) missing.push("destination");
+
+  // ── Creatives ─────────────────────────────────────────────
+  if (!pkg.creatives || pkg.creatives.length === 0) {
+    missing.push("at least one creative");
+  } else {
+    for (const c of pkg.creatives) {
+      const headline = typeof c.headline === "string" ? c.headline.trim() : "";
+      const primaryText = typeof c.primaryText === "string" ? c.primaryText.trim() : "";
+      if (!headline) missing.push(`creative #${c.variantIndex ?? "?"} needs a headline`);
+      if (!primaryText) missing.push(`creative #${c.variantIndex ?? "?"} needs primary text`);
+      if (typeof c.cta === "string" && c.cta.length > 0 && !c.cta.trim()) {
+        missing.push(`creative #${c.variantIndex ?? "?"} CTA is whitespace-only`);
+      }
+    }
+  }
+
+  // ── Budget ───────────────────────────────────────────────
+  if (!pkg.budget) {
+    missing.push("budget");
+  } else {
+    const daily = Number(pkg.budget.dailyBudgetCents) || 0;
+    const total = Number(pkg.budget.totalBudgetCents) || 0;
+    if (daily <= 0 && total <= 0) {
+      missing.push("budget needs a positive daily or total amount");
+    }
+    if (!pkg.budget.currency || typeof pkg.budget.currency !== "string") {
+      missing.push("budget needs a currency");
+    }
+    if (pkg.budget.durationDays != null && Number(pkg.budget.durationDays) <= 0) {
+      missing.push("budget durationDays must be > 0");
+    }
+  }
+
+  // ── Destination ──────────────────────────────────────────
+  if (!pkg.destination) {
+    missing.push("destination");
+  } else {
+    const d = pkg.destination;
+    if (d.kind === "SITE_PAGE") {
+      if (!d.sitePageId) {
+        missing.push("SITE_PAGE destination needs a sitePageId");
+      } else {
+        const page = await prisma.sitePage.findFirst({
+          where: { id: d.sitePageId, clientId: pkg.clientId },
+          select: { id: true, status: true },
+        });
+        if (!page) {
+          missing.push("destination site page not found in this workspace");
+        } else if (page.status !== "PUBLISHED") {
+          missing.push("destination site page must be PUBLISHED before ready");
+        }
+      }
+    } else if (d.kind === "EXTERNAL_URL") {
+      const url = typeof d.externalUrl === "string" ? d.externalUrl.trim() : "";
+      if (!url) {
+        missing.push("EXTERNAL_URL destination needs a URL");
+      } else if (!/^https?:\/\//i.test(url)) {
+        missing.push("destination URL must start with http(s)://");
+      }
+    } else if (d.kind === "SOCIAL_PROFILE") {
+      const profile = typeof d.socialProfile === "string" ? d.socialProfile.trim() : "";
+      if (!profile) {
+        missing.push("SOCIAL_PROFILE destination needs a profile URL or handle");
+      }
+    } else if (!d.kind) {
+      missing.push("destination kind not set");
+    }
+  }
+
+  // ── Audience ─────────────────────────────────────────────
+  if (!pkg.audience) {
+    missing.push("audience");
+  } else {
+    const locations = Array.isArray(pkg.audience.locationsJson)
+      ? pkg.audience.locationsJson
+      : [];
+    if (locations.length === 0) {
+      missing.push(
+        "audience needs at least one location (use {kind:'country', value:'US'} for nationwide)",
+      );
+    }
+    if (pkg.audience.ageMin != null && pkg.audience.ageMax != null) {
+      if (pkg.audience.ageMin > pkg.audience.ageMax) {
+        missing.push("audience ageMin cannot be greater than ageMax");
+      }
+    }
+  }
+
+  // ── Compliance + budget acknowledgments (existing behavior) ──
   if (pkg.specialCategory && pkg.specialCategory !== "NONE" && !pkg.reviewedByUserId) {
     missing.push("compliance review acknowledgment");
   }
-  // Budget review gate — large budgets need explicit acknowledgment
-  // before they can ship. Cents-based thresholds; see PR description
-  // for the chosen ceilings.
   const dailyOver = pkg.budget?.dailyBudgetCents && pkg.budget.dailyBudgetCents > 50_000;
   const totalOver = pkg.budget?.totalBudgetCents && pkg.budget.totalBudgetCents > 1_000_000;
   if ((dailyOver || totalOver) && !pkg.reviewedByUserId) {
     missing.push("budget review acknowledgment");
   }
+
+  // ── Special category strict gate ──────────────────────────
+  if (pkg.specialCategory === "HOUSING") {
+    const audience = pkg.audience;
+    if (audience) {
+      // Age must be the broad 18–65 window.
+      if (audience.ageMin != null && audience.ageMin < 18) {
+        missing.push("HOUSING age min must be ≥ 18");
+      }
+      if (audience.ageMax != null && audience.ageMax > 65) {
+        missing.push("HOUSING age max must be ≤ 65");
+      }
+      // Genders must be all/none.
+      const genders = Array.isArray(audience.gendersJson) ? audience.gendersJson : [];
+      const onlyAll =
+        genders.length === 0 ||
+        (genders.length === 1 && (genders[0] === "all" || genders[0] === null));
+      if (!onlyAll) missing.push("HOUSING audience genders must be ['all']");
+      // No postal/ZIP-only targeting.
+      const locations = Array.isArray(audience.locationsJson) ? audience.locationsJson : [];
+      const hasPostal = locations.some(
+        (l) =>
+          l && typeof l === "object" &&
+          (l.kind === "postal" || l.kind === "zip" || l.zip || l.postalCode || l.postal_code),
+      );
+      if (hasPostal) {
+        missing.push("HOUSING audience cannot use postal/ZIP targeting");
+      }
+      // No narrow custom-audience hints. The hint shape carries
+      // free-form strings today; reject any non-empty array.
+      const hints = Array.isArray(audience.customAudienceHintsJson)
+        ? audience.customAudienceHintsJson
+        : [];
+      if (hints.length > 0) {
+        missing.push("HOUSING audience cannot use narrow custom-audience hints");
+      }
+      // housingRestricted must be true.
+      if (!audience.housingRestricted) {
+        missing.push("HOUSING audience must have housingRestricted=true");
+      }
+    }
+  }
+
   if (missing.length > 0) {
-    const err = new Error(`Cannot mark ready — missing: ${missing.join(", ")}`);
+    const err = new Error(`Cannot mark ready — ${missing.join("; ")}`);
     err.status = 400;
     err.code = "READY_PRECONDITIONS_FAILED";
     err.missing = missing;
+    throw err;
+  }
+
+  // ── Copy linter (last — runs after structural checks pass) ──
+  const findings = lintCreativeCopy(pkg.creatives ?? [], pkg.specialCategory);
+  if (findings.length > 0) {
+    const err = new Error(
+      `Copy review failed — remove ${findings.length} risky phrase${findings.length === 1 ? "" : "s"} before going live`,
+    );
+    err.status = 400;
+    err.code = "COMPLIANCE_COPY_REVIEW_FAILED";
+    err.findings = findings;
     throw err;
   }
 }

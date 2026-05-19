@@ -454,8 +454,19 @@ describe("updatePackage — READY transition gate", () => {
       headline: "h",
       primaryText: "t",
     });
-    fixtures.prisma.state.adAudiences.set("a1", { id: "a1", adPackageId: "pkg-ok" });
-    fixtures.prisma.state.adBudgets.set("b1", { id: "b1", adPackageId: "pkg-ok", dailyBudgetCents: 1000 });
+    fixtures.prisma.state.adAudiences.set("a1", {
+      id: "a1",
+      adPackageId: "pkg-ok",
+      // Ads-02 — validator now requires at least one location.
+      locationsJson: [{ kind: "country", value: "US" }],
+    });
+    fixtures.prisma.state.adBudgets.set("b1", {
+      id: "b1",
+      adPackageId: "pkg-ok",
+      dailyBudgetCents: 1000,
+      // Ads-02 — validator now requires currency.
+      currency: "USD",
+    });
     fixtures.prisma.state.adDestinations.set("d1", { id: "d1", adPackageId: "pkg-ok", kind: "EXTERNAL_URL", externalUrl: "https://example.com" });
 
     // First: acknowledge review.
@@ -580,6 +591,32 @@ describe("exportPackage — gating + bundle", () => {
             },
           ],
         ],
+        // Ads-02 — export now re-runs validatePackageReady, so the
+        // fixture has to be fully READY-ready.
+        adAudiences: [
+          [
+            "a1",
+            {
+              id: "a1",
+              adPackageId: "pkg-ready",
+              locationsJson: [{ kind: "country", value: "US" }],
+              ageMin: 18,
+              ageMax: 65,
+              gendersJson: ["all"],
+              housingRestricted: true,
+              customAudienceHintsJson: [],
+            },
+          ],
+        ],
+        adBudgets: [
+          ["b1", { id: "b1", adPackageId: "pkg-ready", dailyBudgetCents: 1000, currency: "USD" }],
+        ],
+        adDestinations: [
+          ["d1", { id: "d1", adPackageId: "pkg-ready", kind: "EXTERNAL_URL", externalUrl: "https://example.com" }],
+        ],
+        workspaceDataItems: [
+          ["data-1", { id: "data-1", clientId: CLIENT_ID, type: "PROPERTY", title: "508" }],
+        ],
       }),
     };
 
@@ -632,6 +669,27 @@ describe("exportPackage — gating + bundle", () => {
               additionalAssetIdsJson: [],
             },
           ],
+        ],
+        adAudiences: [
+          [
+            "a1",
+            {
+              id: "a1",
+              adPackageId: "pkg-md",
+              locationsJson: [{ kind: "country", value: "US" }],
+              ageMin: 18,
+              ageMax: 65,
+              gendersJson: ["all"],
+              housingRestricted: true,
+              customAudienceHintsJson: [],
+            },
+          ],
+        ],
+        adBudgets: [
+          ["b1", { id: "b1", adPackageId: "pkg-md", dailyBudgetCents: 1000, currency: "USD" }],
+        ],
+        adDestinations: [
+          ["d1", { id: "d1", adPackageId: "pkg-md", kind: "EXTERNAL_URL", externalUrl: "https://example.com" }],
         ],
       }),
     };
