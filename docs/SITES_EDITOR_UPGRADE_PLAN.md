@@ -261,16 +261,44 @@ Goal: kill the URL-only image fields.
 
 Risk: Medium → executed Low. Touches the editor but **not** the public renderer (read path unchanged). Existing pages keep rendering.
 
-### Phase 3 — Draft preview
+### Phase 3 — Draft preview — ✅ SHIPPED (sites-04)
 
 Goal: editors see their unsaved changes before clicking Publish.
 
-- Add a **preview** endpoint on the API: `GET /workspaces/:id/site/pages/:pageId/preview?token=…` — returns the page exactly like the public resolver but with the workspace owner's auth (token issued by the editor on demand, scoped to the page, ~10 min TTL). Renders DRAFT blocks regardless of publish status.
-- Editor opens this URL in an iframe panel (toggleable side-by-side / full).
-- Auto-refresh the iframe on save.
-- No change to public renderer; preview reuses the same block dispatcher but with explicit "PREVIEW" badge in the layout.
+**Chosen approach: Option A (in-app authenticated preview).** No
+new API endpoint, no preview token. The editor renders the local
+unsaved blocks in a mirrored block renderer right inside the
+authenticated dashboard route. Safer than a token-based public
+preview, simpler to ship, and zero risk to the public site.
 
-Risk: Medium. The new auth path needs the same `requireClientOwner` discipline.
+**Implementation:**
+
+- **`PreviewRenderer`** (`sites/_components/PreviewRenderer.tsx`) — mirrors `squadpitch-sites/lib/pageBlocks/index.tsx` 1:1: same block dispatcher, same per-block components, same inline styles. Every user-authored string still passes through React's JSX escaping; every URL still gates on the `^https?://` scheme check before becoming a background-image or `src`. `lead_form` blocks render as a labeled placeholder card ("Lead form will appear here") — preview is for layout review, not lead capture. Links (`cta`, `contact.tel:`, `contact.mailto:`) have their default action stopped via `onClick={e => e.preventDefault()}` so accidental clicks inside the preview don't navigate away.
+- **Edit / Preview toggle** in the editor top bar (next to Save draft / Publish). State is local — toggling Preview shows the rendered view; toggling back to Edit returns to the block list with all unsaved edits intact.
+- **Desktop / Mobile viewport toggle** above the preview (1080px / 390px frame widths). The preview card uses the public site's dark background + same color tokens so it visually matches the live URL.
+- **"Draft preview" badge** above the viewport so the user always knows this isn't the live URL.
+- **Save/Publish copy** below the action row tells the truth about what those buttons do:
+  - DRAFT: *"Drafts are private until you publish. Use Preview to see what the page will look like."*
+  - PUBLISHED: *"This page is published. Saving changes updates the working page and may appear live after the site refreshes."*
+- **View Live** button only appears when the page is published (existing behavior, codified with a `data-testid`).
+- **Preview URL hint** (the existing footer note about the post-publish URL) hides during preview mode to reduce noise.
+
+**Why we did NOT build a token-based public preview route:**
+The shared blocksJson model means the public renderer already shows the latest save once ISR revalidates. A public-preview-with-token would add new auth surface and a duplicate rendering path for marginal upside (parity with the live URL beyond what the mirrored renderer already provides). If a future case demands true parity (e.g. ad-platform crawler validation against a draft), we'll revisit.
+
+**Files changed (sites-04):**
+- `sites/_components/PreviewRenderer.tsx` (new)
+- `sites/_components/PageEditor.tsx` — Edit/Preview toggle, Desktop/Mobile viewport, status notes, `PreviewViewport` helper.
+
+**Save/publish mental model (documented in-product):**
+- Saving a DRAFT updates the working page; it stays unreachable until you Publish.
+- Saving a PUBLISHED page updates the working copy and the live URL — there's no separate "next published version" buffer. ISR caches mean the change is visible after the site revalidates.
+- This is intentionally truthful — we did NOT add a draft-vs-published split here. A real split (`draftBlocksJson` + `publishedBlocksJson`) is documented as deferred under §9 "out of scope for now"; the current model has no schema-level discard mechanism for edits made against a published page.
+
+**Phase 3 limitations / follow-ups:**
+- The preview-mode page editor doesn't auto-refresh on background saves (no save events to listen to inside the editor — local state is the source of truth in this mode).
+- Lead-form preview is a placeholder, not the real form. Real form-render preview would either need a form-fields fetch inside the preview or a duplication of `LeadFormBlock`.
+- Renderer parity is by visual review — there's no automated diff between `PreviewRenderer` and `squadpitch-sites/lib/pageBlocks/index.tsx`. Drift between the two would be a Phase 6 hardening concern; shared-package extraction is the long-term answer if drift becomes painful.
 
 ### Phase 4 — Real-estate templates + AI generation upgrade
 
