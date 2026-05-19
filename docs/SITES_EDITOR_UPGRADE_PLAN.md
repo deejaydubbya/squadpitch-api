@@ -354,16 +354,58 @@ The rule is *"Only state these facts if they appear verbatim in the supplied sou
 - `open_house` doesn't yet surface the open-house date directly in the hero — `applyPropertyDeterministicFields` could be extended to pull from `dataJson.events`. Left as follow-up.
 - `templateUsed` is returned but the editor doesn't show it as a source-panel badge yet — small UI polish.
 
-### Phase 5 — Block UX + form integration
+### Phase 5 — Block UX + form integration — ✅ SHIPPED (sites-06)
 
-Goal: editor feels like a builder, not a JSON form.
+Goal: editor feels like a builder, not a JSON form, and lead-form blocks carry source context all the way to the submission row.
 
-- Inline previews on `hero` / `image` / `gallery` block cards.
-- Reorder via drag handles (dnd-kit already there — tighten the affordance).
-- Forms: per-page LeadForm picker in the `lead_form` block field. "Create new form" inline. Show submission count + last submission date next to the block.
-- Submissions view: filter by `pageId` so the user can drill from a page → its submissions.
+**Block UX (web):**
 
-Risk: Low. Pure FE work + an additive query param on the submissions endpoint.
+- Each `SortableBlockCard` now has a proper header:
+  - User-friendly label (`Hero`, `Property Details`, `Photo Gallery`, `Lead Capture Form`, `Agent Contact`, `Testimonial`, `FAQ`, `Call to action`, `Paragraph / Story`, `Image`) via the new `BLOCK_LABELS` map.
+  - Collapse / expand toggle (chevron + label is the toggle).
+  - **Move up** / **Move down** buttons alongside the existing drag handle.
+  - **Duplicate block** button (`structuredClone` of the block, inserted after the source).
+  - Existing Remove button preserved.
+  - Drag handle (dnd-kit) preserved — keyboard reorder still works.
+- **Add Block** flow restructured as `BlockPicker` with categories:
+  - *Headline & copy* (hero, paragraph, image)
+  - *Property info* (key_details, gallery)
+  - *Trust & objections* (testimonial, faq)
+  - *Conversion* (cta, lead_form, contact)
+  - **Suggested for property pages** group renders ahead of categories when the page has a PROPERTY source — picks from `PROPERTY_SUGGESTED`.
+- Closing the picker after add is automatic (good UX, no extra click).
+
+**Lead Form block enrichment (web):**
+
+When a `lead_form` block has a `formId` set, the editor renders a context card below the form picker:
+- Form name (bold)
+- Field count + notify-email summary
+- **Edit form →** link (deep-links to `/sites?tab=forms&formId=…`)
+- **View submissions** link (deep-links to `/sites?tab=submissions&formId=…`)
+
+When no form is selected, the block shows a helpful prompt instead of being silent. When the workspace has zero forms, a "Create one first" link routes to the forms tab.
+
+**Submission context (api + sites):**
+
+- The public submit endpoint already accepts `pageId` + `campaignId` in the body (pre-sites-06 audit confirmed this). The renderer side was the gap.
+- `BlocksRenderer` (squadpitch-sites) now threads an optional `pageId` prop down to `LeadFormBlock` → `LeadFormClient`, which already serialized `pageId` into the submit payload. `app/[campaign]/page.tsx` passes `payload.page.id`. Old callers / older deployments that omit `pageId` still work.
+- **Tenant-scoping defense** added to `createFormSubmission`: `pageId` and `campaignId` are validated against `form.clientId` before write. A spoofed cross-tenant id is silently nulled (don't reject — bots / older renderers shouldn't fail). Implementation: `scopedPageId(pageId, clientId)` + `scopedCampaignId(campaignId, clientId)` look up the row and only persist the id if it belongs to the form's workspace.
+- Result: every form submission from a Sites page now records which page generated the lead, with no cross-tenant leakage risk.
+
+**Files changed (sites-06):**
+- api: `domains/sites/sites.service.js`, `tests/sitesPublicSubmitScoping.test.js`
+- web: `src/app/(app)/workspaces/[clientId]/sites/_components/PageEditor.tsx`
+- sites: `lib/pageBlocks/index.tsx`, `lib/pageBlocks/LeadFormBlock.tsx`, `app/[campaign]/page.tsx`
+
+**Phase 5 limitations / follow-ups:**
+
+- **Submissions list filter by `pageId`** is NOT yet exposed via API/UI — the column exists on `FormSubmission` and the deep-link in the lead-form block points at a `?formId=` query param the submissions tab can use. A `?pageId=` filter on the list endpoint is a small additive change, deferred to Phase 6.
+- **"Create new form inline"** in the lead-form block is NOT yet wired — the existing forms-tab flow handles creation. Inline create would need a small modal in the editor; deferred.
+- **Submissions count + last-submission date** on the lead-form block panel — would need a per-form `useFormStats` hook. Deferred.
+- **`inquiryAboutPropertyId` / `inquiryAboutPropertyTitle`** custom submission columns from the prompt — not added. The page's `sourceType` + `sourceId` already encode this on `SitePage`, and a submission's `pageId` deep-links to that. Derived/queried rather than denormalized.
+- **Per-template form CTA suggestions** (e.g. "Request a showing" for property listing) — the AI generation prompt already biases CTA text by template (Phase 4), but the editor doesn't yet suggest these CTAs when the user manually creates a form. Deferred.
+
+Risk: executed Low. The lead-form-block context card is pure additive UI. The tenant-scoping change is purely defensive — pre-sites-06 the endpoint already wrote whatever client supplied, so this fix tightens security without breaking any existing behavior.
 
 ### Phase 6 — Final hardening
 

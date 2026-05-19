@@ -270,12 +270,20 @@ export async function createFormSubmission({
   const contactEmail = pickFieldValue(fieldDefs, fields, "email");
   const contactPhone = pickFieldValue(fieldDefs, fields, "phone");
 
+  // Sites-06 — tenant-scope the pageId / campaignId before write.
+  // The public submit endpoint accepts both fields from the public
+  // page renderer; we don't want a spoofed pageId from a different
+  // workspace landing on a submission. Silently null on mismatch
+  // (don't reject — bots / older renderers shouldn't fail).
+  const safePageId = await scopedPageId(pageId, form.clientId);
+  const safeCampaignId = await scopedCampaignId(campaignId, form.clientId);
+
   const submission = await prisma.formSubmission.create({
     data: {
       formId: form.id,
       clientId: form.clientId,
-      pageId: pageId || null,
-      campaignId: campaignId || null,
+      pageId: safePageId,
+      campaignId: safeCampaignId,
       dataJson: fields,
       contactEmail: contactEmail || null,
       contactPhone: contactPhone || null,
@@ -318,6 +326,28 @@ export async function createFormSubmission({
   });
 
   return submission;
+}
+
+// Sites-06 — silently strip pageId / campaignId values that don't
+// belong to the form's workspace. Public submit endpoint accepts
+// these from a render-time prop; we don't trust the client to be
+// honest about cross-tenant ids.
+async function scopedPageId(pageId, clientId) {
+  if (typeof pageId !== "string" || !pageId || !clientId) return null;
+  const row = await prisma.sitePage.findFirst({
+    where: { id: pageId, clientId },
+    select: { id: true },
+  });
+  return row ? row.id : null;
+}
+
+async function scopedCampaignId(campaignId, clientId) {
+  if (typeof campaignId !== "string" || !campaignId || !clientId) return null;
+  const row = await prisma.campaign.findFirst({
+    where: { id: campaignId, clientId },
+    select: { id: true },
+  });
+  return row ? row.id : null;
 }
 
 function pickFieldValue(fieldDefs, submittedFields, wantedType) {
