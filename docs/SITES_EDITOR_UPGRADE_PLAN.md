@@ -407,17 +407,64 @@ When no form is selected, the block shows a helpful prompt instead of being sile
 
 Risk: executed Low. The lead-form-block context card is pure additive UI. The tenant-scoping change is purely defensive — pre-sites-06 the endpoint already wrote whatever client supplied, so this fix tightens security without breaking any existing behavior.
 
-### Phase 6 — Final hardening
+### Phase 6 — Final hardening — ✅ SHIPPED (sites-07)
 
 Goal: shipping bar for "data-aware sites" as a feature.
 
-- Wire `revalidateSec` through to the renderer's `export const revalidate = …`.
-- Public-renderer integration tests (currently zero).
-- Editor smoke tests via component-level helpers + a Playwright happy-path (publish → resolve → render).
-- Update `docs/AUTOPILOT_MVP_IMPLEMENTATION.md` to reflect the new property → page flow (Autopilot's "View in Sites" CTA from a property-page rec is a natural follow-up).
-- Documentation pass: `SITES_EDITOR_UPGRADE_PLAN.md` (this doc) gets a completion note + lessons learned per phase.
+**Public renderer test harness — the big one.** squadpitch-sites
+had zero tests before this phase. Added:
 
-Risk: Low-medium. Mostly test infra.
+- `vitest` to the sites repo `devDependencies` + `npm test` /
+  `npm run test:watch` scripts.
+- `lib/pageBlocks/safety.ts` (new) — pure helpers extracted
+  from the dispatcher: `KNOWN_BLOCK_TYPES`,
+  `isKnownBlockType`, `isSafeUrl`, `pickString`, `pickArray`,
+  `shouldRenderBlock`, `filterRenderableBlocks`.
+- `lib/pageBlocks/safety.test.ts` (new, **43 tests**) pinning
+  the dispatcher's safety contract:
+  - URL scheme gate (blocks `javascript:` / `data:` /
+    `vbscript:` / `file:` / `ftp:` / protocol-relative)
+  - Forward-compat: unknown block types silently skipped
+  - Block-level integration: malformed entries dropped (not
+    the whole page)
+  - Published-page back-compat scenarios: legacy hero with
+    only `imageUrl`, gallery with mixed safe/unsafe URLs,
+    `key_details` with mixed-type rows
+
+**Documentation:**
+- New `docs/SITES_EDITOR_MVP_IMPLEMENTATION.md` — full
+  reference doc (models, endpoints, block catalog, AI
+  generation flow, security model, known limitations,
+  back-compat confirmation). Mirrors the
+  `AUTOPILOT_MVP_IMPLEMENTATION.md` shape.
+- This plan doc updated with the Phase 6 completion note.
+
+**Deferred from Phase 6 (documented in MVP doc §12):**
+- Wire `revalidateSec` through to the renderer's
+  `export const revalidate = …` — flagged as a small future
+  enhancement; not blocking since the catch-all already
+  refreshes on next request after invalidation.
+- Playwright end-to-end (publish → resolve → render) —
+  out of scope for the test infra bootstrap; vitest unit
+  coverage on the safety contract is the high-leverage
+  layer.
+- Autopilot "View in Sites" CTA from a property-page rec —
+  natural product follow-up but outside the Sites scope.
+
+**Files changed (sites-07):**
+- sites: `lib/pageBlocks/safety.ts` (new),
+  `lib/pageBlocks/safety.test.ts` (new),
+  `package.json` (vitest devDep + test scripts).
+- api: `docs/SITES_EDITOR_MVP_IMPLEMENTATION.md` (new),
+  `docs/SITES_EDITOR_UPGRADE_PLAN.md` (this section).
+
+**Phase 6 result — final tests baseline:**
+- API: **984/984 passing** (8 sites-specific files)
+- Web: **340/340 passing**, typecheck clean
+- Sites: **43/43 passing**, typecheck clean
+
+Risk: executed Low. Pure additive test infra + docs. No
+behavior changes.
 
 ---
 
