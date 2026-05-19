@@ -178,6 +178,11 @@ export async function generatePageFromSource({
   sourceId,
   pageGoal,
   customPrompt,
+  // Sites-05 — optional template hint. When set, biases the LLM
+  // toward a specific block scaffold + page intent. Backwards
+  // compatible: omitting `template` keeps the existing pre-sites-05
+  // behavior.
+  template,
   userId,
 }) {
   // 1. Load workspace context (brand + voice + persona + media).
@@ -195,8 +200,8 @@ export async function generatePageFromSource({
 
   // 3. Build prompts. System prompt sets persona + output rules.
   //    User prompt provides the brief.
-  const systemPrompt = buildSystemPrompt({ ctx, pageGoal });
-  const userPrompt = buildUserPrompt({ ctx, source, pageGoal, customPrompt });
+  const systemPrompt = buildSystemPrompt({ ctx, pageGoal, template });
+  const userPrompt = buildUserPrompt({ ctx, source, pageGoal, customPrompt, template });
 
   // 4. Call OpenAI with the JSON-schema-strict response format.
   const result = await generateStructuredContent({
@@ -221,7 +226,7 @@ export async function generatePageFromSource({
     model: result.model,
     promptTokens: result.usage?.prompt_tokens ?? 0,
     completionTokens: result.usage?.completion_tokens ?? 0,
-    metadata: { source: "site_page", sourceType, pageGoal },
+    metadata: { source: "site_page", sourceType, pageGoal, template: template ?? null },
   });
 
   // 6. Normalize the LLM output. The strict response_format makes
@@ -237,7 +242,16 @@ export async function generatePageFromSource({
     usage: result.usage,
   });
 
-  // 7. Sites-02 — deterministic structured fields for PROPERTY
+  // 7. Sites-05 — template scaffold pass. Ensures the required
+  //    block types for the chosen template exist (appends empty
+  //    placeholders for any the LLM forgot) so the deterministic
+  //    fill below has something to populate. Idempotent.
+  if (template) {
+    normalized.payload = applyTemplateScaffold(normalized.payload, template);
+    normalized.templateUsed = template;
+  }
+
+  // 8. Sites-02 — deterministic structured fields for PROPERTY
   //    sources. The LLM keeps writing the marketing copy; we
   //    overwrite the *facts* (key_details rows, gallery imageUrls,
   //    hero imageUrl, title/slug) from the property's dataJson so
@@ -342,7 +356,125 @@ async function resolveSource({ clientId, sourceType, sourceId, customPrompt }) {
 
 // ── Prompt assembly ────────────────────────────────────────────────────
 
-function buildSystemPrompt({ ctx, pageGoal }) {
+// Sites-05 — template scaffolds. Each template lists the block
+// types in display order. Block fields are filled in either by
+// the LLM (copy) or by applyPropertyDeterministicFields (facts).
+// The scaffold pass ensures the required block types exist so
+// the deterministic step has something to fill; it never removes
+// or reorders blocks the LLM emitted in addition to the scaffold.
+export const SITE_TEMPLATES = Object.freeze({
+  property_listing: {
+    label: "Property Listing Page",
+    pageGoal: "LISTING",
+    blocks: ["hero", "key_details", "gallery", "paragraph", "cta", "lead_form", "contact"],
+    intent:
+      "Showcase the property with photos, key details, and a clear path to request a showing.",
+  },
+  open_house: {
+    label: "Open House Page",
+    pageGoal: "EVENT",
+    blocks: ["hero", "key_details", "gallery", "paragraph", "cta", "lead_form", "contact"],
+    intent:
+      "Drive open-house RSVPs. If the property has an open_house event date in its data, surface it; otherwise stay generic.",
+  },
+  just_sold: {
+    label: "Just Sold Page",
+    pageGoal: "LEAD_CAPTURE",
+    blocks: ["hero", "paragraph", "gallery", "cta", "lead_form", "contact"],
+    intent:
+      "Social proof of a recent sale. Convert future sellers. Do NOT quote the sale price unless it is explicitly in the source data.",
+  },
+  seller_lead: {
+    label: "Seller Lead Page",
+    pageGoal: "LEAD_CAPTURE",
+    blocks: ["hero", "paragraph", "key_details", "faq", "cta", "lead_form", "contact"],
+    intent:
+      "Convert potential sellers. Lead with the seller value proposition; use the FAQ to address common objections.",
+  },
+  buyer_lead: {
+    label: "Buyer Lead Page",
+    pageGoal: "LEAD_CAPTURE",
+    blocks: ["hero", "paragraph", "faq", "cta", "lead_form", "contact"],
+    intent:
+      "Convert potential buyers. Lead with the buyer value proposition; use the FAQ to address common buyer questions.",
+  },
+  neighborhood_guide: {
+    label: "Neighborhood Guide",
+    pageGoal: "LEAD_CAPTURE",
+    blocks: ["hero", "paragraph", "key_details", "cta", "lead_form", "contact"],
+    intent:
+      "Educational guide. Provide a high-level overview only. Do NOT invent specific facts — no school ratings, no walkability scores, no specific amenities unless explicitly provided.",
+  },
+});
+
+// Generate an empty block of a given type. Used by the scaffold
+// pass to insert placeholders the LLM forgot; downstream the
+// deterministic fill or the user fills these in.
+function emptyBlockFor(type) {
+  switch (type) {
+    case "hero":
+      return { type: "hero", headline: "", subheadline: "" };
+    case "paragraph":
+      return { type: "paragraph", body: "" };
+    case "image":
+      return null; // image without imageUrl is dropped by normalizer
+    case "cta":
+      return { type: "cta", label: "Get in touch", href: "#contact" };
+    case "lead_form":
+      return { type: "lead_form", formId: "__PENDING__" };
+    case "gallery":
+      return { type: "gallery", imageUrls: [], layout: "grid" };
+    case "key_details":
+      return { type: "key_details", heading: "Highlights", items: [] };
+    case "testimonial":
+      return null; // can't fabricate a quote
+    case "faq":
+      return { type: "faq", heading: "Frequently asked questions", items: [] };
+    case "contact":
+      return { type: "contact", heading: "Get in touch" };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Sites-05 — ensure the template's required block types exist in
+ * the payload. The LLM may have emitted them in any order plus
+ * extras; we preserve everything the LLM produced and only append
+ * placeholders for missing required types.
+ *
+ * Exported for unit tests.
+ */
+export function applyTemplateScaffold(payload, template) {
+  const tpl = SITE_TEMPLATES[template];
+  if (!payload || !tpl) return payload;
+  const blocks = Array.isArray(payload.blocksJson) ? [...payload.blocksJson] : [];
+  const present = new Set(blocks.map((b) => (b && typeof b === "object" ? b.type : null)));
+  // Append in scaffold order, but only for missing types. Don't
+  // touch the LLM's existing order.
+  for (const type of tpl.blocks) {
+    if (present.has(type)) continue;
+    const empty = emptyBlockFor(type);
+    if (empty) {
+      blocks.push(empty);
+      present.add(type);
+    }
+  }
+  return { ...payload, blocksJson: blocks };
+}
+
+// Sites-05 — explicit list of facts the LLM is NOT allowed to
+// fabricate. Included verbatim in the system prompt.
+const FACTS_LLM_MAY_NOT_FABRICATE = [
+  "market statistics (median price, days on market, inventory)",
+  "school ratings, school districts, or school names",
+  "walkability or transit scores",
+  "specific neighborhood amenities (parks, restaurants, businesses) not in the provided data",
+  "exact sale prices for sold listings unless they appear in the data",
+  "financing terms, mortgage rates, or down-payment specifics",
+];
+
+function buildSystemPrompt({ ctx, pageGoal, template }) {
   const brandName = ctx.client?.name ?? "the business";
   const industryName = ctx.client?.industryKey ?? null;
   const voice = ctx.voice ?? null;
@@ -366,9 +498,19 @@ function buildSystemPrompt({ ctx, pageGoal }) {
 
   const goalBlurb = PAGE_GOAL_BLURB[pageGoal] || "convert visitors";
 
+  const tpl = template ? SITE_TEMPLATES[template] : null;
+  const templateLines = tpl
+    ? [
+        ``,
+        `Template: **${tpl.label}** — ${tpl.intent}`,
+        `Preferred block order: ${tpl.blocks.join(" → ")}.`,
+      ]
+    : [];
+
   return [
     `You write conversion-focused landing-page copy for ${brandName}${industryName ? ` (industry: ${industryName})` : ""}.`,
     `The page's goal is to ${goalBlurb}.`,
+    ...templateLines,
     "",
     brandLines.length > 0 ? `Brand context:\n${brandLines.join("\n")}` : "",
     voiceLines.length > 0 ? `\nVoice profile:\n${voiceLines.join("\n")}` : "",
@@ -383,26 +525,30 @@ function buildSystemPrompt({ ctx, pageGoal }) {
     "- Slug: lowercase, dash-separated, no spaces, max 60 chars,",
     "  derived from the page topic (NOT the brand name).",
     "- Use second-person ('you') in body copy when natural.",
-    "- Don't fabricate facts about specific properties / data the",
-    "  brief doesn't mention. Stick to the supplied context.",
     "- CTA href: leave as '#contact' if no specific URL is supplied —",
     "  the workspace owner will replace it.",
+    "",
+    "Grounding rules (Sites-05) — you MUST NOT fabricate:",
+    ...FACTS_LLM_MAY_NOT_FABRICATE.map((rule) => `- ${rule}`),
+    "Only state these facts if they appear verbatim in the supplied source data. If unsure, omit the fact rather than guess.",
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-function buildUserPrompt({ source, pageGoal, customPrompt }) {
+function buildUserPrompt({ source, pageGoal, customPrompt, template }) {
+  const tpl = template ? SITE_TEMPLATES[template] : null;
   const lines = [
     `# Page brief`,
     ``,
     `**Source type:** ${source.kind}`,
     `**Source title:** ${source.title}`,
     `**Page goal:** ${pageGoal}`,
+    tpl ? `**Template:** ${tpl.label} — ${tpl.intent}` : null,
     ``,
     `## Context`,
     source.brief || "(no additional context)",
-  ];
+  ].filter(Boolean);
   if (customPrompt && source.kind !== "idea") {
     lines.push("", `## Additional notes from the user`, customPrompt);
   }

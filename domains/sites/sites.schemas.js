@@ -292,6 +292,20 @@ export const ListSubmissionsQuerySchema = z.object({
 
 // ── Page generation ────────────────────────────────────────────────────
 
+// Sites-05 — template hint. Optional. When set, biases the LLM
+// toward a specific block scaffold + page intent; the generation
+// service runs a scaffold pass that ensures the required block
+// types exist (placeholders for missing) so the property
+// deterministic fill has something to populate.
+export const SiteTemplateEnum = z.enum([
+  "property_listing",
+  "open_house",
+  "just_sold",
+  "seller_lead",
+  "buyer_lead",
+  "neighborhood_guide",
+]);
+
 export const GeneratePageSchema = z.object({
   sourceType: SiteSourceTypeEnum,
   // Required for non-IDEA sources; service-layer guards return a
@@ -301,4 +315,5 @@ export const GeneratePageSchema = z.object({
   // Free-form additional context. Required for IDEA sources (the
   // prompt IS the source), optional for the others.
   customPrompt: z.string().max(4000).optional(),
+  template: SiteTemplateEnum.optional(),
 });

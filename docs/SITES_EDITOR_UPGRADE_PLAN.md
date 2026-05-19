@@ -300,16 +300,59 @@ The shared blocksJson model means the public renderer already shows the latest s
 - Lead-form preview is a placeholder, not the real form. Real form-render preview would either need a form-fields fetch inside the preview or a duplication of `LeadFormBlock`.
 - Renderer parity is by visual review — there's no automated diff between `PreviewRenderer` and `squadpitch-sites/lib/pageBlocks/index.tsx`. Drift between the two would be a Phase 6 hardening concern; shared-package extraction is the long-term answer if drift becomes painful.
 
-### Phase 4 — Real-estate templates + AI generation upgrade
+### Phase 4 — Real-estate templates + AI generation upgrade — ✅ SHIPPED (sites-05)
 
-Goal: pick "Property" + a property → get a structured property page in seconds, not a free-form LLM blob.
+Goal: pick a template + (for property templates) a property → get a structured page in seconds, not a free-form LLM blob.
 
-- API: add a templates layer that selects a block scaffold by `(sourceType, pageGoal)`. For `(PROPERTY, LISTING)`: `[hero(image,address), key_details(beds/baths/sqft/price/year), gallery(images), paragraph(description), lead_form, contact]`. For `(PROPERTY, OPEN_HOUSE)`: add a heading block with date/time + gallery.
-- LLM is responsible for the **copy inside the scaffold** (hero subheadline, paragraph body). Structured fields (price, beds/baths, gallery) are deterministically populated from `dataJson` — no hallucination risk.
-- Surfacing: `useGeneratePageFromSource` returns a generated `templateUsed` for the audit trail.
-- Forms: `from-source` already auto-creates the LeadForm; extend to attach `pageId` to the form so submissions carry context.
+**Templates shipped:**
 
-Risk: Medium. The generation service is in active use; behavior change must keep the existing "IDEA" path working.
+| Key | Goal | Block scaffold (in order) | Notes |
+|---|---|---|---|
+| `property_listing` | LISTING | hero → key_details → gallery → paragraph → cta → lead_form → contact | Property-linked. Photos + facts deterministic. |
+| `open_house` | EVENT | hero → key_details → gallery → paragraph → cta → lead_form → contact | Property-linked. Surfaces `open_house` event date if present. |
+| `just_sold` | LEAD_CAPTURE | hero → paragraph → gallery → cta → lead_form → contact | Property-linked. Prompt forbids quoting sale price unless explicit in data. |
+| `seller_lead` | LEAD_CAPTURE | hero → paragraph → key_details → faq → cta → lead_form → contact | IDEA source — value-prop + FAQ. |
+| `buyer_lead` | LEAD_CAPTURE | hero → paragraph → faq → cta → lead_form → contact | IDEA source — value-prop + FAQ. |
+| `neighborhood_guide` | LEAD_CAPTURE | hero → paragraph → key_details → cta → lead_form → contact | Prompt forbids fabricating amenities/schools/walkability. |
+
+**Architecture:**
+
+- `GeneratePageSchema` adds optional `template: SiteTemplateEnum` (validated against the six keys).
+- `generatePageFromSource()` threads `template` into both `buildSystemPrompt` and `buildUserPrompt` so the LLM gets the template label + block-order hint + intent string.
+- New `applyTemplateScaffold(payload, template)` pass runs between normalization and the existing `applyPropertyDeterministicFields`. It **only appends** missing required block types — never reorders or removes blocks the LLM produced. Each appended block is an empty placeholder (`{ type, …safe defaults }`) the downstream deterministic fill then populates. `lead_form` gets `formId: '__PENDING__'` so the existing route step that auto-creates a form + resolves the placeholder still works. `testimonial` is never auto-appended — no fabricated quotes.
+- Response now includes `templateUsed` so the audit trail / UI can show what scaffold was applied.
+
+**Grounding rules (system prompt addition):**
+
+The LLM is now explicitly told it MUST NOT fabricate:
+- market statistics (median price, days on market, inventory)
+- school ratings, districts, or names
+- walkability or transit scores
+- specific neighborhood amenities not in the provided data
+- exact sale prices for sold listings unless they appear in the data
+- financing terms, mortgage rates, down-payment specifics
+
+The rule is *"Only state these facts if they appear verbatim in the supplied source data. If unsure, omit the fact rather than guess."* Replaces the earlier loose "Don't fabricate facts about specific properties."
+
+**Web wizard restructure:**
+
+- New Step 1: **Template** — grid of seven cards (6 templates + Custom).
+- Property templates auto-set `sourceType = PROPERTY` + the template's pageGoal, then go straight to property pick on Step 2.
+- IDEA templates (seller_lead, buyer_lead, neighborhood_guide) auto-set `sourceType = IDEA` + LEAD_CAPTURE and go to the idea-prompt on Step 2.
+- Custom keeps the original 3-step flow (source type → source → goal) for full flexibility.
+- For pre-canned templates the goal step is skipped — clicking Continue on step 2 generates directly. The step indicator collapses to 2 steps when a template is selected.
+
+**Backwards compatibility:** omitting `template` from the API call preserves the exact pre-sites-05 behavior (no scaffold pass, looser prompt). Existing IDEA / CAMPAIGN / DATA_ITEM paths through Custom work unchanged. `applyPropertyDeterministicFields` (sites-02) runs after the new scaffold pass — order matters and is idempotent.
+
+**Files changed (sites-05):**
+- api: `domains/sites/sites.generation.service.js`, `domains/sites/sites.schemas.js`, `tests/sitesTemplateScaffolds.test.js`
+- web: `src/hooks/useSites.ts`, `src/app/(app)/workspaces/[clientId]/sites/_components/SiteCreateWizard.tsx`
+
+**Phase 4 limitations / follow-ups:**
+
+- The wizard doesn't display a per-template preview before pick — Phase 6 polish.
+- `open_house` doesn't yet surface the open-house date directly in the hero — `applyPropertyDeterministicFields` could be extended to pull from `dataJson.events`. Left as follow-up.
+- `templateUsed` is returned but the editor doesn't show it as a source-panel badge yet — small UI polish.
 
 ### Phase 5 — Block UX + form integration
 
