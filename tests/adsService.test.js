@@ -620,7 +620,16 @@ describe("exportPackage — gating + bundle", () => {
       }),
     };
 
-    const result = await exportSvc.exportPackage(CLIENT_ID, "pkg-ready", "auth0|u1", { format: "json" });
+    // Ads-03 — default mode is now 'preview' (non-mutating), so this
+    // test explicitly passes mode='download' to assert the historic
+    // export-with-side-effects behavior. See the "preview is
+    // non-mutating" test below for the inverse.
+    const result = await exportSvc.exportPackage(
+      CLIENT_ID,
+      "pkg-ready",
+      "auth0|u1",
+      { format: "json", mode: "download" },
+    );
     expect(result.filename).toMatch(/\.json$/);
     expect(result.mimeType).toBe("application/json");
     expect(result.bundle.package.specialCategory).toBe("HOUSING");
@@ -700,6 +709,141 @@ describe("exportPackage — gating + bundle", () => {
     expect(result.content).toMatch(/HOUSING SPECIAL AD CATEGORY/);
     expect(result.content).toMatch(/NOT LAUNCHED BY SQUADPITCH/);
     expect(result.content).toMatch(/Reviewed by agent/);
+  });
+});
+
+// Ads-03 — preview vs download. Preview must NOT touch the package
+// row (no exportsJson append, no status flip); download keeps the
+// historic side-effect behavior. The bundle/bytes/filename/mimeType
+// are identical between the two modes.
+describe("exportPackage — preview vs download mode", () => {
+  function readyFixture(id = "pkg-prv") {
+    return {
+      adPackages: [
+        [
+          id,
+          {
+            id,
+            clientId: CLIENT_ID,
+            name: "Preview Test",
+            status: "READY",
+            specialCategory: "NONE",
+            exportsJson: [],
+            objective: "TRAFFIC",
+            sourceType: "IDEA",
+            sourceId: null,
+            sourceIdea: "Brief",
+          },
+        ],
+      ],
+      adCreatives: [
+        [
+          "c1",
+          {
+            id: "c1",
+            adPackageId: id,
+            variantIndex: 1,
+            headline: "h",
+            primaryText: "t",
+            additionalAssetIdsJson: [],
+          },
+        ],
+      ],
+      adAudiences: [
+        [
+          "a1",
+          {
+            id: "a1",
+            adPackageId: id,
+            locationsJson: [{ kind: "country", value: "US" }],
+            ageMin: 25,
+            ageMax: 55,
+            gendersJson: ["all"],
+            customAudienceHintsJson: [],
+          },
+        ],
+      ],
+      adBudgets: [
+        ["b1", { id: "b1", adPackageId: id, dailyBudgetCents: 2500, currency: "USD" }],
+      ],
+      adDestinations: [
+        ["d1", { id: "d1", adPackageId: id, kind: "EXTERNAL_URL", externalUrl: "https://example.com" }],
+      ],
+    };
+  }
+
+  it("preview mode (default) returns full bundle but does NOT mutate the package", async () => {
+    fixtures = { prisma: buildPrismaMock(readyFixture()) };
+    const result = await exportSvc.exportPackage(CLIENT_ID, "pkg-prv", "auth0|u1", { format: "json" });
+
+    // Bundle + filename + mimeType identical to download.
+    expect(result.mode).toBe("preview");
+    expect(result.filename).toMatch(/\.json$/);
+    expect(result.mimeType).toBe("application/json");
+    expect(result.bundle.package.id).toBe("pkg-prv");
+    expect(typeof result.content).toBe("string");
+
+    // No side effects.
+    const pkg = fixtures.prisma.state.adPackages.get("pkg-prv");
+    expect(pkg.status).toBe("READY");
+    expect(pkg.exportsJson).toHaveLength(0);
+  });
+
+  it("preview mode explicitly opted-in is also non-mutating", async () => {
+    fixtures = { prisma: buildPrismaMock(readyFixture()) };
+    await exportSvc.exportPackage(CLIENT_ID, "pkg-prv", "auth0|u1", {
+      format: "markdown",
+      mode: "preview",
+    });
+    const pkg = fixtures.prisma.state.adPackages.get("pkg-prv");
+    expect(pkg.status).toBe("READY");
+    expect(pkg.exportsJson).toHaveLength(0);
+  });
+
+  it("download mode flips READY→EXPORTED and appends exportsJson", async () => {
+    fixtures = { prisma: buildPrismaMock(readyFixture()) };
+    const result = await exportSvc.exportPackage(CLIENT_ID, "pkg-prv", "auth0|u1", {
+      format: "markdown",
+      mode: "download",
+    });
+    expect(result.mode).toBe("download");
+    expect(result.filename).toMatch(/\.md$/);
+    expect(result.mimeType).toBe("text/markdown; charset=utf-8");
+
+    const pkg = fixtures.prisma.state.adPackages.get("pkg-prv");
+    expect(pkg.status).toBe("EXPORTED");
+    expect(pkg.exportsJson).toHaveLength(1);
+    expect(pkg.exportsJson[0].format).toBe("markdown");
+    expect(pkg.exportsJson[0].generatedBy).toBe("auth0|u1");
+  });
+
+  it("download mode on an already-EXPORTED package appends but keeps status", async () => {
+    const fx = readyFixture();
+    fx.adPackages[0][1].status = "EXPORTED";
+    fx.adPackages[0][1].exportsJson = [{ format: "json", filename: "old.json", generatedAt: "now", generatedBy: "auth0|u1" }];
+    fixtures = { prisma: buildPrismaMock(fx) };
+
+    await exportSvc.exportPackage(CLIENT_ID, "pkg-prv", "auth0|u1", { format: "json", mode: "download" });
+    const pkg = fixtures.prisma.state.adPackages.get("pkg-prv");
+    expect(pkg.status).toBe("EXPORTED");
+    expect(pkg.exportsJson).toHaveLength(2);
+  });
+
+  it("filename + mimeType are correct for each format (preview path)", async () => {
+    fixtures = { prisma: buildPrismaMock(readyFixture()) };
+    const jsonResult = await exportSvc.exportPackage(CLIENT_ID, "pkg-prv", "auth0|u1", { format: "json" });
+    expect(jsonResult.mimeType).toBe("application/json");
+    expect(jsonResult.filename.endsWith(".json")).toBe(true);
+
+    // Same package, preview again, different format — both must be
+    // non-mutating and produce the right extension/MIME.
+    const mdResult = await exportSvc.exportPackage(CLIENT_ID, "pkg-prv", "auth0|u1", { format: "markdown" });
+    expect(mdResult.mimeType).toBe("text/markdown; charset=utf-8");
+    expect(mdResult.filename.endsWith(".md")).toBe(true);
+
+    const pkg = fixtures.prisma.state.adPackages.get("pkg-prv");
+    expect(pkg.status).toBe("READY");
+    expect(pkg.exportsJson).toHaveLength(0);
   });
 });
 

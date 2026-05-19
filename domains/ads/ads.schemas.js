@@ -206,7 +206,14 @@ export const DestinationPatchSchema = z.object({
 });
 
 // ── Export ──────────────────────────────────────────────────────────
+//
+// Ads-03 — preview vs download split. Preview returns the same
+// bytes/MIME/filename but is NON-mutating: no exportsJson append,
+// no READY→EXPORTED transition. Download keeps the existing
+// behavior (history + status flip). Default is preview so a
+// button labelled "Preview" cannot mark a package as exported.
 
 export const ExportRequestSchema = z.object({
   format: z.enum(["json", "markdown"]).optional().default("json"),
+  mode: z.enum(["preview", "download"]).optional().default("preview"),
 });

@@ -220,10 +220,19 @@ adsRouter.patch(
 
 // ── Export ─────────────────────────────────────────────────────────────
 //
-// Streams the export bytes directly. The client receives a JSON or
-// markdown body + Content-Disposition for download. We also return
-// the bundle structure in a JSON wrapper when requested via Accept
-// header — for the UI's "preview" tab.
+// Ads-03 — preview vs download. The body's `mode` field decides
+// whether the call mutates the package:
+//   - mode: 'preview'  (default) returns the JSON wrapper; never
+//     appends export history, never flips READY→EXPORTED.
+//   - mode: 'download' returns the JSON wrapper AND marks the
+//     package exported. The frontend converts content → Blob using
+//     the returned mimeType + filename, so we always respond with
+//     the structured wrapper (no Content-Disposition stream).
+//
+// Legacy compat: callers that pass `?download=1` on the query
+// string are mapped to mode='download' so older builds of the web
+// app keep working. The query param wins when present — explicit
+// download intent shouldn't be silently downgraded.
 
 adsRouter.post(
   `${BASE}/workspaces/:id/ads/:packageId/export`,
@@ -234,23 +243,25 @@ adsRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
       const userId = getAuth0Sub(req);
 
+      const wantsDownloadParam = req.query.download === "1";
+      const mode = wantsDownloadParam ? "download" : parsed.data.mode;
+
       const { filename, mimeType, content, bundle } = await exportPackage(
         req.params.id,
         req.params.packageId,
         userId,
-        parsed.data,
+        { format: parsed.data.format, mode },
       );
 
-      // Default: return JSON wrapper for in-app preview. Client can
-      // pass ?download=1 to get a streamed file response with the
-      // right Content-Disposition for save-as.
-      const wantsDownload = req.query.download === "1";
-      if (wantsDownload) {
+      // For an explicit ?download=1 request we still stream as an
+      // attachment so curl/postman users get the file directly.
+      // The in-app UI uses the JSON wrapper + a client-side Blob.
+      if (wantsDownloadParam) {
         res.setHeader("Content-Type", mimeType);
         res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
         return res.send(content);
       }
-      res.json({ filename, mimeType, content, bundle });
+      res.json({ filename, mimeType, content, bundle, mode });
     } catch (err) {
       if (err instanceof ExportError) {
         return sendError(res, err.status, err.code, err.message);

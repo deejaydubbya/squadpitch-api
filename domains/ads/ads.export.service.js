@@ -58,7 +58,18 @@ to comply. Review the copy for any protected-class language
 before launching.
 `.trim();
 
-export async function exportPackage(clientId, packageId, userId, { format = "json" } = {}) {
+// Ads-03 — `mode` controls whether the call mutates the package.
+//   - 'preview'  (default): generate the bundle + bytes only. No
+//     exportsJson append, no READY→EXPORTED status flip. Safe to
+//     call from a "Preview" button without surprising the user.
+//   - 'download': append to exportsJson and flip READY→EXPORTED.
+//     This is the real export — the user pressed "Download".
+export async function exportPackage(
+  clientId,
+  packageId,
+  userId,
+  { format = "json", mode = "preview" } = {},
+) {
   const pkg = await prisma.adPackage.findFirst({
     where: { id: packageId, clientId },
     include: {
@@ -173,24 +184,27 @@ export async function exportPackage(clientId, packageId, userId, { format = "jso
   const mimeType = format === "markdown" ? "text/markdown; charset=utf-8" : "application/json";
   const filename = `${slugifyForFilename(pkg.name)}-${pkg.id.slice(-6)}.${format === "markdown" ? "md" : "json"}`;
 
-  // Append to the package's export history. We store metadata only
-  // (no blob in DB) — the bytes are streamed in the response.
-  const exportsEntry = {
-    format,
-    filename,
-    generatedAt: new Date().toISOString(),
-    generatedBy: userId,
-  };
-  const existingExports = Array.isArray(pkg.exportsJson) ? pkg.exportsJson : [];
-  await prisma.adPackage.update({
-    where: { id: pkg.id },
-    data: {
-      exportsJson: [...existingExports, exportsEntry],
-      status: pkg.status === "READY" ? "EXPORTED" : pkg.status,
-    },
-  });
+  // Ads-03 — only the 'download' path mutates. Preview is a pure
+  // read so a "Preview" button can't silently flip a package to
+  // EXPORTED behind the user's back.
+  if (mode === "download") {
+    const exportsEntry = {
+      format,
+      filename,
+      generatedAt: new Date().toISOString(),
+      generatedBy: userId,
+    };
+    const existingExports = Array.isArray(pkg.exportsJson) ? pkg.exportsJson : [];
+    await prisma.adPackage.update({
+      where: { id: pkg.id },
+      data: {
+        exportsJson: [...existingExports, exportsEntry],
+        status: pkg.status === "READY" ? "EXPORTED" : pkg.status,
+      },
+    });
+  }
 
-  return { filename, mimeType, content, bundle };
+  return { filename, mimeType, content, bundle, mode };
 }
 
 async function resolveSourceSummaryForExport(pkg, clientId) {
