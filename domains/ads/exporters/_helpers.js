@@ -57,3 +57,19 @@ export function joinLocations(locations) {
   if (!Array.isArray(locations) || locations.length === 0) return "";
   return locations.map((l) => `${l.value} (${l.kind})`).join("; ");
 }
+
+// Truncate to `max` characters, appending an ellipsis when we cut.
+// Caller decides what to do with the returned `truncated` flag —
+// renderers usually push a warning into their warnings[] so the
+// frontend can surface it instead of silently losing copy.
+//
+// The ellipsis counts toward `max`, so the truncated string always
+// fits in the original budget (important for platforms that reject
+// over-length fields with a generic error).
+export function truncateWithEllipsis(value, max) {
+  if (value == null) return { value: "", truncated: false };
+  const s = String(value);
+  if (s.length <= max) return { value: s, truncated: false };
+  if (max <= 1) return { value: "…".slice(0, max), truncated: true };
+  return { value: `${s.slice(0, max - 1).trimEnd()}…`, truncated: true };
+}

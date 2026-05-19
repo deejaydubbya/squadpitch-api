@@ -237,7 +237,10 @@ describe("exportPackage — per-format dispatch (smoke)", () => {
     { format: "meta_launch_sheet", mime: "text/csv; charset=utf-8", ext: "csv", direct: false },
     { format: "linkedin_launch_sheet", mime: "text/csv; charset=utf-8", ext: "csv", direct: false },
     { format: "pinterest_launch_sheet", mime: "text/csv; charset=utf-8", ext: "csv", direct: false },
-    { format: "google_ads_editor_csv", mime: "text/csv; charset=utf-8", ext: "csv", direct: true },
+    // Ads-05 — flipped to isDirectImport: false. Editor *will*
+    // import it, but campaign-type / bidding / conversion-
+    // tracking settings still need user review. Honest framing.
+    { format: "google_ads_editor_csv", mime: "text/csv; charset=utf-8", ext: "csv", direct: false },
     { format: "tiktok_bulk_template_csv", mime: "text/csv; charset=utf-8", ext: "csv", direct: true },
   ];
 

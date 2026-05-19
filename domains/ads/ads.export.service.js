@@ -84,7 +84,12 @@ export async function exportPackage(
   // platform-specific bytes. Keeping bundle creation here means a
   // new renderer can be added without touching prisma.
   const bundle = await buildCanonicalBundle(pkg);
-  const { content, filename } = exporter.render(bundle, pkg);
+  // Renderers may optionally return `warnings[]` (ads-05) — e.g.
+  // Google CSV flags fields it had to truncate. We pass them
+  // through to the response so the FE can surface them next to
+  // the download button instead of letting bad copy ship silently.
+  const rendered = exporter.render(bundle, pkg);
+  const { content, filename, warnings } = rendered;
 
   // Ads-03 — only the 'download' path mutates. Preview is a pure
   // read so a "Preview" button can't silently flip a package to
@@ -114,7 +119,12 @@ export async function exportPackage(
     extension: exporter.extension,
     platform: exporter.platform,
     isDirectImport: exporter.isDirectImport,
+    // Ads-05 — `importStyle` (when set) names the platform-specific
+    // import path the bytes target (e.g. 'google_ads_editor_csv').
+    // Renderers that aren't tied to a specific importer omit it.
+    importStyle: exporter.importStyle ?? null,
     platformNotes: exporter.notes,
+    warnings: Array.isArray(warnings) ? warnings : [],
     content,
     bundle,
     mode,

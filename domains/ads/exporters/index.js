@@ -71,6 +71,7 @@ export function listExporters() {
     extension: e.extension,
     platform: e.platform,
     isDirectImport: e.isDirectImport,
+    importStyle: e.importStyle ?? null,
     notes: e.notes,
   }));
 }
