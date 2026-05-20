@@ -238,8 +238,11 @@ describe("exportPackage — per-format dispatch (smoke)", () => {
     // CSV scaffold). Reorganized as a structured setup sheet with
     // sections + a SETUP CHECKLIST. Still isDirectImport=false.
     { format: "meta_launch_sheet", mime: "text/markdown; charset=utf-8", ext: "md", direct: false },
-    { format: "linkedin_launch_sheet", mime: "text/csv; charset=utf-8", ext: "csv", direct: false },
-    { format: "pinterest_launch_sheet", mime: "text/csv; charset=utf-8", ext: "csv", direct: false },
+    // Ads-08 — LinkedIn + Pinterest exporters are now Markdown
+    // briefs (were CSV scaffolds). Same structure as Meta (ads-07)
+    // for cross-platform consistency.
+    { format: "linkedin_launch_sheet", mime: "text/markdown; charset=utf-8", ext: "md", direct: false },
+    { format: "pinterest_launch_sheet", mime: "text/markdown; charset=utf-8", ext: "md", direct: false },
     // Ads-05 — flipped to isDirectImport: false. Editor *will*
     // import it, but campaign-type / bidding / conversion-
     // tracking settings still need user review. Honest framing.
