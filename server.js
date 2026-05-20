@@ -251,7 +251,17 @@ app.use((err, req, res, _next) => {
   // non-5xx responses so the client can branch on it; never leak details
   // for 5xx.
   const code = status >= 500 ? "INTERNAL" : (err?.code || "REQUEST_FAILED");
-  return sendError(res, status, code, message);
+  // industry-01 — forward IndustryNotSupportedError extras
+  // (actualIndustry / requiredIndustry) so the FE can render a
+  // "this feature requires X industry" message + deep-link to
+  // workspace settings. Only sent for non-5xx — 5xx never leaks
+  // structured detail.
+  const opts = {};
+  if (status < 500) {
+    if (err?.actualIndustry !== undefined) opts.actualIndustry = err.actualIndustry;
+    if (err?.requiredIndustry !== undefined) opts.requiredIndustry = err.requiredIndustry;
+  }
+  return sendError(res, status, code, message, opts);
 });
 
 // ===== Boot & graceful shutdown =====

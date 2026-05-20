@@ -1491,7 +1491,17 @@ studioRouter.post(
       const result = await importService.extractFromUrl(parsed.data.url, { hint: parsed.data.hint });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1507,7 +1517,17 @@ studioRouter.post(
       const result = await importService.extractFromText(parsed.data.text, { hint: parsed.data.hint });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1523,7 +1543,17 @@ studioRouter.post(
       const result = importService.previewCSV(parsed.data.csvContent);
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1542,7 +1572,17 @@ studioRouter.post(
       });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1562,7 +1602,17 @@ studioRouter.post(
       });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1580,7 +1630,17 @@ studioRouter.post(
       });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1600,7 +1660,17 @@ studioRouter.post(
       });
       res.status(201).json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }

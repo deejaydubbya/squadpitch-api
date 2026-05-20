@@ -30,6 +30,7 @@ import { prisma } from "../../prisma.js";
 import { resolveRealEstateContext } from "../industry/techStack.service.js";
 import { loadRealEstateGenerationAssets } from "../industry/realEstateGeneration.js";
 import { getRecentAssetCount } from "../industry/realEstateAssets.js";
+import { requireIndustry } from "../industry/industry.errors.js";
 import { generateDraft } from "./generation/aiGenerationService.js";
 import { formatDraft } from "./draft.service.js";
 import { pickAngleForSource } from "./contentAngles.js";
@@ -63,10 +64,29 @@ const DEFAULT_SETTINGS = {
   allowFallbackPosts: true,
 };
 
+// industry-01 — Autopilot is real-estate-only right now. Every
+// public entry point gates through here so a non-RE workspace gets
+// a typed INDUSTRY_NOT_SUPPORTED error instead of silently calling
+// loadRealEstateGenerationAssets / resolveRealEstateContext (which
+// would return empty + crash downstream).
+//
+// The single workspace.industryKey lookup is cheap (indexed PK) and
+// catches the issue before any expensive RE-context loading runs.
+// Bulk jobs (evaluateAllAutopilotWorkspaces) filter at the query
+// level instead of throwing per-workspace.
+async function assertRealEstateWorkspace(workspaceId) {
+  const row = await prisma.client.findUnique({
+    where: { id: workspaceId },
+    select: { industryKey: true },
+  });
+  requireIndustry("Autopilot", row?.industryKey ?? null, "real_estate");
+}
+
 // ── Settings CRUD ────────────────────────────────────────────────────────
 
 /** @param {string} workspaceId */
 export async function getAutopilotSettings(workspaceId) {
+  await assertRealEstateWorkspace(workspaceId);
   const row = await prisma.workspaceTechStackConnection.findUnique({
     where: { workspaceId_providerKey: { workspaceId, providerKey: AUTOPILOT_PROVIDER_KEY } },
   });
@@ -94,6 +114,7 @@ export async function getAutopilotSettings(workspaceId) {
 
 /** @param {string} workspaceId @param {object} patch */
 export async function updateAutopilotSettings(workspaceId, patch) {
+  await assertRealEstateWorkspace(workspaceId);
   const existing = await prisma.workspaceTechStackConnection.findUnique({
     where: { workspaceId_providerKey: { workspaceId, providerKey: AUTOPILOT_PROVIDER_KEY } },
   });
@@ -609,6 +630,7 @@ async function executeDraftPlan(workspaceId, plan, runMode) {
  * Creates at most one draft.
  */
 export async function runAutopilot(workspaceId, { mode = "event" } = {}) {
+  await assertRealEstateWorkspace(workspaceId);
   return runEvaluatorAndRecord(workspaceId, mode === "scheduled" ? "SCHEDULED" : mode === "event" ? "EVENT" : "MANUAL", mode);
 }
 
@@ -620,6 +642,7 @@ export async function runAutopilot(workspaceId, { mode = "event" } = {}) {
  * Uses content coverage for diversified planning.
  */
 export async function runScheduledAutopilot(workspaceId) {
+  await assertRealEstateWorkspace(workspaceId);
   return runEvaluatorAndRecord(workspaceId, "SCHEDULED", "scheduled");
 }
 
@@ -1714,12 +1737,28 @@ async function detectAndPersistRecommendations({ workspaceId, reAssets, enabledC
  * evaluation for each. Returns summary results.
  */
 export async function evaluateAllAutopilotWorkspaces() {
+  // industry-01 — filter to real-estate workspaces at the query
+  // level so the bulk cron job doesn't trip the per-workspace
+  // INDUSTRY_NOT_SUPPORTED gate for every non-RE workspace that
+  // ever toggled autopilot. The per-workspace gate still applies
+  // as defense-in-depth via runScheduledAutopilot.
+  const realEstateWorkspaceIds = await prisma.client.findMany({
+    where: { industryKey: "real_estate" },
+    select: { id: true },
+  });
+  const realEstateIdSet = new Set(realEstateWorkspaceIds.map((c) => c.id));
+
   const rows = await prisma.workspaceTechStackConnection.findMany({
     where: { providerKey: AUTOPILOT_PROVIDER_KEY },
     select: { workspaceId: true, metadataJson: true },
   });
 
-  const enabled = rows.filter((r) => r.metadataJson?.enabled && r.metadataJson?.mode !== "off");
+  const enabled = rows.filter(
+    (r) =>
+      realEstateIdSet.has(r.workspaceId) &&
+      r.metadataJson?.enabled &&
+      r.metadataJson?.mode !== "off",
+  );
   const results = [];
 
   for (const row of enabled) {
@@ -1802,6 +1841,7 @@ function summarizeCoverage(coverage) {
 // ── Status (for dashboard) ───────────────────────────────────────────────
 
 export async function getAutopilotStatus(workspaceId) {
+  await assertRealEstateWorkspace(workspaceId);
   const settings = await getAutopilotSettings(workspaceId);
 
   const dayOfWeek = new Date().getUTCDay();
@@ -1871,6 +1911,7 @@ export async function getAutopilotStatus(workspaceId) {
 
 /** @param {string} workspaceId */
 export async function getAutopilotReadiness(workspaceId) {
+  await assertRealEstateWorkspace(workspaceId);
   const [channels, dataCount, client] = await Promise.all([
     prisma.channelSettings.findMany({
       where: { clientId: workspaceId, isEnabled: true },
@@ -1946,6 +1987,7 @@ function parseWarningsMeta(warnings) {
 
 /** @param {string} workspaceId @param {number} [limit=20] */
 export async function getAutopilotActivity(workspaceId, limit = 20) {
+  await assertRealEstateWorkspace(workspaceId);
   const drafts = await prisma.draft.findMany({
     where: {
       clientId: workspaceId,

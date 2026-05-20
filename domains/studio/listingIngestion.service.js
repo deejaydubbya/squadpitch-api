@@ -9,6 +9,21 @@ import { parse as csvParse } from "csv-parse/sync";
 import { prisma } from "../../prisma.js";
 import { scrapeUrl } from "./scrapeUrl.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
+import { requireIndustry } from "../industry/industry.errors.js";
+
+// industry-01 — Listing ingestion is real-estate-only. Every
+// public entry point (manual / CSV / URL) gates on the workspace's
+// industryKey so a non-RE workspace gets a typed
+// INDUSTRY_NOT_SUPPORTED error instead of silently materializing
+// PROPERTY-shaped WorkspaceDataItems for, say, a restaurant
+// pasting a menu URL.
+async function assertRealEstateWorkspace(clientId) {
+  const row = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { industryKey: true },
+  });
+  requireIndustry("Listing ingestion", row?.industryKey ?? null, "real_estate");
+}
 import {
   detectIngestionEvents,
   recordPriceChange,
@@ -388,6 +403,7 @@ function listingToDataItem(listing) {
  * @returns {Promise<{ listing: object, created: boolean, existingId?: string }>}
  */
 export async function ingestManualListing(clientId, input) {
+  await assertRealEstateWorkspace(clientId);
   const raw = adaptManualListing(input);
   const normalized = normalizeListing(raw);
   const validation = validateListing(normalized);
@@ -517,6 +533,7 @@ export function previewListingCSV(csvContent) {
  * @returns {Promise<{ imported: number, updated: number, skipped: number, listings: object[] }>}
  */
 export async function ingestCsvListings(clientId, csvContent, { columnMapping }) {
+  await assertRealEstateWorkspace(clientId);
   const { listings: rawListings, headers, rowCount } = adaptCsvListings(csvContent, { columnMapping });
 
   const results = { imported: 0, updated: 0, skipped: 0, listings: [] };
@@ -613,6 +630,7 @@ export async function ingestCsvListings(clientId, csvContent, { columnMapping })
  * @returns {Promise<{ listing: object, created: boolean, preview: object }>}
  */
 export async function ingestUrlListing(clientId, url) {
+  await assertRealEstateWorkspace(clientId);
   const raw = await adaptUrlListing(url);
   const normalized = normalizeListing(raw);
   const validation = validateListing(normalized);
@@ -635,6 +653,7 @@ export async function ingestUrlListing(clientId, url) {
  * @returns {Promise<{ listing: object, created: boolean }>}
  */
 export async function confirmUrlListing(clientId, listing) {
+  await assertRealEstateWorkspace(clientId);
   const normalized = normalizeListing(listing);
   normalized.sourceType = "url";
 

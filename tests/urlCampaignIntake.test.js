@@ -43,6 +43,19 @@ beforeEach(() => {
   ingestUrlListingMock.mockReset();
   confirmUrlListingMock.mockReset();
   scrapeUrlMock.mockReset();
+  // industry-01 — urlCampaignIntake.analyzeUrl now requires the
+  // workspace to be real_estate (otherwise it returns the neutral
+  // unsupported_industry response). Default the prisma mock to a
+  // real-estate workspace so the existing analyze tests still
+  // exercise the property-extraction path; individual tests can
+  // override globalThis.__intakeFixtures to flip industryKey.
+  globalThis.__intakeFixtures = {
+    prisma: {
+      client: {
+        findUnique: vi.fn(async () => ({ industryKey: "real_estate" })),
+      },
+    },
+  };
 });
 
 // ── Safe URL validator ─────────────────────────────────────────

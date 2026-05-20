@@ -147,11 +147,44 @@ export function assertSafeExternalUrl(input) {
 
 // ── Analyze ────────────────────────────────────────────────────
 
+// industry-01 — listing extraction is real-estate-only. For non-RE
+// or no-industry workspaces, analyze returns an explicit
+// `detectedType: 'unsupported_industry'` response so the FE can
+// render a friendly "URL listing analysis is only available for
+// real-estate workspaces (yet)" message instead of feeding the URL
+// into a property-shaped extractor.
+async function isRealEstateWorkspace(clientId) {
+  if (!clientId) return false;
+  const row = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { industryKey: true },
+  });
+  return row?.industryKey === "real_estate";
+}
+
 export async function analyzeUrl(clientId, { url, preferredIntent } = {}) {
   const parsed = assertSafeExternalUrl(url);
   const intent = preferredIntent === "single_post" || preferredIntent === "campaign"
     ? preferredIntent
     : null;
+
+  // industry-01 — gate the listing path. A no-industry workspace
+  // gets a neutral "unsupported_industry" response and the FE
+  // either surfaces the URL as a freeform idea or hides the
+  // listing card entirely (URL-04 work).
+  if (!(await isRealEstateWorkspace(clientId))) {
+    return {
+      url: parsed.toString(),
+      detectedType: "unsupported_industry",
+      confidence: 0,
+      listings: [],
+      suggestedNextStep: "use_as_idea",
+      preferredIntent: intent,
+      reason:
+        "URL listing analysis is only available for real-estate workspaces. " +
+        "Use the URL as a freeform idea, or set the workspace industry to real estate first.",
+    };
+  }
 
   // Strategy: try treating the URL as a single listing first. If
   // ingestUrlListing's extraction quality is "good" or better,

@@ -38,7 +38,13 @@ const ScheduleSlotSchema = z.object({
 
 export const AssistantSessionSchema = z.object({
   mode: AssistantModeEnum.nullable(),
-  industryKey: z.string().default("real_estate"),
+  // industry-01 — was `.default("real_estate")` which silently
+  // forced every assistant session into real-estate behavior even
+  // when the workspace's Client.industryKey was null or a
+  // different industry. Now nullable so no-industry workspaces
+  // round-trip correctly; the FE resolves the real industryKey
+  // from the workspace before rendering any industry-specific UI.
+  industryKey: z.string().nullable().optional(),
   workspaceId: z.string().nullable(),
 
   // Property selection

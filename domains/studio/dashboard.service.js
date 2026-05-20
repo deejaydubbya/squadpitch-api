@@ -20,8 +20,18 @@ export async function getDashboardRecommendations(clientId) {
     limit: 6,
   });
 
+  // industry-01 — pull the workspace's industryKey once so the
+  // legacy `category` field doesn't get tagged "real_estate" for
+  // recommendations on non-RE workspaces (was happening because
+  // the category mapper only looked at rec.type strings).
+  const workspace = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { industryKey: true },
+  });
+  const industryKey = workspace?.industryKey ?? null;
+
   // Enrich engine recommendations with legacy fields for backward compat
-  const recommendations = engineRecs.map(enrichWithLegacyFields);
+  const recommendations = engineRecs.map((rec) => enrichWithLegacyFields(rec, industryKey));
 
   return { recommendations, summary };
 }
@@ -30,7 +40,7 @@ export async function getDashboardRecommendations(clientId) {
  * Enrich a unified engine recommendation with legacy fields for backward
  * compatibility. Returns the full unified object PLUS action/category/metadata.
  */
-function enrichWithLegacyFields(rec) {
+function enrichWithLegacyFields(rec, industryKey = null) {
   const actionMap = {
     open_create_content: "generate_post",
     open_listing_campaign: "listing_campaign",
@@ -57,7 +67,27 @@ function enrichWithLegacyFields(rec) {
     else if (rec.id.includes("listing_feed")) action = "setup_tech_stack";
   }
 
-  const category = rec.type.includes("listing") || rec.type.includes("milestone") || rec.type.includes("testimonial") || rec.type.includes("open_house") || rec.type.includes("price_drop") || rec.type === "campaign_hint"
+  // industry-01 — was hardcoding category to "real_estate" for any
+  // recommendation whose type mentioned listing / milestone /
+  // testimonial / open_house / price_drop / campaign_hint. That
+  // labeled every recommendation on a non-real-estate workspace as
+  // "real_estate" — wrong category for the FE dashboard widgets.
+  //
+  // Categories now fall through to "content" for anything that
+  // isn't unambiguously growth / workflow / setup. RE-specific
+  // recommendations only get tagged "real_estate" — they're only
+  // emitted by RE-gated branches of the recommendation engine in
+  // the first place, but this defense-in-depth keeps non-RE rec
+  // streams from ever producing a real_estate-tagged item.
+  const looksRealEstate =
+    rec.type.includes("listing") ||
+    rec.type.includes("milestone") ||
+    rec.type.includes("testimonial") ||
+    rec.type.includes("open_house") ||
+    rec.type.includes("price_drop") ||
+    rec.type === "campaign_hint";
+
+  const category = looksRealEstate && industryKey === "real_estate"
     ? "real_estate"
     : rec.type === "growth_post"
       ? "growth"

@@ -1140,8 +1140,14 @@ Each post must match its slot's channel, campaignDay, and label. Use the label a
   }
 
   // Campaign type instructions
-  const typeKey = campaignType ?? "just_listed";
-  const typeInstructions = CAMPAIGN_TYPE_INSTRUCTIONS[typeKey];
+  // industry-01 — was `campaignType ?? "just_listed"`, which
+  // silently turned every missing-campaign-type generation into a
+  // real-estate "just listed" prompt for ALL industries. Now: if
+  // no campaign type is supplied, we skip the type-specific block.
+  // The assistant flow always passes campaignType before reaching
+  // generation; this fallback exists only as a safety net.
+  const typeKey = campaignType ?? null;
+  const typeInstructions = typeKey ? CAMPAIGN_TYPE_INSTRUCTIONS[typeKey] : null;
   if (typeInstructions) {
     lines.push(`\n${typeInstructions}\n`);
   }
@@ -1392,8 +1398,14 @@ export function buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, s
   }
 
   // Campaign type instructions
-  const typeKey = campaignType ?? "just_listed";
-  const typeInstructions = CAMPAIGN_TYPE_INSTRUCTIONS[typeKey];
+  // industry-01 — was `campaignType ?? "just_listed"`, which
+  // silently turned every missing-campaign-type generation into a
+  // real-estate "just listed" prompt for ALL industries. Now: if
+  // no campaign type is supplied, we skip the type-specific block.
+  // The assistant flow always passes campaignType before reaching
+  // generation; this fallback exists only as a safety net.
+  const typeKey = campaignType ?? null;
+  const typeInstructions = typeKey ? CAMPAIGN_TYPE_INSTRUCTIONS[typeKey] : null;
   if (typeInstructions) {
     lines.push(`\n${typeInstructions}\n`);
   }

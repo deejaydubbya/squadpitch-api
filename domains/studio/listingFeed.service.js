@@ -13,6 +13,20 @@ import { prisma } from "../../prisma.js";
 import * as importService from "./dataImport.service.js";
 import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
 import { runAutopilot } from "./autopilot.service.js";
+import { requireIndustry } from "../industry/industry.errors.js";
+
+// industry-01 — Property Sources are a real-estate-only feature
+// for now. Each public entry point asserts the workspace's
+// industryKey is `real_estate` so non-RE workspaces get a typed
+// INDUSTRY_NOT_SUPPORTED error instead of silently calling
+// stampSourceAttribution / RE_SOURCE_TYPES with a non-RE feed.
+async function assertRealEstateWorkspace(clientId) {
+  const row = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { industryKey: true },
+  });
+  requireIndustry("Property Sources", row?.industryKey ?? null, "real_estate");
+}
 
 // ── List sources ────────────────────────────────────────────────────────
 
@@ -23,6 +37,7 @@ import { runAutopilot } from "./autopilot.service.js";
  * @returns {Promise<object[]>}
  */
 export async function getListingSources(clientId) {
+  await assertRealEstateWorkspace(clientId);
   const sources = await prisma.workspaceDataSource.findMany({
     where: {
       clientId,
@@ -70,6 +85,7 @@ export async function getListingSources(clientId) {
  * @returns {Promise<object>}
  */
 export async function createListingSource(clientId, { name, type, sourceUrl }) {
+  await assertRealEstateWorkspace(clientId);
   const source = await prisma.workspaceDataSource.create({
     data: {
       clientId,
@@ -100,6 +116,7 @@ export async function createListingSource(clientId, { name, type, sourceUrl }) {
  * @returns {Promise<object>}
  */
 export async function updateListingSource(clientId, sourceId, patch) {
+  await assertRealEstateWorkspace(clientId);
   const existing = await prisma.workspaceDataSource.findFirst({
     where: { id: sourceId, clientId },
   });
@@ -132,6 +149,7 @@ export async function updateListingSource(clientId, sourceId, patch) {
  * @returns {Promise<{ listingsFound: number, lastSyncedAt: string }>}
  */
 export async function syncListingSource(clientId, sourceId) {
+  await assertRealEstateWorkspace(clientId);
   const source = await prisma.workspaceDataSource.findFirst({
     where: { id: sourceId, clientId },
   });
@@ -220,6 +238,7 @@ export async function syncListingSource(clientId, sourceId) {
  * @returns {Promise<{ deleted: true, itemsRemoved: number }>}
  */
 export async function removeListingSource(clientId, sourceId) {
+  await assertRealEstateWorkspace(clientId);
   const source = await prisma.workspaceDataSource.findFirst({
     where: { id: sourceId, clientId },
     include: { _count: { select: { dataItems: true } } },
@@ -243,6 +262,7 @@ export async function removeListingSource(clientId, sourceId) {
  * @returns {Promise<{ sourceCount: number, totalListings: number, lastSyncedAt: string | null }>}
  */
 export async function getListingFeedStats(clientId) {
+  await assertRealEstateWorkspace(clientId);
   const sources = await getListingSources(clientId);
   const totalListings = sources.reduce((n, s) => n + s.listingCount, 0);
   const lastSynced = sources

@@ -77,6 +77,13 @@ beforeEach(() => {
     workspaceTechStackConnection: {
       findUnique: vi.fn(),
     },
+    // industry-01 — autopilot service now asserts the workspace's
+    // Client.industryKey is `real_estate` before any read/write.
+    // The setting-reader tests don't care about industry per se;
+    // we just need the gate to pass.
+    client: {
+      findUnique: vi.fn(async () => ({ industryKey: "real_estate" })),
+    },
   };
 });
 
