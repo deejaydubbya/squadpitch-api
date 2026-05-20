@@ -29,6 +29,7 @@ import {
 } from "./ads.schemas.js";
 import * as service from "./ads.service.js";
 import { exportPackage, ExportError } from "./ads.export.service.js";
+import { listExporters } from "./exporters/index.js";
 
 export const adsRouter = express.Router();
 
@@ -36,7 +37,14 @@ const BASE = "/api/v1";
 
 function handleServiceError(res, err, next) {
   if (err && typeof err.status === "number") {
-    return sendError(res, err.status, err.code || "REQUEST_FAILED", err.message || "Request failed");
+    // Ads-09 — forward READY_PRECONDITIONS_FAILED `missing[]` and
+    // COMPLIANCE_COPY_REVIEW_FAILED `findings[]` to the client so
+    // the FE can render a checklist of what to fix instead of just
+    // a flat message.
+    const opts = {};
+    if (Array.isArray(err.missing)) opts.missing = err.missing;
+    if (Array.isArray(err.findings)) opts.findings = err.findings;
+    return sendError(res, err.status, err.code || "REQUEST_FAILED", err.message || "Request failed", opts);
   }
   return next(err);
 }
@@ -49,6 +57,20 @@ adsRouter.get(`${BASE}/workspaces/:id/ads`, requireClientOwner, async (req, res,
     if (!parsed.success) return validationError(res, parsed.error.issues);
     const result = await service.listPackages(req.params.id, parsed.data);
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Ads-09 — list registered export formats so the FE can render the
+// chooser without hardcoding format metadata. Returns the same
+// descriptor shape as exporters/index.js listExporters() — no
+// secrets, no per-workspace data. Tenant-scoped via
+// requireClientOwner for consistency with the rest of the ads
+// surface; format catalog itself is workspace-independent.
+adsRouter.get(`${BASE}/workspaces/:id/ads/export-formats`, requireClientOwner, async (req, res, next) => {
+  try {
+    res.json({ formats: listExporters() });
   } catch (err) {
     next(err);
   }
@@ -264,7 +286,12 @@ adsRouter.post(
       res.json({ filename, mimeType, content, bundle, mode });
     } catch (err) {
       if (err instanceof ExportError) {
-        return sendError(res, err.status, err.code, err.message);
+        // Ads-09 — same missing[]/findings[] forwarding the rest of
+        // the ads surface does, so the FE renders a fix-list.
+        const opts = {};
+        if (Array.isArray(err.missing)) opts.missing = err.missing;
+        if (Array.isArray(err.findings)) opts.findings = err.findings;
+        return sendError(res, err.status, err.code, err.message, opts);
       }
       handleServiceError(res, err, next);
     }
