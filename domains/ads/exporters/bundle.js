@@ -70,19 +70,27 @@ export async function buildCanonicalBundle(pkg) {
       specialCategory: pkg.specialCategory,
       source: sourceSummary,
     },
-    creatives: pkg.creatives.map((c) => ({
-      variantIndex: c.variantIndex,
-      channelHint: c.channel ?? null,
-      headline: c.headline,
-      primaryText: c.primaryText,
-      description: c.description ?? null,
-      cta: c.cta ?? null,
-      primaryAssetUrl:
-        mediaList.byCreativeId[c.id]?.primary?.url ?? null,
-      additionalAssetUrls:
-        mediaList.byCreativeId[c.id]?.additional?.map((a) => a.url).filter(Boolean) ?? [],
-      rationale: c.rationale ?? null,
-    })),
+    creatives: pkg.creatives.map((c) => {
+      const primary = mediaList.byCreativeId[c.id]?.primary ?? null;
+      const additional = mediaList.byCreativeId[c.id]?.additional ?? [];
+      return {
+        variantIndex: c.variantIndex,
+        channelHint: c.channel ?? null,
+        headline: c.headline,
+        primaryText: c.primaryText,
+        description: c.description ?? null,
+        cta: c.cta ?? null,
+        // Ads-04 — flat URLs for backward compatibility.
+        primaryAssetUrl: primary?.url ?? null,
+        additionalAssetUrls: additional.map((a) => a.url).filter(Boolean),
+        // Ads-10 — enriched asset descriptors for launch sheets +
+        // CSV exporters that want dimensions / mimeType / alt
+        // text. `null` when no primary asset is attached.
+        primaryAsset: assetDescriptor(primary),
+        additionalAssets: additional.map(assetDescriptor).filter(Boolean),
+        rationale: c.rationale ?? null,
+      };
+    }),
     audience: pkg.audience
       ? {
           locations: pkg.audience.locationsJson ?? [],
@@ -120,6 +128,25 @@ export async function buildCanonicalBundle(pkg) {
       housingDisclaimer: pkg.specialCategory === "HOUSING" ? HOUSING_DISCLAIMER : null,
       reviewNotes: pkg.reviewNotes ?? null,
     },
+  };
+}
+
+// Ads-10 — compact descriptor shape we put in the canonical bundle
+// for each attached asset. squadads_json carries this verbatim;
+// launch sheets pull fields they care about. Returns null for an
+// absent asset so renderers can use `?.` chaining safely.
+function assetDescriptor(asset) {
+  if (!asset) return null;
+  return {
+    url: asset.url ?? null,
+    thumbnailUrl: asset.thumbnailUrl ?? null,
+    mimeType: asset.mimeType ?? null,
+    assetType: asset.assetType ?? null,
+    altText: asset.altText ?? null,
+    width: asset.width ?? null,
+    height: asset.height ?? null,
+    bytes: asset.bytes ?? null,
+    videoDurationSec: asset.videoDurationSec ?? null,
   };
 }
 
@@ -177,7 +204,21 @@ async function resolveMediaList(creatives, clientId) {
   }
   const assets = await prisma.mediaAsset.findMany({
     where: { id: { in: [...ids] }, clientId },
-    select: { id: true, url: true, thumbnailUrl: true, mimeType: true, assetType: true, altText: true },
+    select: {
+      id: true,
+      url: true,
+      thumbnailUrl: true,
+      mimeType: true,
+      assetType: true,
+      altText: true,
+      // Ads-10 — surfaced in launch sheets + CSV exports so the
+      // media buyer can sanity-check creative dimensions against
+      // each platform's recommended specs before uploading.
+      width: true,
+      height: true,
+      bytes: true,
+      videoDurationSec: true,
+    },
   });
   const byId = new Map(assets.map((a) => [a.id, a]));
   for (const c of creatives) {

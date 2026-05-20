@@ -11,7 +11,8 @@
 // descriptor sets `isDirectImport: false` and the FE renders this
 // as "launch checklist / brief", not "one-click import".
 
-import { formatMoney, slugifyForFilename } from "./_helpers.js";
+import { formatAssetMeta, formatMoney, slugifyForFilename } from "./_helpers.js";
+import { platformSpec } from "./_platformSpecs.js";
 
 // SquadAds objective → Meta objective + confirm-note for ambiguous
 // mappings. Meta's exact objective wording shifts by account
@@ -215,20 +216,41 @@ export const metaLaunchSheet = {
         lines.push(`- **Description:** ${c.description}`);
       }
       lines.push(`- **CTA:** ${ctaHint(c.cta, objective)}`);
+      // Ads-10 — render asset URL + dimensions/mime/alt when set so
+      // the media buyer can sanity-check against Meta specs before
+      // uploading. Warn (not block) when no asset is attached.
       if (c.primaryAssetUrl) {
-        lines.push(`- **Primary asset:** <${c.primaryAssetUrl}>`);
+        lines.push(
+          `- **Primary asset:** <${c.primaryAssetUrl}>${formatAssetMeta(c.primaryAsset)}`,
+        );
+        if (c.primaryAsset?.altText) {
+          lines.push(`  - _Alt text: ${c.primaryAsset.altText}_`);
+        }
       } else {
         lines.push("- **Primary asset:** _(none — upload the creative directly in Ads Manager)_");
       }
       if (Array.isArray(c.additionalAssetUrls) && c.additionalAssetUrls.length > 0) {
         lines.push("- **Additional assets:**");
-        for (const u of c.additionalAssetUrls) lines.push(`  - <${u}>`);
+        for (let i = 0; i < c.additionalAssetUrls.length; i++) {
+          const u = c.additionalAssetUrls[i];
+          const a = c.additionalAssets?.[i] ?? null;
+          lines.push(`  - <${u}>${formatAssetMeta(a)}`);
+        }
       }
       if (c.rationale) {
         lines.push(`- _Rationale: ${c.rationale}_`);
       }
     }
     lines.push("");
+
+    // ── Creative specs (platform hints) ────────────────────────
+    const spec = platformSpec("meta");
+    if (spec) {
+      lines.push("## Creative specs (Meta)");
+      lines.push("");
+      lines.push(spec);
+      lines.push("");
+    }
 
     // ── Setup checklist ────────────────────────────────────────
     lines.push("## SETUP CHECKLIST");

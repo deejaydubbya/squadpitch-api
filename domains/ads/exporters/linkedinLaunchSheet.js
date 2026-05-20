@@ -10,7 +10,8 @@
 // format is an account-specific Excel template; this brief is for
 // human review + manual or paste-driven entry, not file upload.
 
-import { formatMoney, slugifyForFilename } from "./_helpers.js";
+import { formatAssetMeta, formatMoney, slugifyForFilename } from "./_helpers.js";
+import { platformSpec } from "./_platformSpecs.js";
 
 // SquadAds objective → LinkedIn objective + confirm-note for
 // ambiguous mappings. LinkedIn's objectives shift by account
@@ -230,19 +231,37 @@ export const linkedinLaunchSheet = {
       }
       lines.push(`- **CTA:** ${ctaHint(c.cta, objective)}`);
       if (c.primaryAssetUrl) {
-        lines.push(`- **Primary asset:** <${c.primaryAssetUrl}>`);
+        lines.push(
+          `- **Primary asset:** <${c.primaryAssetUrl}>${formatAssetMeta(c.primaryAsset)}`,
+        );
+        if (c.primaryAsset?.altText) {
+          lines.push(`  - _Alt text: ${c.primaryAsset.altText}_`);
+        }
       } else {
         lines.push("- **Primary asset:** _(none — upload the creative directly in Campaign Manager)_");
       }
       if (Array.isArray(c.additionalAssetUrls) && c.additionalAssetUrls.length > 0) {
         lines.push("- **Additional assets:**");
-        for (const u of c.additionalAssetUrls) lines.push(`  - <${u}>`);
+        for (let i = 0; i < c.additionalAssetUrls.length; i++) {
+          const u = c.additionalAssetUrls[i];
+          const a = c.additionalAssets?.[i] ?? null;
+          lines.push(`  - <${u}>${formatAssetMeta(a)}`);
+        }
       }
       if (c.rationale) {
         lines.push(`- _Rationale: ${c.rationale}_`);
       }
     }
     lines.push("");
+
+    // ── Creative specs (platform hints) ────────────────────────
+    const spec = platformSpec("linkedin");
+    if (spec) {
+      lines.push("## Creative specs (LinkedIn)");
+      lines.push("");
+      lines.push(spec);
+      lines.push("");
+    }
 
     // ── Setup checklist ────────────────────────────────────────
     lines.push("## SETUP CHECKLIST");

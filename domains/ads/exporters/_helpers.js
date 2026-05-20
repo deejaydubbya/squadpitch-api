@@ -58,6 +58,29 @@ export function joinLocations(locations) {
   return locations.map((l) => `${l.value} (${l.kind})`).join("; ");
 }
 
+// Ads-10 — compact human-readable summary of an asset descriptor
+// for launch-sheet rendering. Returns a short suffix like
+// "(image · 1080×1350 · 240 KB)" or "" when nothing useful is set.
+// Skips fields whose value is null so we don't render "null × null".
+export function formatAssetMeta(asset) {
+  if (!asset) return "";
+  const parts = [];
+  if (asset.assetType) parts.push(asset.assetType);
+  if (asset.width && asset.height) parts.push(`${asset.width}×${asset.height}`);
+  if (typeof asset.bytes === "number" && asset.bytes > 0) {
+    parts.push(formatBytes(asset.bytes));
+  }
+  if (asset.videoDurationSec) parts.push(`${asset.videoDurationSec}s`);
+  if (parts.length === 0 && asset.mimeType) parts.push(asset.mimeType);
+  return parts.length > 0 ? ` (${parts.join(" · ")})` : "";
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 // Truncate to `max` characters, appending an ellipsis when we cut.
 // Caller decides what to do with the returned `truncated` flag —
 // renderers usually push a warning into their warnings[] so the

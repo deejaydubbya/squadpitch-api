@@ -10,7 +10,8 @@
 // account-specific Excel template; this brief is for setup +
 // paste-driven entry, not file upload.
 
-import { formatMoney, slugifyForFilename } from "./_helpers.js";
+import { formatAssetMeta, formatMoney, slugifyForFilename } from "./_helpers.js";
+import { platformSpec } from "./_platformSpecs.js";
 
 // SquadAds objective → Pinterest objective + confirm-note for
 // ambiguous mappings. Pinterest's exact objective wording varies
@@ -211,19 +212,37 @@ export const pinterestLaunchSheet = {
       lines.push(`- **CTA:** ${ctaHint(c.cta, objective)}`);
       lines.push(`- **Pin format hint:** ${pinFormatHint(c.channelHint, c.primaryAssetUrl)}`);
       if (c.primaryAssetUrl) {
-        lines.push(`- **Asset to upload (reference URL):** <${c.primaryAssetUrl}>`);
+        lines.push(
+          `- **Asset to upload (reference URL):** <${c.primaryAssetUrl}>${formatAssetMeta(c.primaryAsset)}`,
+        );
+        if (c.primaryAsset?.altText) {
+          lines.push(`  - _Alt text: ${c.primaryAsset.altText}_`);
+        }
       } else {
         lines.push("- **Asset to upload:** _(none — choose the image/video for this Pin inside Pinterest Ads Manager)_");
       }
       if (Array.isArray(c.additionalAssetUrls) && c.additionalAssetUrls.length > 0) {
         lines.push("- **Additional assets (reference):**");
-        for (const u of c.additionalAssetUrls) lines.push(`  - <${u}>`);
+        for (let i = 0; i < c.additionalAssetUrls.length; i++) {
+          const u = c.additionalAssetUrls[i];
+          const a = c.additionalAssets?.[i] ?? null;
+          lines.push(`  - <${u}>${formatAssetMeta(a)}`);
+        }
       }
       if (c.rationale) {
         lines.push(`- _Rationale: ${c.rationale}_`);
       }
     }
     lines.push("");
+
+    // ── Creative specs (platform hints) ────────────────────────
+    const spec = platformSpec("pinterest");
+    if (spec) {
+      lines.push("## Creative specs (Pinterest)");
+      lines.push("");
+      lines.push(spec);
+      lines.push("");
+    }
 
     // ── Setup checklist ────────────────────────────────────────
     lines.push("## SETUP CHECKLIST");
