@@ -465,7 +465,24 @@ export function applyTemplateScaffold(payload, template) {
 
 // Sites-05 — explicit list of facts the LLM is NOT allowed to
 // fabricate. Included verbatim in the system prompt.
-const FACTS_LLM_MAY_NOT_FABRICATE = [
+//
+// industry-02 — split the list by industry. Pre-industry-02 this
+// constant was injected verbatim into EVERY site/page generation
+// prompt regardless of industryKey — non-real-estate workspaces
+// were being told "do not invent school districts / mortgage
+// rates", which is nonsense for a restaurant or e-commerce site.
+//
+// The neutral list applies to every industry (no-industry +
+// non-RE); the RE list extends it for real-estate workspaces.
+const NEUTRAL_FABRICATION_RULES = [
+  "prices, fees, or financial terms not present in the supplied data",
+  "specific addresses, locations, or distances not in the data",
+  "named third parties (businesses, people, awards, certifications) not in the data",
+  "statistics, ratings, or numerical claims not in the data",
+];
+
+const REAL_ESTATE_FABRICATION_RULES = [
+  ...NEUTRAL_FABRICATION_RULES,
   "market statistics (median price, days on market, inventory)",
   "school ratings, school districts, or school names",
   "walkability or transit scores",
@@ -474,7 +491,15 @@ const FACTS_LLM_MAY_NOT_FABRICATE = [
   "financing terms, mortgage rates, or down-payment specifics",
 ];
 
-function buildSystemPrompt({ ctx, pageGoal, template }) {
+function getFabricationRulesForIndustry(industryKey) {
+  if (industryKey === "real_estate") return REAL_ESTATE_FABRICATION_RULES;
+  return NEUTRAL_FABRICATION_RULES;
+}
+
+// industry-02 — exported so the no-industry safety tests can
+// assert what the LLM receives for null/non-RE vs real_estate
+// workspaces without spinning up a full generation pipeline.
+export function buildSystemPrompt({ ctx, pageGoal, template }) {
   const brandName = ctx.client?.name ?? "the business";
   const industryName = ctx.client?.industryKey ?? null;
   const voice = ctx.voice ?? null;
@@ -529,7 +554,7 @@ function buildSystemPrompt({ ctx, pageGoal, template }) {
     "  the workspace owner will replace it.",
     "",
     "Grounding rules (Sites-05) — you MUST NOT fabricate:",
-    ...FACTS_LLM_MAY_NOT_FABRICATE.map((rule) => `- ${rule}`),
+    ...getFabricationRulesForIndustry(industryName).map((rule) => `- ${rule}`),
     "Only state these facts if they appear verbatim in the supplied source data. If unsure, omit the fact rather than guess.",
   ]
     .filter(Boolean)
