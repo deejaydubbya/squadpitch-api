@@ -95,7 +95,12 @@ const LeadFormBlockSchema = z.object({
 
 const GalleryBlockSchema = z.object({
   type: z.literal("gallery"),
-  imageUrls: z.array(z.string().url()).min(1).max(20),
+  // Real-estate listings legitimately ship 25-40 photos. The
+  // previous 20-image cap silently failed page saves on
+  // larger galleries (users got a generic "Validation failed").
+  // 50 is comfortable headroom while still preventing a runaway
+  // payload from blowing up the rendered runtime.
+  imageUrls: z.array(z.string().url()).min(1).max(50),
   layout: z.enum(["grid", "carousel"]).optional().default("grid"),
 });
 
