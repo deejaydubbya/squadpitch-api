@@ -241,7 +241,11 @@ describe("exportPackage — per-format dispatch (smoke)", () => {
     // import it, but campaign-type / bidding / conversion-
     // tracking settings still need user review. Honest framing.
     { format: "google_ads_editor_csv", mime: "text/csv; charset=utf-8", ext: "csv", direct: false },
-    { format: "tiktok_bulk_template_csv", mime: "text/csv; charset=utf-8", ext: "csv", direct: true },
+    // Ads-06 — flipped to isDirectImport: false. TikTok bulk-edit
+    // is an account-specific XLSX template downloaded from inside
+    // Ads Manager; this CSV is a paste-source worksheet, not an
+    // import file.
+    { format: "tiktok_bulk_template_csv", mime: "text/csv; charset=utf-8", ext: "csv", direct: false },
   ];
 
   for (const c of cases) {

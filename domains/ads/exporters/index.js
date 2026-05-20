@@ -72,6 +72,11 @@ export function listExporters() {
     platform: e.platform,
     isDirectImport: e.isDirectImport,
     importStyle: e.importStyle ?? null,
+    // Ads-06 — true for renderers that need the user to download a
+    // platform-specific template before importing (TikTok bulk
+    // edit). The FE renders an honest "paste these into TikTok's
+    // template" hint instead of "one-click import".
+    requiresPlatformTemplateReview: e.requiresPlatformTemplateReview ?? false,
     notes: e.notes,
   }));
 }

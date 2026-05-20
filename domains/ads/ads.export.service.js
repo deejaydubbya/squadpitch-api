@@ -123,6 +123,11 @@ export async function exportPackage(
     // import path the bytes target (e.g. 'google_ads_editor_csv').
     // Renderers that aren't tied to a specific importer omit it.
     importStyle: exporter.importStyle ?? null,
+    // Ads-06 — true for renderers that require the user to download
+    // a platform-specific template first (TikTok bulk edit). The
+    // FE renders an honest "paste these rows into TikTok's
+    // template" hint instead of a deceptive "one-click import".
+    requiresPlatformTemplateReview: exporter.requiresPlatformTemplateReview ?? false,
     platformNotes: exporter.notes,
     warnings: Array.isArray(warnings) ? warnings : [],
     content,
