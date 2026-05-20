@@ -321,6 +321,12 @@ export async function updatePackage(clientId, packageId, userId, patch) {
 // Called by updatePackage (READY transition) AND by exportPackage
 // (defense in depth — never ship a stale READY row that no longer
 // satisfies the contract).
+//
+// PRINCIPLE: this function is the source of truth for compliance.
+// The LLM generation prompt also includes Fair Housing guidance,
+// but AI-prompt warnings are NOT a control. If a check belongs in
+// production compliance, it lives here as deterministic code that
+// blocks READY and export.
 export async function validatePackageReady(pkg) {
   const missing = [];
 

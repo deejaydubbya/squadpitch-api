@@ -1,7 +1,8 @@
-// Human-readable Markdown brief — what you'd hand to an agency or
-// a paid-media specialist who'll set up the campaign manually.
-// Output is byte-for-byte compatible with the pre-ads-04
-// `format=markdown` export so existing integrations keep working.
+// Ads-04 — human-readable Markdown brief. NOT a platform import
+// file — what you'd hand to an agency or a paid-media specialist
+// who'll set up the campaign manually. Output is byte-for-byte
+// compatible with the pre-ads-04 `format=markdown` export so
+// existing integrations keep working.
 
 import { describeSource, formatMoney, slugifyForFilename } from "./_helpers.js";
 

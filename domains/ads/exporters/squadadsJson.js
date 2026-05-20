@@ -1,6 +1,8 @@
-// Internal canonical developer export. Pretty-printed JSON of the
-// canonical bundle, byte-for-byte compatible with the pre-ads-04
-// `format=json` export so existing integrations keep working.
+// Ads-04 — internal canonical developer export. NOT a platform
+// import file (no ad platform accepts SquadAds JSON natively).
+// Pretty-printed JSON of the canonical bundle, byte-for-byte
+// compatible with the pre-ads-04 `format=json` export so existing
+// integrations keep working.
 
 import { slugifyForFilename } from "./_helpers.js";
 
