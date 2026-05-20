@@ -682,7 +682,12 @@ export async function confirmUrlListing(clientId, listing) {
         priority: dataItem.priority,
       },
     });
-    return { listing: updated, created: false };
+    // URL-01 fix: include existingId in the duplicate response
+    // so callers (urlCampaignIntake confirm endpoint, listing-
+    // campaign generate path) can correctly resolve the data
+    // item id without dereferencing into the updated row. Matches
+    // the shape ingestManualListing already returns for dupes.
+    return { listing: updated, created: false, existingId: dupe.existingId };
   }
 
   // Detect new_listing event

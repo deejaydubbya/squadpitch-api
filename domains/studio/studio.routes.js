@@ -78,6 +78,8 @@ import {
   ListingCSVImportSchema,
   ListingUrlImportSchema,
   ListingConfirmUrlSchema,
+  UrlIntakeAnalyzeSchema,
+  UrlIntakeConfirmSchema,
   GBPCallbackSchema,
   GBPSetLocationSchema,
   GBPReplySchema,
@@ -143,6 +145,7 @@ import { evaluateFlag } from "../internal/config.service.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
+import * as urlCampaignIntake from "./urlCampaignIntake.service.js";
 import * as gbpProvider from "../integrations/providers/gbpProvider.js";
 import { syncGBP, getGBPReviews, getGBPBusinessProfile, getGBPInsights } from "./gbpSync.service.js";
 import { reanalyzeAllReviews } from "./gbpReviewAnalysis.service.js";
@@ -5338,6 +5341,51 @@ studioRouter.post(
   }
 );
 
+// ── Campaign URL Intake (URL-01) ─────────────────────────────────────
+//
+// Unified URL → campaign workflow used by the dashboard, Create
+// assistant, and Property Library. Two endpoints:
+//   - analyze: classify the URL + return preview rows (no DB write)
+//   - confirm: persist the selected listing as a WorkspaceDataItem
+// SSRF / private-IP / unsafe-scheme protection lives in
+// urlCampaignIntake.assertSafeExternalUrl().
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/campaign-intake/url/analyze`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UrlIntakeAnalyzeSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await urlCampaignIntake.analyzeUrl(req.params.id, parsed.data);
+      res.json(result);
+    } catch (err) {
+      if (err?.code === "UNSAFE_URL") {
+        return sendError(res, 400, "UNSAFE_URL", err.message, { reason: err.reason });
+      }
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/campaign-intake/url/confirm`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UrlIntakeConfirmSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await urlCampaignIntake.confirmUrl(req.params.id, parsed.data);
+      res.status(result.created ? 201 : 200).json(result);
+    } catch (err) {
+      if (err?.code === "UNSAFE_URL") {
+        return sendError(res, 400, "UNSAFE_URL", err.message, { reason: err.reason });
+      }
+      next(err);
+    }
+  },
+);
+
 // ── Listing Campaign ──────────────────────────────────────────────────────
 
 /**
@@ -5415,7 +5463,14 @@ studioRouter.post(
             highlights: propertyData.highlights ? propertyData.highlights.split(",").map((s) => s.trim()).filter(Boolean) : [],
             propertyType: propertyData.propertyType || undefined,
           });
-          resolvedDataItemId = listingResult.dataItem?.id ?? null;
+          // URL-01 fix: ingestManualListing returns
+          // { listing, created, existingId? } — never .dataItem.
+          // The previous `.dataItem?.id ?? null` silently always
+          // resolved to null, which broke source attribution for
+          // every campaign generated from a freshly-ingested
+          // listing (the data_item link never got recorded).
+          resolvedDataItemId =
+            listingResult.listing?.id ?? listingResult.existingId ?? null;
         }
 
         // Load generation context + RE assets

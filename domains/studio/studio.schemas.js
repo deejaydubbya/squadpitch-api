@@ -847,6 +847,26 @@ export const ListingUrlImportSchema = z.object({
   url: z.string().url().max(2000),
 });
 
+// URL-01 — campaign URL intake (analyze + confirm).
+// SSRF / scheme safety is enforced in
+// urlCampaignIntake.assertSafeExternalUrl(); the Zod-level URL
+// validation here is just a shape check.
+export const UrlIntakeAnalyzeSchema = z.object({
+  url: z.string().url().max(2000),
+  preferredIntent: z.enum(["campaign", "single_post"]).optional(),
+});
+
+export const UrlIntakeConfirmSchema = z.object({
+  url: z.string().url().max(2000).optional(),
+  // The selected listing is whatever shape analyze returned in
+  // listings[].normalized, possibly with user edits. We keep
+  // this loose (passthrough) and let confirmUrlListing /
+  // normalizeListing do the strict validation.
+  selectedListing: z
+    .object({})
+    .passthrough(),
+});
+
 export const ListingConfirmUrlSchema = z.object({
   title: z.string().max(200).optional(),
   description: z.string().max(5000).optional(),
