@@ -95,12 +95,15 @@ const LeadFormBlockSchema = z.object({
 
 const GalleryBlockSchema = z.object({
   type: z.literal("gallery"),
-  // Real-estate listings legitimately ship 25-40 photos. The
-  // previous 20-image cap silently failed page saves on
-  // larger galleries (users got a generic "Validation failed").
-  // 50 is comfortable headroom while still preventing a runaway
-  // payload from blowing up the rendered runtime.
-  imageUrls: z.array(z.string().url()).min(1).max(50),
+  // Cap raised iteratively: 20 → 50 → 100 as real-estate listings
+  // with full professional shoots routinely exceed earlier caps.
+  // 100 covers luxury / mansion listings, MLS imports, and
+  // virtual-tour galleries while still preventing a truly runaway
+  // payload (the runtime renderer .map()s every URL into the DOM,
+  // so an unbounded array would tank LCP). If we hit 100 in
+  // practice, look at lazy-loading / pagination in the renderer
+  // before raising further.
+  imageUrls: z.array(z.string().url()).min(1).max(100),
   layout: z.enum(["grid", "carousel"]).optional().default("grid"),
 });
 
