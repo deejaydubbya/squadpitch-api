@@ -20,6 +20,9 @@
 
 import { prisma } from "../../prisma.js";
 import { loadClientGenerationContext } from "../studio/generation/clientOrchestrator.js";
+// industry-03 — fabrication rules per industry come from the
+// module registry (see domains/industry/modules/*).
+import { getIndustryModuleOrGeneric } from "../industry/modules/index.js";
 import {
   generateStructuredContent,
   OpenAIProviderError,
@@ -466,34 +469,15 @@ export function applyTemplateScaffold(payload, template) {
 // Sites-05 — explicit list of facts the LLM is NOT allowed to
 // fabricate. Included verbatim in the system prompt.
 //
-// industry-02 — split the list by industry. Pre-industry-02 this
-// constant was injected verbatim into EVERY site/page generation
-// prompt regardless of industryKey — non-real-estate workspaces
-// were being told "do not invent school districts / mortgage
-// rates", which is nonsense for a restaurant or e-commerce site.
-//
-// The neutral list applies to every industry (no-industry +
-// non-RE); the RE list extends it for real-estate workspaces.
-const NEUTRAL_FABRICATION_RULES = [
-  "prices, fees, or financial terms not present in the supplied data",
-  "specific addresses, locations, or distances not in the data",
-  "named third parties (businesses, people, awards, certifications) not in the data",
-  "statistics, ratings, or numerical claims not in the data",
-];
-
-const REAL_ESTATE_FABRICATION_RULES = [
-  ...NEUTRAL_FABRICATION_RULES,
-  "market statistics (median price, days on market, inventory)",
-  "school ratings, school districts, or school names",
-  "walkability or transit scores",
-  "specific neighborhood amenities (parks, restaurants, businesses) not in the provided data",
-  "exact sale prices for sold listings unless they appear in the data",
-  "financing terms, mortgage rates, or down-payment specifics",
-];
-
+// industry-02 introduced the neutral/real-estate split (was a
+// single RE-flavored list injected for every workspace).
+// industry-03 moves the lists into the industry module registry
+// so future industries can supply their own no-fabrication rules
+// without touching this file. The real_estate module returns the
+// neutral baseline + RE-specific items; the generic module
+// returns the neutral baseline only.
 function getFabricationRulesForIndustry(industryKey) {
-  if (industryKey === "real_estate") return REAL_ESTATE_FABRICATION_RULES;
-  return NEUTRAL_FABRICATION_RULES;
+  return getIndustryModuleOrGeneric(industryKey).promptAddons.getFactsLlmMayNotFabricate();
 }
 
 // industry-02 — exported so the no-industry safety tests can
