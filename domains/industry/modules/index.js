@@ -82,7 +82,12 @@ export function isIndustryFeatureSupported(industryKey, feature) {
     case "autopilot":
       return Array.isArray(mod.autopilotTriggerTypes) && mod.autopilotTriggerTypes.length > 0;
     case "urlExtraction":
-      return Boolean(mod.urlExtraction);
+      // industry-04 — every industry now has SOME URL extractor
+      // (generic falls back to a neutral analyzer). This flag
+      // reports whether the URL flow is available at all; callers
+      // that need to know "is this a LISTING extractor" should
+      // check `mod.urlExtraction?.kind === 'real_estate_listing'`.
+      return Boolean(mod.urlExtraction?.analyze);
     default:
       return false;
   }

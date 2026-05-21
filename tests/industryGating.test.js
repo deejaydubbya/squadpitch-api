@@ -44,6 +44,17 @@ vi.mock("../domains/studio/gbpSync.service.js", () => ({
   getGBPSignals: vi.fn(),
 }));
 
+// industry-04 — stub scrapeUrl so the generic URL analyzer never
+// hits the network during tests. The real listingIngestion +
+// real industry-01 gate stay in play, so the existing
+// "ingestManualListing rejects null industry" tests still work
+// (the gate catches the call before anything network-bound runs).
+const scrapeUrlMock = vi.fn();
+vi.mock("../domains/studio/scrapeUrl.js", () => ({
+  scrapeUrl: (...args) => scrapeUrlMock(...args),
+  filterPropertyImages: vi.fn((arr) => arr),
+}));
+
 // We import after the mocks so the service captures the mocked deps.
 const autopilot = await import("../domains/studio/autopilot.service.js");
 const listingFeed = await import("../domains/studio/listingFeed.service.js");
@@ -158,43 +169,54 @@ describe("listingIngestion service — real-estate gate", () => {
 // ── urlCampaignIntake analyze gating ─────────────────────────
 
 describe("urlCampaignIntake.analyzeUrl — industry awareness", () => {
-  // Stub upstream services so we can assert they're NEVER called
-  // for non-RE workspaces.
-  const ingestUrlListingMock = vi.fn();
-  const scrapeUrlMock = vi.fn();
-  vi.doMock("../domains/studio/listingIngestion.service.js", () => ({
-    ingestUrlListing: (...args) => ingestUrlListingMock(...args),
-    confirmUrlListing: vi.fn(),
-  }));
-  vi.doMock("../domains/studio/scrapeUrl.js", () => ({
-    scrapeUrl: (...args) => scrapeUrlMock(...args),
-  }));
-
   beforeEach(() => {
-    ingestUrlListingMock.mockReset();
     scrapeUrlMock.mockReset();
   });
 
-  it("returns unsupported_industry without calling ingestUrlListing for null industry", async () => {
+  it("returns generic_page (not a listing) for null industry — uses the generic analyzer", async () => {
     setIndustry(null);
-    const res = await urlCampaignIntake.analyzeUrl("ws-1", {
-      url: "https://example.com/listing/123",
+    scrapeUrlMock.mockResolvedValueOnce({
+      text: "About our business",
+      title: "Acme Inc.",
+      metaDescription: "We do X.",
+      ogImage: "https://example.com/og.png",
+      images: [],
+      links: [],
     });
-    expect(res.detectedType).toBe("unsupported_industry");
+    const res = await urlCampaignIntake.analyzeUrl("ws-1", {
+      url: "https://example.com/about",
+    });
+    expect(res.detectedType).toBe("generic_page");
     expect(res.suggestedNextStep).toBe("use_as_idea");
     expect(res.listings).toEqual([]);
-    // The real safety check: ingest must not have been called.
-    expect(ingestUrlListingMock).not.toHaveBeenCalled();
-    expect(scrapeUrlMock).not.toHaveBeenCalled();
+    expect(res.genericPreview).toMatchObject({
+      kind: "generic_url",
+      title: "Acme Inc.",
+      description: "We do X.",
+    });
+    // The critical safety check: scrape was called (generic
+    // analyzer ran), and it was called against the safe URL.
+    expect(scrapeUrlMock).toHaveBeenCalledWith(
+      "https://example.com/about",
+      expect.objectContaining({ extractLinks: true }),
+    );
   });
 
-  it("returns unsupported_industry for automotive (not just null)", async () => {
+  it("returns generic_page for automotive (every non-RE industry routes through generic)", async () => {
     setIndustry("automotive");
+    scrapeUrlMock.mockResolvedValueOnce({
+      text: "Inventory page",
+      title: "Auto Dealer",
+      metaDescription: null,
+      ogImage: null,
+      images: [],
+      links: [],
+    });
     const res = await urlCampaignIntake.analyzeUrl("ws-1", {
       url: "https://example.com/inventory/abc",
     });
-    expect(res.detectedType).toBe("unsupported_industry");
-    expect(ingestUrlListingMock).not.toHaveBeenCalled();
+    expect(res.detectedType).toBe("generic_page");
+    expect(res.genericPreview.kind).toBe("generic_url");
   });
 
   it("still rejects unsafe URLs even when industry is null (safety check runs first)", async () => {
@@ -202,5 +224,7 @@ describe("urlCampaignIntake.analyzeUrl — industry awareness", () => {
     await expect(
       urlCampaignIntake.analyzeUrl("ws-1", { url: "http://127.0.0.1/admin" }),
     ).rejects.toMatchObject({ code: "UNSAFE_URL" });
+    // scrape must NOT have been called — safety check runs first.
+    expect(scrapeUrlMock).not.toHaveBeenCalled();
   });
 });

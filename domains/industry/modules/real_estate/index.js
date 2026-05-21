@@ -12,6 +12,10 @@ import {
 import { REAL_ESTATE_CAMPAIGN_TYPES } from "./campaignTypes.js";
 import { REAL_ESTATE_SITE_TEMPLATES } from "./siteTemplates.js";
 import { REAL_ESTATE_AUTOPILOT_TRIGGER_TYPES } from "./autopilotTriggers.js";
+// industry-04 — RE-specific URL extraction. Wraps the existing
+// listingIngestion service so urlCampaignIntake can dispatch per
+// industry instead of hard-coding the listing extractor call.
+import { realEstateUrlExtraction } from "./urlExtraction.js";
 
 /** @type {import("../types.js").IndustryModule} */
 export const realEstateIndustryModule = {
@@ -24,10 +28,7 @@ export const realEstateIndustryModule = {
     getCampaignTypeInstructions,
     getFactsLlmMayNotFabricate,
   },
-  // urlExtraction stays null for now — listingIngestion +
-  // urlCampaignIntake are wired separately. industry-04 may move
-  // them under modules/real_estate/urlExtraction.js.
-  urlExtraction: null,
+  urlExtraction: realEstateUrlExtraction,
   // leadFields + dashboardWidgets + onboardingQuestions are
   // placeholders for the future industry-07 work.
   leadFields: [],

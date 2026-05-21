@@ -18,6 +18,12 @@ import crypto from "node:crypto";
 import { prisma } from "../../prisma.js";
 import { ingestUrlListing, confirmUrlListing } from "./listingIngestion.service.js";
 import { scrapeUrl } from "./scrapeUrl.js";
+// industry-04 — dispatch URL extraction through the industry
+// module registry. Real-estate workspaces continue to use the
+// listing extractor (preserves existing behavior); non-RE / no-
+// industry workspaces use the neutral generic analyzer and
+// never see property/listing fields.
+import { getIndustryModuleOrGeneric } from "../industry/modules/index.js";
 
 // Caps on the listing-index crawl path. Conservative on purpose —
 // every analyze call is interactive (user typed a URL + is
@@ -147,19 +153,19 @@ export function assertSafeExternalUrl(input) {
 
 // ── Analyze ────────────────────────────────────────────────────
 
-// industry-01 — listing extraction is real-estate-only. For non-RE
-// or no-industry workspaces, analyze returns an explicit
-// `detectedType: 'unsupported_industry'` response so the FE can
-// render a friendly "URL listing analysis is only available for
-// real-estate workspaces (yet)" message instead of feeding the URL
-// into a property-shaped extractor.
-async function isRealEstateWorkspace(clientId) {
-  if (!clientId) return false;
+// industry-01 — listing extraction is real-estate-only.
+// industry-04 — non-RE workspaces now get a NEUTRAL generic
+// preview (title / description / siteName / images / body
+// summary) via the generic module's URL analyzer, so the user
+// sees what's on the page and can route it into the idea flow.
+// The listing extractor is never called for non-RE workspaces.
+async function getWorkspaceIndustryKey(clientId) {
+  if (!clientId) return null;
   const row = await prisma.client.findUnique({
     where: { id: clientId },
     select: { industryKey: true },
   });
-  return row?.industryKey === "real_estate";
+  return row?.industryKey ?? null;
 }
 
 export async function analyzeUrl(clientId, { url, preferredIntent } = {}) {
@@ -168,21 +174,24 @@ export async function analyzeUrl(clientId, { url, preferredIntent } = {}) {
     ? preferredIntent
     : null;
 
-  // industry-01 — gate the listing path. A no-industry workspace
-  // gets a neutral "unsupported_industry" response and the FE
-  // either surfaces the URL as a freeform idea or hides the
-  // listing card entirely (URL-04 work).
-  if (!(await isRealEstateWorkspace(clientId))) {
+  const industryKey = await getWorkspaceIndustryKey(clientId);
+  const industryModule = getIndustryModuleOrGeneric(industryKey);
+
+  // industry-04 — non-RE workspaces route through the generic
+  // analyzer. No property fields, no listing extractor calls;
+  // just a neutral preview the user can use as a freeform idea
+  // source. Listed as detectedType='generic_page' so the FE can
+  // branch on it.
+  if (industryModule.key !== "real_estate") {
+    const generic = await industryModule.urlExtraction.analyze(parsed.toString());
     return {
       url: parsed.toString(),
-      detectedType: "unsupported_industry",
-      confidence: 0,
+      detectedType: "generic_page",
+      confidence: generic.confidence,
       listings: [],
+      genericPreview: generic,
       suggestedNextStep: "use_as_idea",
       preferredIntent: intent,
-      reason:
-        "URL listing analysis is only available for real-estate workspaces. " +
-        "Use the URL as a freeform idea, or set the workspace industry to real estate first.",
     };
   }
 

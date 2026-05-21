@@ -145,9 +145,12 @@ describe("isIndustryFeatureSupported", () => {
     expect(isIndustryFeatureSupported("not_an_industry", "autopilot")).toBe(false);
   });
 
-  it("no industry currently supports urlExtraction at the module level (industry-04 may move that)", () => {
-    expect(isIndustryFeatureSupported("real_estate", "urlExtraction")).toBe(false);
-    expect(isIndustryFeatureSupported(null, "urlExtraction")).toBe(false);
+  it("real_estate + generic both support urlExtraction (industry-04 — generic has its own neutral analyzer)", () => {
+    expect(isIndustryFeatureSupported("real_estate", "urlExtraction")).toBe(true);
+    // Generic module ships analyzeGenericUrl too, so even null /
+    // unknown industries can do generic URL analysis.
+    expect(isIndustryFeatureSupported(null, "urlExtraction")).toBe(true);
+    expect(isIndustryFeatureSupported("not_an_industry", "urlExtraction")).toBe(true);
   });
 
   it("unknown feature names return false", () => {
