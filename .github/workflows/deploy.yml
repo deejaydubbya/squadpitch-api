@@ -1,0 +1,38 @@
+name: Deploy to Fly
+
+# Only fires after the "CI" workflow completes on a default-branch
+# push. `workflow_run` filters mean a failing CI run never triggers
+# a deploy — so the gate "don't deploy if tests fail" holds even
+# for direct pushes to main (where branch protection wouldn't apply).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main, master]
+
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: flyctl deploy
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `workflow_run` events run against the SHA from the
+          # triggering workflow, not always the latest default-branch
+          # commit. Pin the checkout to the exact commit CI validated.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: flyctl deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only
