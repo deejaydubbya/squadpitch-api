@@ -21,6 +21,13 @@ jobs:
       # `generate` and `validate` don't open a connection.
       DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder?schema=public
       NODE_ENV: test
+      # `middleware/auth.js` (loaded transitively by route modules
+      # in `routeImports.test.js`) constructs the express-oauth2-jwt
+      # verifier at module load. It throws if `audience` /
+      # `issuerBaseURL` are missing. Placeholders are enough — tests
+      # never exercise the real JWT path.
+      AUTH0_AUDIENCE: https://ci-placeholder.invalid/api
+      AUTH0_DOMAIN: ci-placeholder.invalid
     steps:
       - uses: actions/checkout@v4
 
