@@ -25,6 +25,8 @@ import {
   OpenAIProviderError,
 } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
+import { buildLanguageInstructions } from "../studio/generation/languageInstructions.js";
+import { resolveLanguage } from "../studio/generation/resolveLanguage.js";
 
 // JSON schema passed to OpenAI's structured-output endpoint as a
 // shape hint. Block enums here mirror the runtime block
@@ -179,6 +181,7 @@ export async function generatePageFromSource({
   pageGoal,
   customPrompt,
   userId,
+  language,
 }) {
   // 1. Load workspace context (brand + voice + persona + media).
   const ctx = await loadClientGenerationContext(clientId);
@@ -193,9 +196,28 @@ export async function generatePageFromSource({
     throw err;
   }
 
+  // Phase 1 multilingual — resolve via request → CAMPAIGN row when
+  // the source is a campaign → contentPreferences → client → "en".
+  // Reading the campaign's language keeps a generated landing page
+  // in lockstep with the campaign that spawned it; the FE picker
+  // override still wins because it comes through `language`.
+  let campaignLangRow = null;
+  if (sourceType === "CAMPAIGN" && source.id) {
+    campaignLangRow = await prisma.campaign.findFirst({
+      where: { id: source.id, clientId },
+      select: { language: true },
+    });
+  }
+  const resolvedLanguage = resolveLanguage({
+    requestedLanguage: language,
+    campaign: campaignLangRow,
+    contentPreferences: ctx.contentPreferences,
+    client: ctx.client,
+  });
+
   // 3. Build prompts. System prompt sets persona + output rules.
   //    User prompt provides the brief.
-  const systemPrompt = buildSystemPrompt({ ctx, pageGoal });
+  const systemPrompt = buildSystemPrompt({ ctx, pageGoal, language: resolvedLanguage });
   const userPrompt = buildUserPrompt({ ctx, source, pageGoal, customPrompt });
 
   // 4. Call OpenAI with the JSON-schema-strict response format.
@@ -235,6 +257,7 @@ export async function generatePageFromSource({
     pageGoal,
     model: result.model,
     usage: result.usage,
+    language: resolvedLanguage,
   });
 }
 
@@ -332,7 +355,7 @@ async function resolveSource({ clientId, sourceType, sourceId, customPrompt }) {
 
 // ── Prompt assembly ────────────────────────────────────────────────────
 
-function buildSystemPrompt({ ctx, pageGoal }) {
+function buildSystemPrompt({ ctx, pageGoal, language }) {
   const brandName = ctx.client?.name ?? "the business";
   const industryName = ctx.client?.industryKey ?? null;
   const voice = ctx.voice ?? null;
@@ -356,6 +379,8 @@ function buildSystemPrompt({ ctx, pageGoal }) {
 
   const goalBlurb = PAGE_GOAL_BLURB[pageGoal] || "convert visitors";
 
+  const langDirective = buildLanguageInstructions(language);
+
   return [
     `You write conversion-focused landing-page copy for ${brandName}${industryName ? ` (industry: ${industryName})` : ""}.`,
     `The page's goal is to ${goalBlurb}.`,
@@ -377,6 +402,7 @@ function buildSystemPrompt({ ctx, pageGoal }) {
     "  brief doesn't mention. Stick to the supplied context.",
     "- CTA href: leave as '#contact' if no specific URL is supplied —",
     "  the workspace owner will replace it.",
+    langDirective ? "\n" + langDirective : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -416,6 +442,7 @@ function normalizeGeneratedPage({
   pageGoal,
   model,
   usage,
+  language,
 }) {
   const rawBlocks = Array.isArray(raw?.blocks) ? raw.blocks : [];
   const blocksJson = [];
@@ -453,6 +480,10 @@ function normalizeGeneratedPage({
       seoTitle: trimString(raw?.seoTitle, 160) || null,
       seoDescription: trimString(raw?.seoDescription, 400) || null,
       blocksJson,
+      // Resolved Phase 1 language so the caller can pass it to
+      // prisma.sitePage.create — the route lifts it out of
+      // `generation.payload.language` along with the other fields.
+      language: language || "en",
     },
     suggestedFormFields,
     formSuccessMessage:

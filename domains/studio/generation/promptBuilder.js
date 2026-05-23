@@ -8,6 +8,7 @@
 import { buildContentContext } from "../../industry/contentContextBuilder.js";
 import { buildPatternPromptBlock } from "../viralPatterns.js";
 import { getMaxCharsForChannel } from "../channelLimits.js";
+import { buildLanguageInstructions } from "./languageInstructions.js";
 
 /**
  * Structured media recommendation produced alongside every generated post.
@@ -382,6 +383,9 @@ VARIETY — each post should feel fresh:
   lines.push(
     "\nAlways respond with a single JSON object that matches the provided schema. Do not include any extra prose."
   );
+
+  const langDirective = buildLanguageInstructions(ctx?.language);
+  if (langDirective) lines.push("\n" + langDirective);
 
   return lines.join("\n");
 }
@@ -811,6 +815,9 @@ MEDIA PLAN — populate the 'mediaPlan' object:
     "\nRespond with JSON matching the draft schema."
   );
 
+  const langDirective = buildLanguageInstructions(ctx?.language);
+  if (langDirective) lines.push("\n" + langDirective);
+
   return lines.join("\n");
 }
 
@@ -1237,6 +1244,9 @@ MEDIA PLAN — for each post, populate the 'mediaPlan' object:
 
   lines.push("\nRespond with JSON matching the listing_campaign schema.");
 
+  const langDirective = buildLanguageInstructions(ctx?.language);
+  if (langDirective) lines.push("\n" + langDirective);
+
   return lines.join("\n");
 }
 
@@ -1465,6 +1475,9 @@ MEDIA PLAN — populate the 'mediaPlan' object:
 
 Respond with JSON matching the single_campaign_post schema.`);
 
+  const langDirective = buildLanguageInstructions(ctx?.language);
+  if (langDirective) lines.push("\n" + langDirective);
+
   return lines.join("\n");
 }
 
@@ -1532,7 +1545,7 @@ export const REMIX_OUTPUT_SCHEMA = {
  * Build the user prompt for content remixing.
  * Takes the original post body and remixes it into 4 formats.
  */
-export function buildRemixUserPrompt(originalBody, channel) {
+export function buildRemixUserPrompt(originalBody, channel, language) {
   const lines = [];
 
   lines.push(`--- ORIGINAL CONTENT ---`);
@@ -1580,6 +1593,9 @@ RULES:
 - Include relevant hashtags for post and carousel only`);
 
   lines.push("\nRespond with JSON matching the content_remix schema.");
+
+  const langDirective = buildLanguageInstructions(language);
+  if (langDirective) lines.push("\n" + langDirective);
 
   return lines.join("\n");
 }

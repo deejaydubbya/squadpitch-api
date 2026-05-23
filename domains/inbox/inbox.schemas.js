@@ -48,4 +48,8 @@ export const ManualMessageSchema = z.object({
 
 export const AiReplyRequestSchema = z.object({
   tone: z.enum(["professional", "friendly", "concise"]).optional().default("professional"),
+  // Phase 1 multilingual — optional per-request override. Falls
+  // back to conversation.defaultReplyLanguage → workspace default
+  // when omitted, via resolveLanguage in inbox.service.js.
+  language: z.enum(["en", "es"]).optional(),
 });

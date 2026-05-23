@@ -301,4 +301,8 @@ export const GeneratePageSchema = z.object({
   // Free-form additional context. Required for IDEA sources (the
   // prompt IS the source), optional for the others.
   customPrompt: z.string().max(4000).optional(),
+  // Phase 1 multilingual — optional per-page override. Falls back
+  // to the workspace `defaultLanguage` when unset. Currently gated
+  // to the supported set in lib/languages.js.
+  language: z.enum(["en", "es"]).optional(),
 });

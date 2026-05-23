@@ -55,6 +55,7 @@ export async function loadClientGenerationContext(clientId) {
       mediaProfile: true,
       channelSettings: true,
       brandPersona: true,
+      contentPreferences: true,
     },
   });
 
@@ -143,6 +144,7 @@ export async function loadClientGenerationContext(clientId) {
     brandPersona: client.brandPersona ?? null,
     channelSettings: client.channelSettings ?? [],
     contentBuckets,
+    contentPreferences: client.contentPreferences ?? null,
   };
 
   // Cache for next request (fire-and-forget)

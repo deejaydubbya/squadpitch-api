@@ -10,6 +10,8 @@ import { prisma } from "../../prisma.js";
 import { loadClientGenerationContext } from "../studio/generation/clientOrchestrator.js";
 import { generateStructuredContent } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
+import { buildLanguageInstructions } from "../studio/generation/languageInstructions.js";
+import { resolveLanguage } from "../studio/generation/resolveLanguage.js";
 
 // ── Conversation list + detail ─────────────────────────────────────────
 
@@ -235,7 +237,7 @@ export async function generateAiReply(
   clientId,
   conversationId,
   userId,
-  { tone = "professional" } = {},
+  { tone = "professional", language } = {},
 ) {
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, clientId },
@@ -269,18 +271,30 @@ export async function generateAiReply(
     conversation.pageId
       ? prisma.sitePage.findUnique({
           where: { id: conversation.pageId },
-          select: { title: true, description: true },
+          select: { title: true, description: true, language: true },
         })
       : null,
     conversation.campaignId
       ? prisma.campaign.findUnique({
           where: { id: conversation.campaignId },
-          select: { name: true, campaignType: true },
+          select: { name: true, campaignType: true, language: true },
         })
       : null,
   ]);
 
-  const systemPrompt = buildAiReplySystemPrompt({ ctx, tone });
+  // Phase 1 multilingual — resolve via request →
+  // conversation.defaultReplyLanguage → page.language (the lead
+  // landed on it) → campaign.language → contentPreferences →
+  // client → "en". The page-language fallback handles the common
+  // case where a Spanish landing page collected a Spanish lead
+  // and the agent hasn't set a per-conversation reply language.
+  const resolvedLanguage = resolveLanguage({
+    requestedLanguage: language ?? conversation.defaultReplyLanguage ?? page?.language ?? campaign?.language,
+    contentPreferences: ctx.contentPreferences,
+    client: ctx.client,
+  });
+
+  const systemPrompt = buildAiReplySystemPrompt({ ctx, tone, language: resolvedLanguage });
   const userPrompt = buildAiReplyUserPrompt({
     conversation,
     contact: conversation.contact,
@@ -318,6 +332,7 @@ export async function generateAiReply(
       model: result.model,
       promptTokens: result.usage?.prompt_tokens ?? 0,
       completionTokens: result.usage?.completion_tokens ?? 0,
+      language: resolvedLanguage,
     },
   });
 
@@ -336,7 +351,7 @@ export async function generateAiReply(
   return suggestion;
 }
 
-function buildAiReplySystemPrompt({ ctx, tone }) {
+function buildAiReplySystemPrompt({ ctx, tone, language }) {
   const brandName = ctx.client?.name ?? "the business";
   const voice = ctx.voice ?? null;
   const brand = ctx.brand ?? null;
@@ -356,6 +371,11 @@ function buildAiReplySystemPrompt({ ctx, tone }) {
   lines.push("- Acknowledge the specific page/topic they came from when known.");
   lines.push("- End with a concrete next step (a question, an offer, a meeting).");
   lines.push("- Don't sign off with anything more than a first name; we'll add the workspace's preferred sign-off.");
+  const langDirective = buildLanguageInstructions(language);
+  if (langDirective) {
+    lines.push("");
+    lines.push(langDirective);
+  }
   return lines.join("\n");
 }
 

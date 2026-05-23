@@ -22,6 +22,7 @@ import { formatDraft } from "../draft.service.js";
 import { incrementDataItemUsage } from "../data.service.js";
 import { trackAiUsage } from "../../billing/aiUsageTracking.service.js";
 import { loadRealEstateGenerationAssets } from "../../industry/realEstateGeneration.js";
+import { resolveLanguage } from "./resolveLanguage.js";
 
 /**
  * Persist a FAILED draft row when generation fails so operators see the
@@ -161,8 +162,18 @@ export async function generateDraft({
   userId,
   recommendationId,
   contentAngle,
+  language,
 }) {
   const ctx = await loadClientGenerationContext(clientId);
+  // Phase 1 multilingual — resolve via request → contentPreferences →
+  // client → "en" and attach to ctx so promptBuilder injects the
+  // Spanish directive when applicable. Omitting `language` from the
+  // request preserves existing English behavior unchanged.
+  ctx.language = resolveLanguage({
+    requestedLanguage: language,
+    contentPreferences: ctx.contentPreferences,
+    client: ctx.client,
+  });
 
   // Detect no-data idea post from frontend guidance marker
   const isNoDataIdeaPost = guidance?.includes("[NO_DATA_IDEA_POST]") || guidance?.includes("no-data educational/idea post");
@@ -351,6 +362,7 @@ export async function generateDraft({
         ...(!isNoDataIdeaPost && realEstateAssets && !realEstateAssets.bestListing && !dataItem ? ["re_fallback: no_listing"] : []),
         ...(recommendationId ? [`recommendation: ${recommendationId}`] : []),
       ].filter(Boolean),
+      language: ctx.language,
       createdBy,
     },
   });
@@ -416,15 +428,23 @@ function normalizeRemixFormat(raw) {
  * Remix an existing draft into 4 content formats.
  * Returns an array of 4 draft objects (post, carousel, videoScript, storyCaption).
  */
-export async function remixDraft({ clientId, draftId, createdBy, userId }) {
+export async function remixDraft({ clientId, draftId, createdBy, userId, language }) {
   const sourceDraft = await prisma.draft.findUnique({ where: { id: draftId } });
   if (!sourceDraft || sourceDraft.clientId !== clientId) {
     throw new Error("Draft not found");
   }
 
   const ctx = await loadClientGenerationContext(clientId);
+  // Resolve language. If the caller didn't pass one, default to the
+  // source draft's language so a remix of a Spanish post stays in
+  // Spanish without the FE having to remember to forward it.
+  ctx.language = resolveLanguage({
+    requestedLanguage: language ?? sourceDraft.language,
+    contentPreferences: ctx.contentPreferences,
+    client: ctx.client,
+  });
   const systemPrompt = buildSystemPrompt(ctx);
-  const userPrompt = buildRemixUserPrompt(sourceDraft.body, sourceDraft.channel);
+  const userPrompt = buildRemixUserPrompt(sourceDraft.body, sourceDraft.channel, ctx.language);
   const responseFormat = buildRemixResponseFormat();
 
   const result = await generateStructuredContent({
@@ -471,6 +491,7 @@ export async function remixDraft({ clientId, draftId, createdBy, userId }) {
         scoredHooks: null,
         altText: null,
         warnings: [`remix_source: ${draftId}`, `remix_format: ${key}`],
+        language: ctx.language,
         createdBy,
       },
     });

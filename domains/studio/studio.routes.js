@@ -1843,7 +1843,7 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
 studioRouter.post(`${BASE}/workspaces/:id/remix`, requireClientOwner, async (req, res, next) => {
   try {
-    const { draftId } = req.body;
+    const { draftId, language } = req.body;
     if (!draftId || typeof draftId !== "string") return sendError(res, 400, "VALIDATION_ERROR", "draftId is required.");
 
     // Cross-workspace check: requireClientOwner verified :id, but the
@@ -1872,6 +1872,7 @@ studioRouter.post(`${BASE}/workspaces/:id/remix`, requireClientOwner, async (req
       draftId,
       createdBy: actorSub,
       userId: req.user.id,
+      language,
     });
 
     await releaseDedup(dedupKey);
@@ -4775,7 +4776,7 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { propertyData, campaignType, imageContext, slots, dataItemId, sourceType: rawSourceType } = req.body;
+      const { propertyData, campaignType, imageContext, slots, dataItemId, sourceType: rawSourceType, language: requestedLanguage, campaignId } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
         return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
       }
@@ -4849,8 +4850,27 @@ studioRouter.post(
         const { generateStructuredContent } = await import("./generation/openai.provider.js");
         const { loadRealEstateGenerationAssets } = await import("../industry/realEstateGeneration.js");
         const { findBestBlueprintForItem } = await import("./blueprint.service.js");
+        const { resolveLanguage } = await import("./generation/resolveLanguage.js");
 
         const ctx = await loadClientGenerationContext(clientId);
+
+        // Phase 1 multilingual — resolve via request → campaign →
+        // contentPreferences → client → "en". Campaign row is only
+        // loaded when a campaignId is supplied, so legacy callers
+        // skip it and fall through to client.defaultLanguage.
+        let campaignRow = null;
+        if (campaignId && typeof campaignId === "string") {
+          campaignRow = await prisma.campaign.findFirst({
+            where: { id: campaignId, clientId },
+            select: { language: true },
+          });
+        }
+        ctx.language = resolveLanguage({
+          requestedLanguage,
+          campaign: campaignRow,
+          contentPreferences: ctx.contentPreferences,
+          client: ctx.client,
+        });
 
         let realEstateAssets = null;
         if (ctx.realEstateContext) {
@@ -4992,6 +5012,10 @@ studioRouter.post(
         sourceTitle,
         sourceDataItemType,
         campaignIdea,
+        // Phase 1 multilingual — caller can override; otherwise we
+        // resolve from the parent campaign / workspace default below.
+        language: requestedLanguage,
+        campaignId: requestedCampaignId,
       } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
         return validationError(res, [{ path: ["propertyData"], message: "Property data / post context is required" }]);
@@ -5029,8 +5053,27 @@ studioRouter.post(
         const { buildSystemPrompt, buildRegeneratePostUserPrompt, buildRegeneratePostResponseFormat } = await import("./generation/promptBuilder.js");
         const { generateStructuredContent } = await import("./generation/openai.provider.js");
         const { findBestBlueprintForItem } = await import("./blueprint.service.js");
+        const { resolveLanguage } = await import("./generation/resolveLanguage.js");
 
         const ctx = await loadClientGenerationContext(clientId);
+
+        // Resolve language so the regenerated post matches the rest
+        // of its campaign. Loads the parent Campaign row if the FE
+        // sends a campaignId; otherwise falls back to the workspace
+        // default via the standard chain.
+        let parentCampaign = null;
+        if (requestedCampaignId && typeof requestedCampaignId === "string") {
+          parentCampaign = await prisma.campaign.findFirst({
+            where: { id: requestedCampaignId, clientId },
+            select: { language: true },
+          });
+        }
+        ctx.language = resolveLanguage({
+          requestedLanguage,
+          campaign: parentCampaign,
+          contentPreferences: ctx.contentPreferences,
+          client: ctx.client,
+        });
 
         // Content-asset regens get a structural blueprint (same
         // logic as the initial generate route). Property and idea
@@ -5444,6 +5487,10 @@ studioRouter.post(
         sourceTitle,
         sourceDataItemType,
         campaignIdea,
+        // Phase 1 multilingual — optional per-campaign override.
+        // Defaults to workspace `defaultLanguage` when unset via
+        // resolveLanguage in the save path.
+        language: requestedLanguage,
       } = req.body;
       if (!campaign || !Array.isArray(campaign.posts) || campaign.posts.length === 0) {
         return validationError(res, [{ path: ["campaign"], message: "Campaign with posts array is required" }]);
@@ -5636,6 +5683,21 @@ studioRouter.post(
       // existing `Draft.warnings` source tags are still written
       // (back-compat) so any reader that hasn't migrated to
       // Campaign.sourceType/etc. keeps working.
+      // Resolve campaign language at save time so Campaign.language
+      // and every persisted Draft.language stay in lockstep. Falls
+      // back to the workspace default; no Campaign row is read first
+      // because this is the row being created.
+      const { resolveLanguage } = await import("./generation/resolveLanguage.js");
+      const clientForLang = await prisma.client.findUnique({
+        where: { id: clientId },
+        select: { defaultLanguage: true, contentPreferences: { select: { defaultLanguage: true } } },
+      });
+      const resolvedCampaignLanguage = resolveLanguage({
+        requestedLanguage,
+        contentPreferences: clientForLang?.contentPreferences,
+        client: clientForLang,
+      });
+
       const campaignRow = await prisma.campaign.create({
         data: {
           // id omitted — Prisma generates a cuid via the model's
@@ -5644,6 +5706,7 @@ studioRouter.post(
           clientId,
           name: campaignName,
           campaignType: campaignType || "just_listed",
+          language: resolvedCampaignLanguage,
           sourceType,
           sourceDataItemId: sourceType === "data_item" ? dataItemId ?? null : (sourceType === "property" ? dataItemId ?? null : null),
           sourceTitle:
@@ -5689,6 +5752,7 @@ studioRouter.post(
                 ...(post.slotType ? { slotType: post.slotType } : {}),
               },
               warnings: [...warnings, `angle:${post.angle || "promotional"}`],
+              language: resolvedCampaignLanguage,
               createdBy: req.user.id,
               // Campaign fields
               campaignId,

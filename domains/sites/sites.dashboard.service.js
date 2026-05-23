@@ -110,6 +110,10 @@ export async function createPage(clientId, createdBy, input) {
       seoDescription: input.seoDescription ?? null,
       ogImageId: input.ogImageId ?? null,
       revalidateSec: input.revalidateSec ?? 60,
+      // Phase 1 multilingual — fall through the column default
+      // ("en") when the caller doesn't pass a language so existing
+      // manual create paths stay unchanged.
+      ...(input.language ? { language: input.language } : {}),
       createdBy,
     },
   });

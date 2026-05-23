@@ -295,6 +295,10 @@ export const GenerateContentSchema = z.object({
   dataItemId: z.string().optional(),
   blueprintId: z.string().optional(),
   recommendationId: z.string().max(60).optional(),
+  // Phase 1 multilingual — explicit per-request override. Omit to
+  // resolve from contentPreferences/client default. Bad values are
+  // softly normalized inside resolveLanguage().
+  language: LanguageCodeEnum.optional(),
 });
 
 // ── Draft lifecycle ─────────────────────────────────────────────────────
