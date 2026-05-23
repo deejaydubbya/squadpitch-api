@@ -71,10 +71,15 @@ export async function getPage(clientId, pageId) {
 
 export async function createPage(clientId, createdBy, input) {
   const site = await getOrCreateSite(clientId, createdBy);
-  // Reject duplicate slug up-front so callers get a friendly error
-  // instead of a Prisma P2002 surface.
+  // Phase 2 — same slug is allowed across different languages so
+  // English and Spanish siblings can share a clean URL stem. The
+  // SLUG_TAKEN check below is now language-scoped via the
+  // (clientId, slug, language) compound unique.
+  const language = input.language ?? "en";
   const existing = await prisma.sitePage.findUnique({
-    where: { clientId_slug: { clientId, slug: input.slug } },
+    where: {
+      clientId_slug_language: { clientId, slug: input.slug, language },
+    },
     select: { id: true },
   });
   if (existing) {
@@ -122,7 +127,7 @@ export async function createPage(clientId, createdBy, input) {
 export async function updatePage(clientId, pageId, patch) {
   const page = await prisma.sitePage.findFirst({
     where: { id: pageId, clientId },
-    select: { id: true, slug: true, status: true },
+    select: { id: true, slug: true, status: true, language: true },
   });
   if (!page) {
     const err = new Error("Page not found");
@@ -131,10 +136,19 @@ export async function updatePage(clientId, pageId, patch) {
     throw err;
   }
 
-  // If slug changes, ensure uniqueness within the workspace.
+  // If slug changes, ensure uniqueness within the workspace —
+  // scoped to this page's language so an English page renaming to
+  // "spring-open-house" doesn't collide with the Spanish sibling
+  // that already uses the same slug.
   if (patch.slug && patch.slug !== page.slug) {
     const conflict = await prisma.sitePage.findUnique({
-      where: { clientId_slug: { clientId, slug: patch.slug } },
+      where: {
+        clientId_slug_language: {
+          clientId,
+          slug: patch.slug,
+          language: page.language ?? "en",
+        },
+      },
       select: { id: true },
     });
     if (conflict && conflict.id !== pageId) {

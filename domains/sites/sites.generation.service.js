@@ -683,3 +683,301 @@ function safeJsonPreview(value, maxChars) {
     return null;
   }
 }
+
+// ── Phase 2 multilingual — page translation ─────────────────────────
+//
+// Walks a SitePage's user-visible text fields and asks OpenAI to
+// translate them into the target language while preserving the
+// block structure (types, ids, schema keys, URLs, formIds). The
+// LLM is instructed to translate VALUES only — block `type` strings
+// and structural metadata pass through verbatim. A normalizer
+// re-stitches the response onto the original block shapes so a
+// rogue model response can't change types or drop blocks.
+
+const TRANSLATABLE_BLOCK_TEXT_KEYS = [
+  "headline",
+  "subheadline",
+  "body",
+  "caption",
+  "alt",
+  "label",
+  "value",
+  "question",
+  "answer",
+  "ctaLabel",
+  "ctaHref",
+  "title",
+  "description",
+];
+
+/**
+ * Translate a SitePage into the target language. Idempotent: if a
+ * sibling already exists for the target language it is returned as
+ * `{ existing: true, ... }` so the caller can avoid duplicate
+ * generations without re-running the LLM.
+ *
+ * Returns:
+ *   {
+ *     existing: boolean,
+ *     source: SitePage,    // patched with siblingPageId
+ *     translated: SitePage,
+ *   }
+ */
+export async function translatePage({ clientId, pageId, targetLanguage, userId }) {
+  const SUPPORTED = new Set(["en", "es"]);
+  const target = String(targetLanguage || "").toLowerCase();
+  if (!SUPPORTED.has(target)) {
+    const err = new Error(`Unsupported target language: ${targetLanguage}`);
+    err.status = 400;
+    err.code = "UNSUPPORTED_LANGUAGE";
+    throw err;
+  }
+
+  const source = await prisma.sitePage.findFirst({
+    where: { id: pageId, clientId },
+  });
+  if (!source) {
+    const err = new Error("Page not found in this workspace");
+    err.status = 404;
+    err.code = "PAGE_NOT_FOUND";
+    throw err;
+  }
+  if ((source.language ?? "en") === target) {
+    const err = new Error(`Source page is already in ${target}`);
+    err.status = 400;
+    err.code = "SAME_LANGUAGE";
+    throw err;
+  }
+
+  // Idempotency — if a sibling already exists with the requested
+  // language, return it instead of re-translating. The caller can
+  // delete + re-translate explicitly when they really want a
+  // fresh pass.
+  if (source.siblingPageId) {
+    const existing = await prisma.sitePage.findFirst({
+      where: { id: source.siblingPageId, clientId, language: target },
+    });
+    if (existing) {
+      return { existing: true, source, translated: existing };
+    }
+  }
+  // Belt-and-suspenders — also catch the case where a translation
+  // exists but isn't yet linked back (rare; happens if a previous
+  // run crashed between createPage and the source-row patch).
+  const orphanSibling = await prisma.sitePage.findFirst({
+    where: {
+      clientId,
+      slug: source.slug,
+      language: target,
+    },
+  });
+  if (orphanSibling) {
+    return { existing: true, source, translated: orphanSibling };
+  }
+
+  const ctx = await loadClientGenerationContext(clientId);
+
+  // Build the translation prompt. The schema is intentionally
+  // narrow so the model can't accidentally restructure the page.
+  const systemPrompt = [
+    `You translate SquadSites landing-page copy from English into ${target === "es" ? "Spanish" : target}.`,
+    "Preserve the block structure and ALL non-text fields verbatim.",
+    "Translate only the user-visible text values. Do not translate URLs, formIds, image ids, or any field that is clearly a key, id, or technical token.",
+    "Keep brand names, addresses, model names, listing titles, product names, and proper nouns as written.",
+    "Return JSON matching the supplied schema. Each block in `blocks` is a JSON object with `index` matching the source block's position, and a `text` object whose keys are the translated text fields for that block.",
+    buildLanguageInstructions(target),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  // Trim source blocks to text-only payload — the model doesn't
+  // need to see URLs or formIds, and excluding them reduces both
+  // token cost and the chance the model echoes them back wrong.
+  const srcBlocks = Array.isArray(source.blocksJson) ? source.blocksJson : [];
+  const textOnlyBlocks = srcBlocks.map((block, index) => {
+    const text = {};
+    if (block && typeof block === "object") {
+      for (const k of TRANSLATABLE_BLOCK_TEXT_KEYS) {
+        if (typeof block[k] === "string" && block[k]) text[k] = block[k];
+      }
+      // FAQ items / key-details items are arrays of objects with
+      // their own translatable fields. Walk one level deeper.
+      if (Array.isArray(block.items)) {
+        text.items = block.items.map((item) => {
+          if (!item || typeof item !== "object") return null;
+          const inner = {};
+          for (const k of TRANSLATABLE_BLOCK_TEXT_KEYS) {
+            if (typeof item[k] === "string" && item[k]) inner[k] = item[k];
+          }
+          return inner;
+        });
+      }
+    }
+    return { index, type: block?.type ?? "unknown", text };
+  });
+
+  const userPrompt = [
+    "# Source page",
+    "",
+    `**Source language:** ${source.language ?? "en"}`,
+    `**Target language:** ${target}`,
+    `**Title:** ${source.title ?? ""}`,
+    source.description ? `**Description:** ${source.description}` : "",
+    source.seoTitle ? `**SEO title:** ${source.seoTitle}` : "",
+    source.seoDescription ? `**SEO description:** ${source.seoDescription}` : "",
+    "",
+    "## Blocks (text only)",
+    "```json",
+    JSON.stringify(textOnlyBlocks, null, 2),
+    "```",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const RESPONSE_SCHEMA = {
+    name: "translated_page",
+    strict: false,
+    schema: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        title: { type: "string" },
+        description: { type: ["string", "null"] },
+        seoTitle: { type: ["string", "null"] },
+        seoDescription: { type: ["string", "null"] },
+        blocks: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: true,
+            properties: {
+              index: { type: "integer" },
+              text: { type: "object", additionalProperties: true },
+            },
+          },
+        },
+      },
+      required: ["title", "blocks"],
+    },
+  };
+
+  const result = await generateStructuredContent({
+    systemPrompt,
+    userPrompt,
+    taskType: "campaign_generation",
+    responseFormat: { type: "json_schema", json_schema: RESPONSE_SCHEMA },
+    temperature: 0.3,
+    timeoutMs: 45_000,
+  });
+
+  trackAiUsage({
+    userId,
+    clientId,
+    actionType: "GENERATE_POST",
+    model: result.model,
+    promptTokens: result.usage?.prompt_tokens ?? 0,
+    completionTokens: result.usage?.completion_tokens ?? 0,
+    metadata: { source: "site_page_translate", targetLanguage: target, sourcePageId: source.id },
+  });
+
+  // Stitch the translated text back onto the source blocks. The
+  // model can't change types, ids, URLs, formIds, or any non-text
+  // field — those come from the source row, not the response.
+  const translatedByIndex = new Map();
+  if (Array.isArray(result.parsed?.blocks)) {
+    for (const b of result.parsed.blocks) {
+      if (b && Number.isInteger(b.index)) {
+        translatedByIndex.set(b.index, b.text ?? {});
+      }
+    }
+  }
+  const mergedBlocks = srcBlocks.map((block, index) => {
+    if (!block || typeof block !== "object") return block;
+    const text = translatedByIndex.get(index) ?? {};
+    const merged = { ...block };
+    for (const k of TRANSLATABLE_BLOCK_TEXT_KEYS) {
+      if (typeof text[k] === "string" && text[k]) merged[k] = text[k];
+    }
+    if (Array.isArray(block.items) && Array.isArray(text.items)) {
+      merged.items = block.items.map((item, i) => {
+        if (!item || typeof item !== "object") return item;
+        const innerText = text.items[i] ?? {};
+        const innerMerged = { ...item };
+        for (const k of TRANSLATABLE_BLOCK_TEXT_KEYS) {
+          if (typeof innerText[k] === "string" && innerText[k]) {
+            innerMerged[k] = innerText[k];
+          }
+        }
+        return innerMerged;
+      });
+    }
+    return merged;
+  });
+
+  // Find the site for this client so we can write the new page row.
+  const site = await prisma.site.findUnique({
+    where: { clientId },
+    select: { id: true },
+  });
+  if (!site) {
+    const err = new Error("Workspace has no site");
+    err.status = 404;
+    err.code = "SITE_NOT_FOUND";
+    throw err;
+  }
+
+  const translatedTitle =
+    (typeof result.parsed?.title === "string" && result.parsed.title) ||
+    source.title;
+  const translatedDescription =
+    typeof result.parsed?.description === "string"
+      ? result.parsed.description
+      : source.description;
+  const translatedSeoTitle =
+    typeof result.parsed?.seoTitle === "string"
+      ? result.parsed.seoTitle
+      : source.seoTitle;
+  const translatedSeoDescription =
+    typeof result.parsed?.seoDescription === "string"
+      ? result.parsed.seoDescription
+      : source.seoDescription;
+
+  // Same slug as the source — the (clientId, slug, language)
+  // compound unique lets siblings co-exist. The public URL is
+  // assembled at request time as `/${language}/${slug}` for
+  // non-English locales.
+  const translated = await prisma.sitePage.create({
+    data: {
+      siteId: site.id,
+      clientId,
+      slug: source.slug,
+      title: translatedTitle,
+      description: translatedDescription ?? null,
+      status: "DRAFT",
+      blocksJson: mergedBlocks,
+      campaignId: source.campaignId,
+      sourceType: source.sourceType,
+      sourceId: source.sourceId,
+      pageGoal: source.pageGoal,
+      noIndex: source.noIndex,
+      heroImageId: source.heroImageId,
+      seoTitle: translatedSeoTitle ?? null,
+      seoDescription: translatedSeoDescription ?? null,
+      ogImageId: source.ogImageId,
+      revalidateSec: source.revalidateSec,
+      language: target,
+      siblingPageId: source.id,
+      createdBy: userId ?? source.createdBy,
+    },
+  });
+
+  // Back-link from source so the LanguageSwitcher resolves both
+  // directions. Use a `findUnique({ where: { id } })` pattern via
+  // update so we don't depend on a uniqueWhere shape.
+  const updatedSource = await prisma.sitePage.update({
+    where: { id: source.id },
+    data: { siblingPageId: translated.id },
+  });
+
+  return { existing: false, source: updatedSource, translated };
+}

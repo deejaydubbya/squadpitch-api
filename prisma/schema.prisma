@@ -495,7 +495,11 @@ model SitePage {
   site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
   campaign Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
-  @@unique([clientId, slug])
+  // Two SitePage rows can share a slug if they're different-
+  // language siblings (Phase 2). The compound unique enforces
+  // that there's still at most ONE page per (workspace, slug,
+  // language) combination.
+  @@unique([clientId, slug, language])
   @@index([clientId, status])
   @@index([campaignId])
   // Public-site resolver lookup (Phase 2):

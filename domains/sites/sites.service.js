@@ -73,11 +73,20 @@ export function extractPageSlugFromPath(path) {
  *     PUBLISHED)
  *   - { site, page, campaign?, forms[] } payload otherwise
  */
-export async function resolvePublicPage({ host, path }) {
+export async function resolvePublicPage({ host, path, locale }) {
   const clientSlug = extractClientSlugFromHost(host);
   if (!clientSlug) return null;
   const pageSlug = extractPageSlugFromPath(path);
   if (!pageSlug) return null;
+
+  // Soft-validate locale — anything not in the supported set drops
+  // back to the no-locale path so a typo (?locale=fr) returns the
+  // default page instead of 404'ing. Phase 2 only ships en/es.
+  const SUPPORTED_LOCALES = new Set(["en", "es"]);
+  const requestedLocale =
+    typeof locale === "string" && SUPPORTED_LOCALES.has(locale.toLowerCase())
+      ? locale.toLowerCase()
+      : null;
 
   // Resolve client → site → page in one chain. clientId is
   // denormalized on site_pages so the page lookup is a single
@@ -102,8 +111,12 @@ export async function resolvePublicPage({ host, path }) {
   });
   if (!site || site.status !== "PUBLISHED") return null;
 
-  const page = await prisma.sitePage.findUnique({
-    where: { clientId_slug: { clientId: client.id, slug: pageSlug } },
+  // Phase 2 multilingual — load every published row that shares the
+  // slug (max ~2 in normal use: an English + Spanish sibling). One
+  // indexed query lets us pick the locale match AND emit the
+  // alternates map without a follow-up read.
+  const siblingRows = await prisma.sitePage.findMany({
+    where: { clientId: client.id, slug: pageSlug, status: "PUBLISHED" },
     select: {
       id: true,
       slug: true,
@@ -119,12 +132,17 @@ export async function resolvePublicPage({ host, path }) {
       noIndex: true,
       publishedAt: true,
       campaignId: true,
+      language: true,
+      siblingPageId: true,
       // Intentionally NOT selecting sourceType / sourceId / pageGoal
       // — those are workspace-internal metadata. The public payload
       // should only carry rendering + SEO flags.
     },
   });
-  if (!page || page.status !== "PUBLISHED") return null;
+  if (siblingRows.length === 0) return null;
+
+  const page = pickPageByLocale(siblingRows, requestedLocale);
+  if (!page) return null;
 
   // Lazy-load referenced forms. Block types that reference a
   // formId (e.g. lead_form blocks) need the form's fieldsJson +
@@ -155,6 +173,8 @@ export async function resolvePublicPage({ host, path }) {
     if (c) campaign = c;
   }
 
+  const alternates = buildAlternatesMap(siblingRows);
+
   return {
     site: {
       id: site.id,
@@ -170,6 +190,7 @@ export async function resolvePublicPage({ host, path }) {
       revalidateSec: page.revalidateSec,
       noIndex: page.noIndex,
       publishedAt: page.publishedAt,
+      language: page.language ?? "en",
       seo: {
         title: page.seoTitle,
         description: page.seoDescription,
@@ -177,6 +198,7 @@ export async function resolvePublicPage({ host, path }) {
         heroImageId: page.heroImageId,
       },
     },
+    alternates,
     campaign,
     forms: forms.map(formatPublicForm),
   };
@@ -279,6 +301,54 @@ export async function createFormSubmission({
   });
 
   return submission;
+}
+
+// ── Phase 2 multilingual — public-resolver pure helpers ─────────────
+//
+// Exported so the resolver logic (locale picker + alternates map) is
+// testable without standing up a Prisma test DB.
+
+/**
+ * Choose which SitePage row to render given the requested locale.
+ * Falls back English → first available so a Spanish-only request
+ * against an English-only workspace still returns a sensible page.
+ *
+ * Deterministic: ties (e.g. duplicate-language rows from a bad
+ * sibling state) are broken by lexicographic id order.
+ */
+export function pickPageByLocale(siblingRows, requestedLocale) {
+  if (!Array.isArray(siblingRows) || siblingRows.length === 0) return null;
+  const sorted = [...siblingRows].sort((a, b) => {
+    const ai = String(a?.id ?? "");
+    const bi = String(b?.id ?? "");
+    return ai.localeCompare(bi);
+  });
+  if (requestedLocale) {
+    const match = sorted.find((p) => p?.language === requestedLocale);
+    if (match) return match;
+  }
+  const en = sorted.find((p) => p?.language === "en");
+  if (en) return en;
+  return sorted[0];
+}
+
+/**
+ * Build the `alternates` map the public runtime emits as
+ * <link rel="alternate" hreflang="..."> tags + uses to render the
+ * LanguageSwitcher. English is the canonical un-prefixed URL.
+ *
+ * Skips rows with no language. Skips duplicates (last write wins so
+ * a future status filter can keep the most recent).
+ */
+export function buildAlternatesMap(siblingRows) {
+  const out = {};
+  if (!Array.isArray(siblingRows)) return out;
+  for (const sib of siblingRows) {
+    if (!sib || typeof sib.slug !== "string" || !sib.language) continue;
+    out[sib.language] =
+      sib.language === "en" ? `/${sib.slug}` : `/${sib.language}/${sib.slug}`;
+  }
+  return out;
 }
 
 function pickFieldValue(fieldDefs, submittedFields, wantedType) {

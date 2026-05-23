@@ -24,7 +24,7 @@ import {
   GeneratePageSchema,
 } from "./sites.schemas.js";
 import * as service from "./sites.dashboard.service.js";
-import { generatePageFromSource } from "./sites.generation.service.js";
+import { generatePageFromSource, translatePage } from "./sites.generation.service.js";
 import {
   getServiceStatus,
   isProviderBudgetExceeded,
@@ -320,6 +320,49 @@ sitesDashboardRouter.post(
       }
 
       res.status(201).json({ page, generation: { model: generation.model } });
+    } catch (err) {
+      handleServiceError(res, err, next);
+    }
+  },
+);
+
+// ── Page translation (Phase 2 multilingual) ─────────────────────────────
+//
+// POST /api/v1/workspaces/:id/site/pages/:pageId/translate
+//
+// Creates a sibling SitePage in the target language. Idempotent —
+// a duplicate request returns the existing sibling rather than
+// burning another LLM call. The compound unique
+// `(clientId, slug, language)` lets both rows keep the same clean
+// slug; the public URL prefix `/es/<slug>` is added at render time.
+sitesDashboardRouter.post(
+  `${BASE}/workspaces/:id/site/pages/:pageId/translate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const targetLanguage =
+        typeof req.body?.to === "string" ? req.body.to : null;
+      if (!targetLanguage) {
+        return validationError(res, [
+          { path: ["to"], message: "Target language is required (e.g. 'es')" },
+        ]);
+      }
+      if (!(await preflightOpenAi(res))) return;
+
+      const result = await translatePage({
+        clientId: req.params.id,
+        pageId: req.params.pageId,
+        targetLanguage,
+        userId: getAuth0Sub(req),
+      });
+      // Returns the source page (now linked) and the translated row.
+      // `existing` lets the FE distinguish "freshly created" vs
+      // "already had one" for a different toast/copy.
+      res.status(result.existing ? 200 : 201).json({
+        existing: result.existing,
+        source: result.source,
+        translated: result.translated,
+      });
     } catch (err) {
       handleServiceError(res, err, next);
     }

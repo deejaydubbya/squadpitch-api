@@ -22,7 +22,7 @@ const BASE = "/api/v1/public";
 // and bounded to a safe-to-surface response shape.
 publicSitesRouter.get(`${BASE}/sites/resolve`, async (req, res, next) => {
   try {
-    const { host, path: pagePath } = req.query;
+    const { host, path: pagePath, locale } = req.query;
     if (typeof host !== "string" || !host) {
       return sendError(res, 400, "BAD_REQUEST", "host query param is required");
     }
@@ -39,7 +39,14 @@ publicSitesRouter.get(`${BASE}/sites/resolve`, async (req, res, next) => {
       return sendError(res, 429, "RATE_LIMITED", "Too many requests");
     }
 
-    const payload = await resolvePublicPage({ host, path: pagePath });
+    const payload = await resolvePublicPage({
+      host,
+      path: pagePath,
+      // Phase 2 multilingual — `?locale=es` asks for the Spanish
+      // sibling; resolver gracefully falls back to English when no
+      // matching sibling exists.
+      locale: typeof locale === "string" ? locale : undefined,
+    });
     if (!payload) {
       return sendError(res, 404, "NOT_FOUND", "Page not found");
     }
