@@ -75,6 +75,11 @@ export async function createClient(data, createdBy) {
       logoUrl: data.logoUrl ?? null,
       industryKey: data.industryKey ?? null,
       status: data.status ?? "ACTIVE",
+      // Phase 0 multilingual support — workspace-wide default for
+      // generated content. Column has a DB-level default of "en"
+      // so omitting it here is safe; pass-through lets onboarding
+      // commit the user's chosen language at creation time.
+      ...(data.defaultLanguage ? { defaultLanguage: data.defaultLanguage } : {}),
       createdBy,
     },
   });
@@ -317,6 +322,7 @@ export function formatClient(client) {
     logoUrl: client.logoUrl,
     industryKey: client.industryKey ?? null,
     timezone: client.timezone ?? 'UTC',
+    defaultLanguage: client.defaultLanguage ?? 'en',
     createdBy: client.createdBy,
     createdAt: client.createdAt,
     updatedAt: client.updatedAt,

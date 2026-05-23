@@ -35,6 +35,10 @@ const EMPTY_PREFERENCES = {
   defaultCampaignLength: null,
   preferredPostingDays: [],
   preferredPostingTime: null,
+  // Phase 0 multilingual support. Null = "inherit from
+  // Client.defaultLanguage". Phase 1 will read this in
+  // resolveLanguage() when building generation context.
+  defaultLanguage: null,
 };
 
 function shape(row, clientId) {
@@ -66,6 +70,7 @@ function shape(row, clientId) {
     defaultCampaignLength: row.defaultCampaignLength ?? null,
     preferredPostingDays: row.preferredPostingDays ?? [],
     preferredPostingTime: row.preferredPostingTime ?? null,
+    defaultLanguage: row.defaultLanguage ?? null,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -107,6 +112,7 @@ export async function updateContentPreferences(clientId, patch) {
     "defaultCampaignLength",
     "preferredPostingDays",
     "preferredPostingTime",
+    "defaultLanguage",
   ]) {
     if (Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== undefined) {
       data[key] = patch[key];

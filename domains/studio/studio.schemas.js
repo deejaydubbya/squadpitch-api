@@ -1,6 +1,14 @@
 // Zod schemas for the Squadpitch studio API.
 
 import { z } from "zod";
+import { SUPPORTED_LANGUAGES } from "../../lib/languages.js";
+
+// Validates against the supported-content-language allow-list.
+// Built from the registry so adding a language is a one-place edit.
+// `.optional().nullable()` at the field level decides nullability.
+export const LanguageCodeEnum = z.enum(
+  SUPPORTED_LANGUAGES.map((l) => l.code),
+);
 
 // ── Enums (mirror Prisma enums) ─────────────────────────────────────────
 
@@ -61,6 +69,9 @@ export const CreateClientSchema = z.object({
   logoUrl: z.string().url().nullable().optional(),
   status: ClientStatusEnum.optional(),
   industryKey: z.string().max(40).optional(),
+  // Phase 0 — onboarding can commit a chosen content language at
+  // workspace creation. Omit → DB default of "en".
+  defaultLanguage: LanguageCodeEnum.optional(),
 });
 
 export const UpdateClientSchema = z.object({
@@ -73,6 +84,11 @@ export const UpdateClientSchema = z.object({
   // settings page writes here so the assistant can interpret
   // preferredPostingTime ("HH:mm") against the right zone.
   timezone: z.string().min(1).max(64).optional(),
+  // Phase 0 multilingual support — workspace-wide default for
+  // *generated content* (not dashboard UI). Validated against the
+  // SUPPORTED_LANGUAGES allow-list. Phase 1 wires this into
+  // resolveLanguage for every generation entry point.
+  defaultLanguage: LanguageCodeEnum.optional(),
 });
 
 // ── Brand profile ───────────────────────────────────────────────────────
@@ -710,6 +726,11 @@ export const ContentPreferencesUpdateSchema = z.object({
   defaultCampaignLength: z.union([z.literal(3), z.literal(5), z.literal(7)]).nullable().optional(),
   preferredPostingDays: z.array(PostingDayEnum).max(7).optional(),
   preferredPostingTime: PostingTimeString.nullable().optional(),
+  // Phase 0 multilingual support — workspace-level override of the
+  // workspace's `Client.defaultLanguage`. Validated against the
+  // SUPPORTED_LANGUAGES allow-list in `lib/languages.js`.
+  // Null = "inherit from Client.defaultLanguage".
+  defaultLanguage: LanguageCodeEnum.nullable().optional(),
 });
 
 // ── Autopilot ─────────────────────────────────────────────────────────
