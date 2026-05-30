@@ -612,9 +612,25 @@ async function seedAnalytics() {
           externalAccountId,
           displayName,
           accessToken: fakeToken,
+          // Keep these in sync with FACEBOOK_SCOPES / INSTAGRAM_SCOPES
+          // in domains/studio/oauth/{facebook,instagram}.oauth.js so
+          // the App Review demo workspace shows the same scope shape
+          // reviewers will see in the consent dialog.
           scopes: channel === "FACEBOOK"
-            ? ["pages_read_engagement", "pages_show_list", "read_insights"]
-            : ["instagram_basic", "instagram_business_basic", "instagram_manage_insights"],
+            ? [
+                "pages_show_list",
+                "pages_read_engagement",
+                "pages_manage_posts",
+                "read_insights",
+                "pages_read_user_content",
+                "pages_manage_engagement",
+              ]
+            : [
+                "instagram_business_basic",
+                "instagram_business_content_publish",
+                "instagram_business_manage_insights",
+                "instagram_business_manage_comments",
+              ],
           tokenExpiresAt,
           lastValidatedAt,
           createdBy: "seed-meta-demo",
