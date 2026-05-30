@@ -37,7 +37,13 @@ const PROVIDER_CAPABILITIES = {
   EMAIL:         { supportsEmail: true,  supportsSms: false, supportsComment: false, supportsDm: false, supportsReview: false },
   SMS:           { supportsEmail: false, supportsSms: true,  supportsComment: false, supportsDm: false, supportsReview: false },
   FACEBOOK:      { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: true  },
-  INSTAGRAM:     { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
+  // Instagram DMs are explicitly out of scope — no
+  // instagram_business_manage_messages style scope is requested.
+  // Public comment reply support stays true (we ask for
+  // instagram_business_manage_comments at OAuth time) but the
+  // resolver below pins an honest "requires implementation and
+  // approval" reason until the IG comment-reply send path is wired.
+  INSTAGRAM:     { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
   GOOGLE_BUSINESS:{ supportsEmail: false, supportsSms: false, supportsComment: false, supportsDm: false, supportsReview: true  },
   YOUTUBE:       { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
   LINKEDIN:      { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
@@ -255,6 +261,17 @@ export function getAvailableReplyActions(conversation, extras = {}) {
         reason = null;
         requiresConfig = false;
       }
+    } else if (provider === "INSTAGRAM") {
+      // OAuth requests `instagram_business_manage_comments` (Prompt
+      // 01) and the capability matrix flips to currentScopes after
+      // it lands. But: (1) Meta App Review hasn't approved the
+      // scope yet, and (2) we haven't wired the outbound Instagram
+      // comment-reply send path (no `POST /{comment-id}/replies`
+      // adapter today). Pin an honest reason rather than implying
+      // it'll work as soon as the user reconnects.
+      reason =
+        "Instagram public comment replies require implementation and approval for `instagram_business_manage_comments`.";
+      requiresConfig = false;
     } else if (scopeBlocker) {
       reason = scopeBlocker;
     } else {

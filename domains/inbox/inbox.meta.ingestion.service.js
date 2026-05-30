@@ -5,9 +5,15 @@
 // Inbox graph.
 //
 // Capability posture (spinstr10):
-//   - Comments only this pass. FB/IG DMs add the 24-hour-window
-//     rule and need their own scopes (pages_messaging /
-//     instagram_manage_messages); deferred.
+//   - Comments only this pass. Requires
+//     pages_read_user_content + pages_manage_engagement for
+//     Facebook Page comments and
+//     instagram_business_manage_comments (Instagram Login /
+//     Business Login — see Prompt 01 migration) for Instagram
+//     comments. FB DMs would add the 24-hour-window rule + their
+//     own pages_messaging scope; deferred. Private Instagram DMs
+//     are explicitly out of scope — no instagram_business_manage_messages
+//     style scope is requested in this App Review pass.
 //   - Reply send paths NOT implemented. Comments arrive with
 //     Message.visibility=PUBLIC and externalMessageId set so a
 //     future REPLY_PUBLIC_COMMENT action can call Meta's reply API.

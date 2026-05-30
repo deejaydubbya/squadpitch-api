@@ -22,7 +22,11 @@
 //   verifies the signature, records the payload shape to logs for
 //   ops visibility, and 200-OKs without touching the DB. Lets us
 //   ship the receiver before Meta App Review approves the new
-//   scopes (pages_read_user_content, instagram_manage_comments, …).
+//   scopes — pages_read_user_content + pages_manage_engagement
+//   (Facebook Page comments + replies) and
+//   instagram_business_manage_comments (Instagram comments under
+//   the Instagram Login / Business Login scope family — Prompt 01
+//   migration).
 //
 //   META_INBOX_INGESTION_ENABLED=true → dispatch to the ingestion
 //   service which writes Conversation + Message rows.

@@ -571,11 +571,29 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     expect(action.reason).toMatch(/Pending LinkedIn Community Management API approval/i);
   });
 
-  it("Instagram gets comment + DM (no review)", () => {
-    const conv = makeConversation({ provider: "INSTAGRAM", email: null, phone: null });
+  it("Instagram gets comment only — DMs explicitly out of scope (IG-03)", () => {
+    // Post-IG-03: private Instagram DMs are NOT in this App Review
+    // pass, so REPLY_DM is no longer offered for IG conversations.
+    // Public comment reply stays in the action list because OAuth
+    // requests instagram_business_manage_comments — but it's
+    // pinned to false with an honest "requires implementation and
+    // approval" reason until the send path is wired. The inbound
+    // message needs an externalMessageId so the resolver doesn't
+    // short-circuit on "no comment to reply to".
+    const conv = makeConversation({
+      provider: "INSTAGRAM",
+      email: null,
+      phone: null,
+      messages: [
+        { party: "CONTACT", externalMessageId: "ig_comment_17856789012345678", sourceUrl: null },
+      ],
+    });
     const actions = getAvailableReplyActions(conv);
-    expect(findAction(actions, "REPLY_PUBLIC_COMMENT")).toBeTruthy();
-    expect(findAction(actions, "REPLY_DM")).toBeTruthy();
+    const commentAction = findAction(actions, "REPLY_PUBLIC_COMMENT");
+    expect(commentAction).toBeTruthy();
+    expect(commentAction.available).toBe(false);
+    expect(commentAction.reason).toContain("instagram_business_manage_comments");
+    expect(findAction(actions, "REPLY_DM")).toBeNull();
     expect(findAction(actions, "REPLY_REVIEW")).toBeNull();
   });
 });

@@ -145,10 +145,33 @@ describe("providerCapabilities — scope hygiene", () => {
     expect(fb.missingScopes).toContain("pages_messaging");
   });
 
-  it("Instagram comments / DMs are gated on instagram_manage_*", () => {
+  it("Instagram requests the four instagram_business_* scopes; missingScopes is empty (IG-03)", () => {
+    // Post-IG-03: OAuth requests instagram_business_manage_comments
+    // directly so it's no longer "missing". Private DMs are
+    // explicitly out of scope — no instagram_business_manage_messages
+    // style scope is requested in this App Review pass. Pin the
+    // four-scope shape so a regression to the legacy scope set
+    // (instagram_basic / instagram_content_publish /
+    // instagram_manage_insights / Page scopes) trips this test.
     const ig = providerCapabilities.INSTAGRAM;
-    expect(ig.missingScopes).toContain("instagram_manage_comments");
-    expect(ig.missingScopes).toContain("instagram_manage_messages");
+    expect(ig.currentScopes).toEqual([
+      "instagram_business_basic",
+      "instagram_business_content_publish",
+      "instagram_business_manage_insights",
+      "instagram_business_manage_comments",
+    ]);
+    expect(ig.missingScopes).toEqual([]);
+    // Legacy scopes must not appear in either list.
+    for (const legacy of [
+      "instagram_basic",
+      "instagram_content_publish",
+      "instagram_manage_insights",
+      "instagram_manage_comments",
+      "instagram_manage_messages",
+    ]) {
+      expect(ig.currentScopes).not.toContain(legacy);
+      expect(ig.missingScopes).not.toContain(legacy);
+    }
   });
 
   // spinstr416 — youtube.force-ssl is now in the requested scope

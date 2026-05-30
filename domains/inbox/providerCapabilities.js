@@ -111,29 +111,51 @@ export const providerCapabilities = {
 
   INSTAGRAM: {
     label: "Instagram (Business)",
-    ingestComments: false,   // needs instagram_manage_comments
-    ingestDMs: false,        // needs instagram_manage_messages
+    // Comments ingestion is blocked on (a) Meta App Review for the
+    // new `instagram_business_manage_comments` scope landing, and
+    // (b) the Instagram comments webhook subscription being added
+    // to the Meta App Dashboard. Once both flip, the existing
+    // Meta webhook receiver in inbox.meta.webhook.routes.js can
+    // dispatch IG comment payloads through the same ingestion
+    // service used for FB Page comments.
+    ingestComments: false,
+    // PRIVATE Instagram DMs are intentionally out of scope for the
+    // current App Review submission — we are not requesting any
+    // instagram_manage_messages style scope. Keep this false until
+    // the product decision changes and a separate App Review for
+    // DMs lands.
+    ingestDMs: false,
     ingestReviews: false,
+    // Public comment reply send path is not yet implemented in the
+    // codebase (no outbound IG adapter mirroring threadsAdapter /
+    // youtube comments.insert). Resolver surfaces an honest
+    // "requires implementation and approval" reason.
     sendPublicReply: false,
     sendDM: false,
     sendReview: false,
-    webhooks: true,          // via Meta — same webhook system
+    webhooks: true,                   // via Meta — same webhook system
     polling: true,
+    // Post-IG-OAuth-migration (Prompts 01-02) the Instagram channel
+    // requests the new Instagram Login / Business Login scope
+    // family. Page scopes intentionally NOT here — Facebook Page
+    // scopes still live on the FACEBOOK entry. Keep this list in
+    // sync with INSTAGRAM_SCOPES in
+    // domains/studio/oauth/instagram.oauth.js.
     currentScopes: [
-      "instagram_basic",
-      "instagram_content_publish",
-      "instagram_manage_insights",
-      "pages_show_list",
-      "pages_read_engagement",
-      "business_management",
+      "instagram_business_basic",
+      "instagram_business_content_publish",
+      "instagram_business_manage_insights",
+      "instagram_business_manage_comments",
     ],
-    missingScopes: [
-      "instagram_manage_comments",
-      "instagram_manage_messages",
-    ],
-    appReviewStatus: "submitted",    // basic + insights in flight
+    // No DM / message scopes here — we are not asking for private
+    // Instagram DMs in this App Review pass. Comments-related
+    // scopes are now in `currentScopes` (we ask for them at OAuth
+    // time); the remaining gates are app-review approval + the
+    // ingestion adapter implementation, not a missing scope.
+    missingScopes: [],
+    appReviewStatus: "submitted",
     notes:
-      "Publishing + insights work. Inbox needs two more scopes + Meta Webhooks subscriptions for Comments and Messages.",
+      "OAuth now requests instagram_business_manage_comments alongside basic + content_publish + manage_insights. Comments ingestion adapter not yet wired (Meta webhook receiver currently dispatches FB Page comments only). Public comment reply send path also not yet wired; resolver surfaces an honest 'requires implementation and approval' message. Private DMs explicitly out of scope.",
   },
 
   GOOGLE_BUSINESS: {
