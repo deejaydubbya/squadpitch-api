@@ -66,6 +66,18 @@ describe("buildAuthUrl", () => {
     expect(url).not.toContain("facebook.com");
   });
 
+  it("includes force_reauth=true so previously-authorized accounts always see the consent dialog", async () => {
+    // Without this param, Instagram tries to reuse a stale
+    // session/cookie from the legacy Facebook-Login-via-Page flow
+    // and returns "Invalid platform app" on accounts that had
+    // previously authorized the old app. Meta's own dashboard
+    // recommends including this param for Business Login.
+    const mod = await loadFreshModule();
+    const url = mod.buildAuthUrl({ state: "abc" });
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get("force_reauth")).toBe("true");
+  });
+
   it("emits the four business scopes and no legacy scope", async () => {
     const mod = await loadFreshModule();
     const url = mod.buildAuthUrl({ state: "abc" });

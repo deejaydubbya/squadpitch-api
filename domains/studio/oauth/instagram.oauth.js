@@ -138,6 +138,16 @@ export function buildAuthUrl({ state }) {
     state,
     scope: INSTAGRAM_SCOPES.join(SCOPE_SEPARATOR),
     response_type: "code",
+    // force_reauth=true tells Instagram to ALWAYS render the
+    // consent dialog instead of silently re-issuing a code when
+    // the user has already authorized the app. Without this, the
+    // Business Login flow returns "Invalid platform app" on some
+    // accounts that previously authorized the legacy Facebook-
+    // Login-via-Page flow — Instagram tries to reuse the old
+    // session/cookie and the platform-app mismatch trips its
+    // validator. Meta's own dashboard recommends including it
+    // for the Business Login launcher URL.
+    force_reauth: "true",
   });
   return `${INSTAGRAM_AUTH_HOST}/oauth/authorize?${params.toString()}`;
 }
