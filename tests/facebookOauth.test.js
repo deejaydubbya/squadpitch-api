@@ -30,9 +30,13 @@ afterEach(() => {
 });
 
 describe("FACEBOOK_SCOPES", () => {
-  it("is exactly the six target Page scopes (IG-05)", async () => {
+  it("is exactly the seven target scopes (public_profile + six Page scopes)", async () => {
+    // Meta App Review submission scope shape, in order. Audit pass
+    // 2026-05-30 added public_profile to align with Meta's default
+    // Facebook Login identity requirement.
     const { fb } = await loadModules();
     expect(fb.FACEBOOK_SCOPES).toEqual([
+      "public_profile",
       "pages_show_list",
       "pages_read_engagement",
       "pages_manage_posts",
@@ -72,13 +76,14 @@ describe("FACEBOOK_SCOPES", () => {
 });
 
 describe("Facebook buildAuthUrl", () => {
-  it("uses facebook.com (Facebook Login) and emits all six scopes", async () => {
+  it("uses facebook.com (Facebook Login) and emits all seven scopes", async () => {
     const { fb } = await loadModules();
     const url = fb.buildAuthUrl({ state: "abc" });
     expect(url.startsWith("https://www.facebook.com/")).toBe(true);
     expect(url).toContain("dialog/oauth");
     const parsed = new URL(url);
     const scope = parsed.searchParams.get("scope") ?? "";
+    expect(scope).toContain("public_profile");
     expect(scope).toContain("pages_show_list");
     expect(scope).toContain("pages_read_engagement");
     expect(scope).toContain("pages_manage_posts");

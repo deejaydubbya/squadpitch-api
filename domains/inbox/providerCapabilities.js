@@ -106,9 +106,11 @@ export const providerCapabilities = {
     webhooks: true,          // Meta Webhooks (Page subscriptions)
     polling: true,           // fallback
     // Keep in sync with FACEBOOK_SCOPES in
-    // domains/studio/oauth/facebook.oauth.js. The six-scope shape is
-    // the full target set for App Review.
+    // domains/studio/oauth/facebook.oauth.js. The seven-scope shape
+    // is the full target set for App Review (public_profile +
+    // six Page scopes).
     currentScopes: [
+      "public_profile",
       "pages_show_list",
       "pages_read_engagement",
       "pages_manage_posts",

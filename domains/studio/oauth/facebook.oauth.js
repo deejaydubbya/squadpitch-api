@@ -39,9 +39,11 @@ function getFacebookRedirectUri() {
 // dialog — keep this list in sync with
 // `providerCapabilities.FACEBOOK.currentScopes`.
 //
+//   public_profile           — default Facebook user identity; required
+//                              by Meta's Facebook Login default profile
 //   pages_show_list          — lets the user select a Page they manage
-//   pages_manage_posts       — publishes approved Page posts
 //   pages_read_engagement    — sync Page-level analytics (companion to read_insights)
+//   pages_manage_posts       — publishes approved Page posts
 //   read_insights            — sync Page + post analytics
 //   pages_read_user_content  — reads public comments/replies on Page content (Inbox ingestion)
 //   pages_manage_engagement  — replies to / manages public comments (Inbox outbound)
@@ -51,6 +53,7 @@ function getFacebookRedirectUri() {
 // are not requesting Facebook private DMs in this App Review pass.
 // Same posture as Instagram — public comments only.
 export const FACEBOOK_SCOPES = [
+  "public_profile",
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_posts",

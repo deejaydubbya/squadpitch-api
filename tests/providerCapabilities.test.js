@@ -138,15 +138,15 @@ describe("providerCapabilities — scope hygiene", () => {
     expect(providerCapabilities.LINKEDIN_ORG.missingScopes).toEqual([]);
   });
 
-  it("Facebook requests the six Page scopes; missingScopes is empty; DMs out of scope (IG-05)", () => {
-    // Post-IG-05: OAuth now requests pages_read_user_content +
-    // pages_manage_engagement directly so they're no longer
-    // "missing". Private DMs are explicitly out of scope — no
-    // pages_messaging / pages_messaging_subscriptions in this
-    // App Review pass. Pin the exact six-scope shape so a
+  it("Facebook requests public_profile + six Page scopes; missingScopes empty; DMs out of scope", () => {
+    // Audit 2026-05-30: OAuth requests public_profile alongside
+    // the six Page scopes. Private DMs are explicitly out of scope
+    // — no pages_messaging / pages_messaging_subscriptions in this
+    // App Review pass. Pin the exact seven-scope shape so a
     // regression trips this test.
     const fb = providerCapabilities.FACEBOOK;
     expect(fb.currentScopes).toEqual([
+      "public_profile",
       "pages_show_list",
       "pages_read_engagement",
       "pages_manage_posts",
