@@ -216,12 +216,16 @@ describe("getAvailableReplyActions — Facebook conversation", () => {
     const comment = findAction(actions, "REPLY_PUBLIC_COMMENT");
     expect(comment).toBeTruthy();
     expect(comment.available).toBe(false);
-    expect(comment.requiresConfig).toBe(true);
-    // After spinstr10 the resolver surfaces the specific missing
-    // scopes via the providerCapabilities matrix instead of a
-    // generic "Facebook isn't connected" message.
-    expect(comment.reason).toMatch(/Meta App Review/i);
+    // Post-IG-05: providerCapabilities.FACEBOOK.missingScopes is
+    // empty (we now request pages_read_user_content +
+    // pages_manage_engagement at OAuth time), and the resolver
+    // has an explicit FACEBOOK branch that mirrors the IG-03
+    // honest "scope + implementation pending" message. There's
+    // nothing for the user to configure on their end, so
+    // requiresConfig is false.
+    expect(comment.requiresConfig).toBe(false);
     expect(comment.reason).toMatch(/pages_manage_engagement/);
+    expect(comment.reason).toMatch(/implementation and approval/i);
 
     const dm = findAction(actions, "REPLY_DM");
     expect(dm).toBeTruthy();

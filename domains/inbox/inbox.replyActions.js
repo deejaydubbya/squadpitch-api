@@ -272,6 +272,18 @@ export function getAvailableReplyActions(conversation, extras = {}) {
       reason =
         "Instagram public comment replies require implementation and approval for `instagram_business_manage_comments`.";
       requiresConfig = false;
+    } else if (provider === "FACEBOOK") {
+      // IG-05 — OAuth now requests pages_read_user_content +
+      // pages_manage_engagement so they're no longer "missing"
+      // scopes per providerCapabilities. But: (1) Meta App Review
+      // hasn't approved them yet, and (2) we haven't wired the
+      // outbound FB comment-reply send path (no
+      // `POST /{comment-id}/comments` adapter today). Mirror the
+      // honest IG-03 message instead of falling through to a
+      // generic "isn't connected yet".
+      reason =
+        "Facebook public comment replies require implementation and approval for `pages_manage_engagement`.";
+      requiresConfig = false;
     } else if (scopeBlocker) {
       reason = scopeBlocker;
     } else {

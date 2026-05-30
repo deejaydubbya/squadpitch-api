@@ -138,11 +138,28 @@ describe("providerCapabilities — scope hygiene", () => {
     expect(providerCapabilities.LINKEDIN_ORG.missingScopes).toEqual([]);
   });
 
-  it("Facebook comments / DMs are gated on the right missing scopes", () => {
+  it("Facebook requests the six Page scopes; missingScopes is empty; DMs out of scope (IG-05)", () => {
+    // Post-IG-05: OAuth now requests pages_read_user_content +
+    // pages_manage_engagement directly so they're no longer
+    // "missing". Private DMs are explicitly out of scope — no
+    // pages_messaging / pages_messaging_subscriptions in this
+    // App Review pass. Pin the exact six-scope shape so a
+    // regression trips this test.
     const fb = providerCapabilities.FACEBOOK;
-    expect(fb.missingScopes).toContain("pages_read_user_content");
-    expect(fb.missingScopes).toContain("pages_manage_engagement");
-    expect(fb.missingScopes).toContain("pages_messaging");
+    expect(fb.currentScopes).toEqual([
+      "pages_show_list",
+      "pages_read_engagement",
+      "pages_manage_posts",
+      "read_insights",
+      "pages_read_user_content",
+      "pages_manage_engagement",
+    ]);
+    expect(fb.missingScopes).toEqual([]);
+    // No DM scopes anywhere.
+    for (const dm of ["pages_messaging", "pages_messaging_subscriptions"]) {
+      expect(fb.currentScopes).not.toContain(dm);
+      expect(fb.missingScopes).not.toContain(dm);
+    }
   });
 
   it("Instagram requests the four instagram_business_* scopes; missingScopes is empty (IG-03)", () => {

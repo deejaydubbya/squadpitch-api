@@ -1,9 +1,21 @@
-// Meta (Facebook Login) -> Facebook Page publishing OAuth flow.
+// Meta (Facebook Login) -> Facebook Page publishing + comments OAuth flow.
 //
-// Shares META_APP_ID / META_APP_SECRET with Instagram — both use the
-// Facebook Login dialog. The difference is in scopes (page management
-// instead of IG content publish) and what we store: the Facebook Page ID
-// and page access token rather than an IG Business account.
+// IMPORTANT: this is INTENTIONALLY separate from the Instagram flow.
+// Post-Prompts-01..02 the Instagram channel migrated to direct
+// Instagram Login / Business Login with the instagram_business_*
+// scope family (see `instagram.oauth.js`). The Facebook channel
+// stays on Facebook Login with Page scopes because Facebook Page
+// publishing + Page Insights + Page comments still happen against
+// graph.facebook.com with a Page access token.
+//
+// Shares META_APP_ID / META_APP_SECRET with Instagram historically;
+// the Instagram side now also accepts INSTAGRAM_APP_* with a META_*
+// fallback, so a future split into separate Meta apps is a config
+// change only.
+//
+// What we store on the Facebook ChannelConnection: the Page id as
+// externalAccountId and the Page access token (NOT the user token —
+// publishing/insights/comments calls authenticate against the Page).
 
 import { env } from "../../../config/env.js";
 import { META_GRAPH_VERSION, META_GRAPH_BASE } from "../meta.constants.js";
@@ -22,11 +34,29 @@ function getFacebookRedirectUri() {
   );
 }
 
+// Full target Facebook Page scope set. Each entry is what the App
+// Review submission lists and what the user sees on the consent
+// dialog — keep this list in sync with
+// `providerCapabilities.FACEBOOK.currentScopes`.
+//
+//   pages_show_list          — lets the user select a Page they manage
+//   pages_manage_posts       — publishes approved Page posts
+//   pages_read_engagement    — sync Page-level analytics (companion to read_insights)
+//   read_insights            — sync Page + post analytics
+//   pages_read_user_content  — reads public comments/replies on Page content (Inbox ingestion)
+//   pages_manage_engagement  — replies to / manages public comments (Inbox outbound)
+//
+// NOTE: Messenger / DM scopes (`pages_messaging`,
+// `pages_messaging_subscriptions`) are intentionally NOT here. We
+// are not requesting Facebook private DMs in this App Review pass.
+// Same posture as Instagram — public comments only.
 export const FACEBOOK_SCOPES = [
-  "pages_manage_posts",
-  "pages_read_engagement",
   "pages_show_list",
+  "pages_read_engagement",
+  "pages_manage_posts",
   "read_insights",
+  "pages_read_user_content",
+  "pages_manage_engagement",
 ];
 
 function assertConfigured() {

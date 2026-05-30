@@ -84,29 +84,45 @@ export const providerCapabilities = {
 
   FACEBOOK: {
     label: "Facebook Page",
-    ingestComments: false,   // would need pages_read_user_content + webhook subscription
-    ingestDMs: false,        // pages_messaging gated
-    ingestReviews: false,    // Recommendations API limited
-    sendPublicReply: false,  // pages_manage_engagement gated
-    sendDM: false,           // pages_messaging gated
+    // Comments ingestion is blocked on (a) Meta App Review approval
+    // for the comment scopes — pages_read_user_content +
+    // pages_manage_engagement are now requested at OAuth time
+    // (IG-05) — and (b) the FB Page comments webhook subscription
+    // being added on the Meta App Dashboard. The Inbox webhook
+    // receiver (inbox.meta.webhook.routes.js) already accepts
+    // these payloads; ingestion + send flip on once Meta approves.
+    ingestComments: false,
+    // Facebook private DMs are intentionally OUT of scope in this
+    // App Review pass. We are not requesting pages_messaging /
+    // pages_messaging_subscriptions. Same posture as Instagram.
+    ingestDMs: false,
+    ingestReviews: false,
+    // pages_manage_engagement is requested but not yet approved —
+    // and we haven't wired the outbound FB comment-reply send path
+    // (no `POST /{comment-id}/comments` adapter today).
+    sendPublicReply: false,
+    sendDM: false,
     sendReview: false,
     webhooks: true,          // Meta Webhooks (Page subscriptions)
     polling: true,           // fallback
+    // Keep in sync with FACEBOOK_SCOPES in
+    // domains/studio/oauth/facebook.oauth.js. The six-scope shape is
+    // the full target set for App Review.
     currentScopes: [
-      "pages_manage_posts",
-      "pages_read_engagement",
       "pages_show_list",
+      "pages_read_engagement",
+      "pages_manage_posts",
       "read_insights",
+      "pages_read_user_content",
+      "pages_manage_engagement",
     ],
-    missingScopes: [
-      "pages_read_user_content",     // comments + reactions read
-      "pages_manage_engagement",     // hide/reply to comments
-      "pages_messaging",             // DM read + send (24h response window)
-      "pages_messaging_subscriptions", // DM webhooks
-    ],
-    appReviewStatus: "submitted",    // pages_read_engagement + read_insights in flight
+    // No DM scopes here — explicitly out of scope. The remaining
+    // gates on comments are App Review approval + the outbound
+    // comment-reply adapter implementation, not a missing scope.
+    missingScopes: [],
+    appReviewStatus: "submitted",
     notes:
-      "Publishing works. Comments/DMs require Meta App Review for additional scopes. Use Meta Page Webhooks once granted. See docs/inbox-provider-capabilities.md.",
+      "Publishing + insights work. Comments scopes (pages_read_user_content + pages_manage_engagement) are requested at OAuth time and pending Meta App Review; ingestion + send flip on once approval lands and the FB Page comments webhook subscription is added on the Meta App Dashboard. Private DMs explicitly out of scope.",
   },
 
   INSTAGRAM: {
