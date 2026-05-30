@@ -87,13 +87,18 @@ describe("getAvailableReplyActions — Instagram public comment reply (post-IG-0
     };
   }
 
-  it("renders REPLY_PUBLIC_COMMENT with an honest scope+impl message", () => {
+  it("renders REPLY_PUBLIC_COMMENT with Connect-Instagram copy when no IG connection is loaded", () => {
+    // Post-outbound-adapter (audit follow-up): the resolver now
+    // gates on the connection + scope. Without an instagramConnection
+    // in extras it surfaces the truthful "Connect Instagram" CTA
+    // (was: the pre-implementation "requires implementation and
+    // approval" message).
     const actions = getAvailableReplyActions(makeIgConversation());
     const reply = actions.find((a) => a.action === "REPLY_PUBLIC_COMMENT");
     expect(reply).toBeDefined();
     expect(reply.available).toBe(false);
-    expect(reply.reason).toContain("instagram_business_manage_comments");
-    expect(reply.reason).toContain("require");
+    expect(reply.requiresConfig).toBe(true);
+    expect(reply.reason).toMatch(/Connect Instagram/i);
   });
 
   it("never surfaces the legacy instagram_manage_comments scope in the reason", () => {

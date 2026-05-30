@@ -28,6 +28,8 @@ import { sendInboxEmail } from "./inbox.outbound.email.service.js";
 import { sendGbpReviewReply } from "./inbox.outbound.gbp.service.js";
 import { sendYouTubeCommentReply } from "./inbox.outbound.youtube.service.js";
 import { sendThreadsReply } from "./inbox.outbound.threads.service.js";
+import { sendFacebookCommentReply } from "./inbox.outbound.facebook.service.js";
+import { sendInstagramCommentReply } from "./inbox.outbound.instagram.service.js";
 import { sendInboxSms } from "./inbox.outbound.sms.service.js";
 
 export const inboxRouter = express.Router();
@@ -520,9 +522,9 @@ inboxRouter.post(
 
       // Provider-aware dispatch — same composer button maps to a
       // different outbound service per Conversation.provider. Today:
-      // YOUTUBE is wired. LINKEDIN stays gated (resolver short-
-      // circuits before the user can click); other providers
-      // return 412.
+      // YOUTUBE, THREADS, FACEBOOK, INSTAGRAM are wired. LINKEDIN
+      // stays gated (resolver short-circuits before the user can
+      // click); other providers return 412.
       const { prisma } = await import("../../prisma.js");
       const conv = await prisma.conversation.findFirst({
         where: { id: req.params.conversationId, clientId: req.params.id },
@@ -536,7 +538,11 @@ inboxRouter.post(
           ? "youtube_comment"
           : conv.provider === "THREADS"
             ? "threads_reply"
-            : "comment_reply";
+            : conv.provider === "FACEBOOK"
+              ? "facebook_comment"
+              : conv.provider === "INSTAGRAM"
+                ? "instagram_comment"
+                : "comment_reply";
       await auditOutboundAttempt(req, auditKind, req.params.conversationId, "attempt");
       let message;
       try {
@@ -549,6 +555,20 @@ inboxRouter.post(
           );
         } else if (conv.provider === "THREADS") {
           message = await sendThreadsReply(
+            req.params.id,
+            req.params.conversationId,
+            getAuth0Sub(req),
+            { body, idempotencyKey },
+          );
+        } else if (conv.provider === "FACEBOOK") {
+          message = await sendFacebookCommentReply(
+            req.params.id,
+            req.params.conversationId,
+            getAuth0Sub(req),
+            { body, idempotencyKey },
+          );
+        } else if (conv.provider === "INSTAGRAM") {
+          message = await sendInstagramCommentReply(
             req.params.id,
             req.params.conversationId,
             getAuth0Sub(req),

@@ -165,10 +165,49 @@ export async function getConversation(clientId, conversationId) {
           },
         })
       : null;
+  // Same pre-load for Facebook — the resolver needs scopes +
+  // status to decide whether REPLY_PUBLIC_COMMENT is wireable
+  // (gated on pages_manage_engagement in the granted scopes).
+  const facebookConnection =
+    row.provider === "FACEBOOK"
+      ? await prisma.channelConnection.findUnique({
+          where: {
+            clientId_channel: { clientId, channel: "FACEBOOK" },
+          },
+          select: {
+            id: true,
+            status: true,
+            externalAccountId: true,
+            scopes: true,
+            lastError: true,
+          },
+        })
+      : null;
+  // Same pre-load for Instagram — the resolver needs scopes +
+  // status to decide whether REPLY_PUBLIC_COMMENT is wireable
+  // (gated on instagram_business_manage_comments in the granted
+  // scopes).
+  const instagramConnection =
+    row.provider === "INSTAGRAM"
+      ? await prisma.channelConnection.findUnique({
+          where: {
+            clientId_channel: { clientId, channel: "INSTAGRAM" },
+          },
+          select: {
+            id: true,
+            status: true,
+            externalAccountId: true,
+            scopes: true,
+            lastError: true,
+          },
+        })
+      : null;
   const availableReplyActions = getAvailableReplyActions(row, {
     gbpConnection,
     youtubeConnection,
     threadsConnection,
+    facebookConnection,
+    instagramConnection,
   });
 
   // Stamp workspaceReadAt as a side effect of viewing — flips

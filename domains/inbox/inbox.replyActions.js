@@ -113,6 +113,16 @@ const LINKEDIN_COMMUNITY_API_PENDING_REASON =
  *                                decide whether REPLY_PUBLIC_COMMENT for a
  *                                YouTube conversation is wireable today
  *                                (gated on youtube.force-ssl in scopes).
+ *                                { facebookConnection? } — the workspace's
+ *                                FACEBOOK ChannelConnection row. Used to
+ *                                decide whether REPLY_PUBLIC_COMMENT for a
+ *                                FB conversation is wireable today (gated
+ *                                on pages_manage_engagement in scopes).
+ *                                { instagramConnection? } — the workspace's
+ *                                INSTAGRAM ChannelConnection row. Used to
+ *                                decide whether REPLY_PUBLIC_COMMENT for an
+ *                                IG conversation is wireable today (gated
+ *                                on instagram_business_manage_comments).
  * @returns {Array<{action: string, label: string, available: boolean, reason: string|null, requiresConfig: boolean}>}
  */
 export function getAvailableReplyActions(conversation, extras = {}) {
@@ -262,28 +272,57 @@ export function getAvailableReplyActions(conversation, extras = {}) {
         requiresConfig = false;
       }
     } else if (provider === "INSTAGRAM") {
-      // OAuth requests `instagram_business_manage_comments` (Prompt
-      // 01) and the capability matrix flips to currentScopes after
-      // it lands. But: (1) Meta App Review hasn't approved the
-      // scope yet, and (2) we haven't wired the outbound Instagram
-      // comment-reply send path (no `POST /{comment-id}/replies`
-      // adapter today). Pin an honest reason rather than implying
-      // it'll work as soon as the user reconnects.
-      reason =
-        "Instagram public comment replies require implementation and approval for `instagram_business_manage_comments`.";
-      requiresConfig = false;
+      // Audit follow-up — the IG outbound comment-reply adapter
+      // (inbox.outbound.instagram.service.js) is now wired. Gate
+      // on a real connection that granted instagram_business_manage_comments;
+      // surface honest reconnect copy otherwise.
+      const ig = extras?.instagramConnection ?? null;
+      const hasScope =
+        ig
+        && ig.status === "CONNECTED"
+        && Array.isArray(ig.scopes)
+        && ig.scopes.includes("instagram_business_manage_comments");
+      if (!ig) {
+        reason = "Connect Instagram to reply to comments.";
+        requiresConfig = true;
+      } else if (ig.status !== "CONNECTED") {
+        reason = "Instagram connection needs to be reconnected.";
+        requiresConfig = true;
+      } else if (!hasScope) {
+        reason =
+          "Reconnect Instagram and grant the comment-reply permission (instagram_business_manage_comments).";
+        requiresConfig = true;
+      } else {
+        available = true;
+        reason = null;
+        requiresConfig = false;
+      }
     } else if (provider === "FACEBOOK") {
-      // IG-05 — OAuth now requests pages_read_user_content +
-      // pages_manage_engagement so they're no longer "missing"
-      // scopes per providerCapabilities. But: (1) Meta App Review
-      // hasn't approved them yet, and (2) we haven't wired the
-      // outbound FB comment-reply send path (no
-      // `POST /{comment-id}/comments` adapter today). Mirror the
-      // honest IG-03 message instead of falling through to a
-      // generic "isn't connected yet".
-      reason =
-        "Facebook public comment replies require implementation and approval for `pages_manage_engagement`.";
-      requiresConfig = false;
+      // Audit follow-up — the FB outbound comment-reply adapter
+      // (inbox.outbound.facebook.service.js) is now wired. Gate
+      // on a real connection that granted pages_manage_engagement;
+      // surface honest reconnect copy otherwise.
+      const fb = extras?.facebookConnection ?? null;
+      const hasScope =
+        fb
+        && fb.status === "CONNECTED"
+        && Array.isArray(fb.scopes)
+        && fb.scopes.includes("pages_manage_engagement");
+      if (!fb) {
+        reason = "Connect Facebook to reply to comments.";
+        requiresConfig = true;
+      } else if (fb.status !== "CONNECTED") {
+        reason = "Facebook connection needs to be reconnected.";
+        requiresConfig = true;
+      } else if (!hasScope) {
+        reason =
+          "Reconnect Facebook and grant the comment-reply permission (pages_manage_engagement).";
+        requiresConfig = true;
+      } else {
+        available = true;
+        reason = null;
+        requiresConfig = false;
+      }
     } else if (scopeBlocker) {
       reason = scopeBlocker;
     } else {

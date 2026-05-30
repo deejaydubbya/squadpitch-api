@@ -196,7 +196,11 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
 // ── Social provider ────────────────────────────────────────────────────
 
 describe("getAvailableReplyActions — Facebook conversation", () => {
-  it("offers REPLY_PUBLIC_COMMENT / REPLY_DM / REPLY_REVIEW (all disabled, no sender wired)", () => {
+  it("REPLY_PUBLIC_COMMENT defaults to Connect-Facebook copy when no FB connection is loaded", () => {
+    // Post-outbound-adapter (audit follow-up): the resolver now
+    // gates on the actual connection + pages_manage_engagement.
+    // No connection in extras → "Connect Facebook to reply" with
+    // requiresConfig=true so the FE renders a Connect button.
     const conv = makeConversation({
       provider: "FACEBOOK",
       email: null,
@@ -216,16 +220,8 @@ describe("getAvailableReplyActions — Facebook conversation", () => {
     const comment = findAction(actions, "REPLY_PUBLIC_COMMENT");
     expect(comment).toBeTruthy();
     expect(comment.available).toBe(false);
-    // Post-IG-05: providerCapabilities.FACEBOOK.missingScopes is
-    // empty (we now request pages_read_user_content +
-    // pages_manage_engagement at OAuth time), and the resolver
-    // has an explicit FACEBOOK branch that mirrors the IG-03
-    // honest "scope + implementation pending" message. There's
-    // nothing for the user to configure on their end, so
-    // requiresConfig is false.
-    expect(comment.requiresConfig).toBe(false);
-    expect(comment.reason).toMatch(/pages_manage_engagement/);
-    expect(comment.reason).toMatch(/implementation and approval/i);
+    expect(comment.requiresConfig).toBe(true);
+    expect(comment.reason).toMatch(/Connect Facebook/i);
 
     const dm = findAction(actions, "REPLY_DM");
     expect(dm).toBeTruthy();
@@ -236,6 +232,68 @@ describe("getAvailableReplyActions — Facebook conversation", () => {
     expect(review).toBeTruthy();
     expect(review.available).toBe(false);
     expect(review.requiresConfig).toBe(true);
+  });
+
+  it("REPLY_PUBLIC_COMMENT flips to available when FB connection grants pages_manage_engagement", () => {
+    const conv = makeConversation({
+      provider: "FACEBOOK",
+      email: null,
+      phone: null,
+      messages: [
+        { id: "m-1", party: "CONTACT", externalMessageId: "fb-comment-1" },
+      ],
+    });
+    const actions = getAvailableReplyActions(conv, {
+      facebookConnection: {
+        id: "conn-fb-1",
+        status: "CONNECTED",
+        externalAccountId: "100000000000001",
+        scopes: [
+          "public_profile",
+          "pages_show_list",
+          "pages_read_engagement",
+          "pages_manage_posts",
+          "read_insights",
+          "pages_read_user_content",
+          "pages_manage_engagement",
+        ],
+      },
+    });
+    const comment = findAction(actions, "REPLY_PUBLIC_COMMENT");
+    expect(comment.available).toBe(true);
+    expect(comment.reason).toBeNull();
+    expect(comment.requiresConfig).toBe(false);
+  });
+
+  it("REPLY_PUBLIC_COMMENT stays disabled with reconnect copy when pages_manage_engagement is NOT granted", () => {
+    const conv = makeConversation({
+      provider: "FACEBOOK",
+      email: null,
+      phone: null,
+      messages: [
+        { id: "m-1", party: "CONTACT", externalMessageId: "fb-comment-1" },
+      ],
+    });
+    const actions = getAvailableReplyActions(conv, {
+      facebookConnection: {
+        id: "conn-fb-1",
+        status: "CONNECTED",
+        externalAccountId: "100000000000001",
+        scopes: [
+          "public_profile",
+          "pages_show_list",
+          "pages_read_engagement",
+          "pages_manage_posts",
+          "read_insights",
+          // pages_manage_engagement intentionally missing
+        ],
+      },
+    });
+    const comment = findAction(actions, "REPLY_PUBLIC_COMMENT");
+    expect(comment.available).toBe(false);
+    expect(comment.requiresConfig).toBe(true);
+    expect(comment.reason).toMatch(/pages_manage_engagement/);
+    expect(comment.reason).toMatch(/Reconnect Facebook/i);
   });
 
   it("REPLY_PUBLIC_COMMENT explains there's nothing to reply to when no externalMessageId", () => {
@@ -575,15 +633,12 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     expect(action.reason).toMatch(/Pending LinkedIn Community Management API approval/i);
   });
 
-  it("Instagram gets comment only — DMs explicitly out of scope (IG-03)", () => {
-    // Post-IG-03: private Instagram DMs are NOT in this App Review
-    // pass, so REPLY_DM is no longer offered for IG conversations.
-    // Public comment reply stays in the action list because OAuth
-    // requests instagram_business_manage_comments — but it's
-    // pinned to false with an honest "requires implementation and
-    // approval" reason until the send path is wired. The inbound
-    // message needs an externalMessageId so the resolver doesn't
-    // short-circuit on "no comment to reply to".
+  it("Instagram gets comment only — DMs out of scope; defaults to Connect-Instagram copy when no connection", () => {
+    // Post-outbound-adapter: DMs still out of scope (IG-03 lock).
+    // REPLY_PUBLIC_COMMENT stays in the action list because OAuth
+    // requests instagram_business_manage_comments. With no
+    // connection passed in extras the resolver returns the
+    // Connect-Instagram copy with requiresConfig=true.
     const conv = makeConversation({
       provider: "INSTAGRAM",
       email: null,
@@ -596,9 +651,68 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     const commentAction = findAction(actions, "REPLY_PUBLIC_COMMENT");
     expect(commentAction).toBeTruthy();
     expect(commentAction.available).toBe(false);
-    expect(commentAction.reason).toContain("instagram_business_manage_comments");
+    expect(commentAction.requiresConfig).toBe(true);
+    expect(commentAction.reason).toMatch(/Connect Instagram/i);
     expect(findAction(actions, "REPLY_DM")).toBeNull();
     expect(findAction(actions, "REPLY_REVIEW")).toBeNull();
+  });
+
+  it("Instagram REPLY_PUBLIC_COMMENT flips to available when connection grants instagram_business_manage_comments", () => {
+    const conv = makeConversation({
+      provider: "INSTAGRAM",
+      email: null,
+      phone: null,
+      messages: [
+        { party: "CONTACT", externalMessageId: "ig_comment_17856789012345678" },
+      ],
+    });
+    const actions = getAvailableReplyActions(conv, {
+      instagramConnection: {
+        id: "conn-ig-1",
+        status: "CONNECTED",
+        externalAccountId: "17841444444444444",
+        scopes: [
+          "instagram_business_basic",
+          "instagram_business_content_publish",
+          "instagram_business_manage_insights",
+          "instagram_business_manage_comments",
+        ],
+      },
+    });
+    const comment = findAction(actions, "REPLY_PUBLIC_COMMENT");
+    expect(comment.available).toBe(true);
+    expect(comment.reason).toBeNull();
+    expect(comment.requiresConfig).toBe(false);
+  });
+
+  it("Instagram REPLY_PUBLIC_COMMENT stays disabled with reconnect copy on legacy-only scope set", () => {
+    const conv = makeConversation({
+      provider: "INSTAGRAM",
+      email: null,
+      phone: null,
+      messages: [
+        { party: "CONTACT", externalMessageId: "ig_comment_17856789012345678" },
+      ],
+    });
+    const actions = getAvailableReplyActions(conv, {
+      instagramConnection: {
+        id: "conn-ig-1",
+        status: "CONNECTED",
+        externalAccountId: "17841444444444444",
+        scopes: [
+          // Pre-migration scope set — should NOT satisfy the gate.
+          "instagram_basic",
+          "instagram_content_publish",
+          "instagram_manage_insights",
+          "instagram_manage_comments",
+        ],
+      },
+    });
+    const comment = findAction(actions, "REPLY_PUBLIC_COMMENT");
+    expect(comment.available).toBe(false);
+    expect(comment.requiresConfig).toBe(true);
+    expect(comment.reason).toMatch(/instagram_business_manage_comments/);
+    expect(comment.reason).toMatch(/Reconnect Instagram/i);
   });
 });
 

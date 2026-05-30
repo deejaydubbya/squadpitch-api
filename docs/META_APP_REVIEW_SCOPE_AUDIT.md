@@ -8,28 +8,23 @@
 
 ## 1. Executive Summary
 
-**Status: NOT READY for the App Review video.**
+**Status: READY for the App Review video (after the staging env / Meta App Dashboard checklist in § 6).**
 
-OAuth scope arrays + analytics + publishing + comment ingestion are
-all wired correctly. The blocker is **outbound comment reply** for
-both Facebook (`pages_manage_engagement`) and Instagram
-(`instagram_business_manage_comments`): no send-path adapter
-exists in the codebase. The reply-action resolver honestly surfaces
-this as "requires implementation and approval".
+All three blockers from the original audit are resolved:
 
-If we submit and demo as-is, Meta reviewers will not see the
-comment-reply use case the new scopes were requested for. Two
-options:
+- **§1 RESOLVED** — `domains/inbox/inbox.outbound.facebook.service.js`
+  ships the outbound public-comment-reply adapter for Facebook
+  Pages, wired into the `/reply` route + the action resolver.
+- **§2 RESOLVED** — `domains/inbox/inbox.outbound.instagram.service.js`
+  ships the equivalent for Instagram (uses the IG Business Login
+  long-lived user token).
+- **§3** — still open (FB Page picker UX). NOT review-blocking when
+  the reviewer's test account manages only one Page.
 
-1. **Implement the two missing outbound adapters** before recording
-   the demo (see Blockers § below — both are small, ~150 LOC each
-   following the YouTube outbound adapter pattern).
-2. **Narrow the App Review submission** to drop `pages_manage_engagement`
-   and `instagram_business_manage_comments` for this pass; resubmit
-   the two scopes separately once the adapters land.
-
-Threads is fully wired but the reply send path is gated behind
-`THREADS_REPLY_ENABLED=false` by default. Flip the flag for the demo.
+OAuth scope arrays, publishing, analytics sync, comment ingestion,
+and comment reply are all wired end-to-end for FB + IG + Threads.
+Threads reply still gated behind `THREADS_REPLY_ENABLED=false` by
+default — flip the env flag for the demo.
 
 ---
 
@@ -77,11 +72,11 @@ Source of truth in code:
 | `pages_manage_posts` | FB | Publish to Page | `facebook.oauth.js:FACEBOOK_SCOPES` | `publishing/channelAdapters/facebook.adapter.js` | Planner publish flow + scheduled publish worker | **PASS** |
 | `read_insights` | FB | Page + post insights | `facebook.oauth.js:FACEBOOK_SCOPES` | `facebook.metrics.js` + `metaAppReviewChecks.service.js runFacebookPageInsightsCheck` | Analytics page + App Review checks button | **PASS** |
 | `pages_read_user_content` | FB | Read public Page comments | `facebook.oauth.js:FACEBOOK_SCOPES` | `inbox.meta.webhook.routes.js` → `inbox.meta.ingestion.service.js ingestPageFeedChange` | Inbox conversation list once `META_INBOX_INGESTION_ENABLED=true` | **NEEDS MANUAL DEMO** — works, gated by env flag |
-| `pages_manage_engagement` | FB | Reply to public Page comments | `facebook.oauth.js:FACEBOOK_SCOPES` | **MISSING** — no `inbox.outbound.facebook.service.js` | Resolver in `inbox.replyActions.js` returns honest "requires implementation and approval" message | **FAIL** — blocker §1 |
+| `pages_manage_engagement` | FB | Reply to public Page comments | `facebook.oauth.js:FACEBOOK_SCOPES` | `inbox.outbound.facebook.service.js sendFacebookCommentReply` → `POST graph.facebook.com/v19.0/{comment-id}/comments` with the Page access token | Inbox composer Reply button (resolver flips to `available: true` when scope present); route dispatches to FB branch in `inbox.routes.js` | **PASS** — outbound adapter shipped |
 | `instagram_business_basic` | IG | Connect IG Business/Creator account directly | `instagram.oauth.js:INSTAGRAM_SCOPES` | `instagram.oauth.js exchangeCode` `/me?fields=id,username,account_type` | OAuth consent → `ChannelConnectionCard` shows `@username` | **PASS** — no `/me/accounts` Page dependency |
 | `instagram_business_content_publish` | IG | Publish IG posts/Reels/media | `instagram.oauth.js:INSTAGRAM_SCOPES` | `publishing/channelAdapters/instagram.adapter.js` (2-step container + publish, polls until FINISHED) | Planner publish flow | **PASS** |
 | `instagram_business_manage_insights` | IG | IG account + media analytics | `instagram.oauth.js:INSTAGRAM_SCOPES` | `instagram.metrics.js` + `metaAppReviewChecks.service.js runInstagramInsightsCheck` | Analytics page + App Review checks button | **PASS** |
-| `instagram_business_manage_comments` | IG | Read + reply to public IG comments | `instagram.oauth.js:INSTAGRAM_SCOPES` | **Read**: `inbox.meta.ingestion.service.js ingestInstagramComment` ✅. **Reply**: MISSING — no `inbox.outbound.instagram.service.js` | Read path: Inbox once `META_INBOX_INGESTION_ENABLED=true`. Reply path: resolver returns honest "requires implementation and approval" | **FAIL** for reply — blocker §2. Read path PASS but gated. |
+| `instagram_business_manage_comments` | IG | Read + reply to public IG comments | `instagram.oauth.js:INSTAGRAM_SCOPES` | **Read**: `inbox.meta.ingestion.service.js ingestInstagramComment` ✅. **Reply**: `inbox.outbound.instagram.service.js sendInstagramCommentReply` → `POST graph.facebook.com/v19.0/{ig-comment-id}/replies` with the IG Business Login long-lived user token | Read path: Inbox once `META_INBOX_INGESTION_ENABLED=true`. Reply path: Inbox composer Reply button (resolver flips when scope present) | **PASS** — both read + reply adapters shipped |
 | `threads_basic` | Threads | Account identity | `threads.constants.js:THREADS_SCOPES` | `threads.oauth.js exchangeCode` | Connect via `ChannelConnectionCard` | **PASS** |
 | `threads_content_publish` | Threads | Publish posts | `threads.constants.js:THREADS_SCOPES` | `publishing/channelAdapters/threads.adapter.js` (`/me/threads` + `/me/threads_publish` + polls) | Planner publish flow | **PASS** |
 | `threads_manage_insights` | Threads | Sync analytics | `threads.constants.js:THREADS_SCOPES` | `metricsSync/threads.metrics.js` | Analytics page | **PASS** |
@@ -125,12 +120,12 @@ The 16 reviewer demo steps from the audit prompt, mapped to actual code:
 | 3 | Publish Facebook post | Planner → publish button OR scheduled-publish worker | `publishing/channelAdapters/facebook.adapter.js publishPost` | ✅ |
 | 4 | Sync/view Facebook analytics | `/workspaces/[id]/analytics` page + `MetaInsightsSyncButton` + `MetaAppReviewChecksButton` | `metricsSync/facebook.metrics.js` + `metaAppReviewChecks.service.js runFacebookPageInsightsCheck` | ✅ |
 | 5 | Ingest/read Facebook comment | Inbox `/workspaces/[id]/inbox` | `inbox.meta.webhook.routes.js` → `inbox.meta.ingestion.service.js ingestPageFeedChange` | ✅ **Needs `META_INBOX_INGESTION_ENABLED=true`** + Page comments webhook subscription on Meta App Dashboard |
-| 6 | Reply to Facebook comment | Inbox composer `Composer.tsx` | **MISSING** | ❌ **BLOCKER §1** — no `inbox.outbound.facebook.service.js` |
+| 6 | Reply to Facebook comment | Inbox composer `Composer.tsx` → POST `/api/v1/workspaces/:id/inbox/conversations/:cid/reply` | `inbox.outbound.facebook.service.js sendFacebookCommentReply` | ✅ |
 | 7 | Connect Instagram via Business Login | `ChannelConnectionCard` (INSTAGRAM) | `instagram.oauth.buildAuthUrl` → `instagram.com/oauth/authorize` | ✅ direct Instagram Login (not Facebook Login) |
 | 8 | Publish Instagram post | Planner → publish | `publishing/channelAdapters/instagram.adapter.js publishPost` | ✅ |
 | 9 | Sync/view Instagram analytics | `/workspaces/[id]/analytics` + `MetaAppReviewChecksButton` | `metricsSync/instagram.metrics.js` + `metaAppReviewChecks.service.js runInstagramInsightsCheck` | ✅ |
 | 10 | Ingest/read Instagram comment | Inbox | `inbox.meta.ingestion.service.js ingestInstagramComment` | ✅ **Needs `META_INBOX_INGESTION_ENABLED=true`** + Instagram `comments` field subscription on Meta App Dashboard |
-| 11 | Reply to Instagram comment | Inbox composer | **MISSING** | ❌ **BLOCKER §2** — no `inbox.outbound.instagram.service.js` |
+| 11 | Reply to Instagram comment | Inbox composer → POST `/api/v1/workspaces/:id/inbox/conversations/:cid/reply` | `inbox.outbound.instagram.service.js sendInstagramCommentReply` | ✅ |
 | 12 | Connect Threads | `ChannelConnectionCard` (THREADS) | `threads.oauth.buildAuthUrl` | ✅ |
 | 13 | Publish Threads post | Planner | `publishing/channelAdapters/threads.adapter.js` | ✅ |
 | 14 | Sync/view Threads analytics | `/workspaces/[id]/analytics` | `metricsSync/threads.metrics.js` | ✅ |
@@ -186,15 +181,18 @@ Set these on the **staging API** (and matching values on the web app) **before**
 
 ## 7. Test Results
 
-**API**: `npm test` → **1,343 / 1,343 passing** (vitest, 110 test files).
+**API**: `npm test` → **1,365 / 1,365 passing** (vitest, 112 test files).
 
 Relevant pinning tests for this audit:
 - `tests/facebookOauth.test.js` — seven-scope shape, no DM/IG leakage, FB/IG separation
 - `tests/instagramOauth.test.js` — four-scope shape, host = instagram.com, no `/me/accounts`
 - `tests/instagramRefresh.test.js` — adapter dispatcher routes IG to new adapter; 4xx → reconnect; 429/5xx throw transient
-- `tests/instagramInboxCapabilities.test.js` — capability matrix four-scope shape, no DM scopes, resolver honest message
+- `tests/instagramInboxCapabilities.test.js` — capability matrix four-scope shape, no DM scopes, resolver "Connect Instagram" copy when no connection
 - `tests/providerCapabilities.test.js` — pins FB seven-scope + IG four-scope shapes
 - `tests/metaAppReviewChecksScopes.test.js` — App Review check reports `instagram_business_manage_insights`
+- **`tests/inboxOutboundFacebook.test.js`** (NEW) — 12 tests: endpoint URL + Page-token payload, `pages_manage_engagement` gating, tenant scoping (cross-workspace → CONVERSATION_NOT_FOUND), Meta error code 10/190 → PROVIDER_FAILED, 5xx → PROVIDER_UNREACHABLE
+- **`tests/inboxOutboundInstagram.test.js`** (NEW) — 10 tests: `/replies` endpoint (not `/comments`), IG Business Login token usage, `instagram_business_manage_comments` gating with explicit rejection of the legacy `instagram_manage_comments` scope set, same error classification matrix
+- **`tests/inboxReplyActions.test.js`** (UPDATED) — pins the new resolver behavior for FB + IG (Connect / Reconnect copy when no connection or missing scope; `available: true` when scope present)
 
 **Web**: `npx vitest run` → **415 / 415 passing**. `next lint` → exit 0 (pre-existing warnings only). `next build` → exit 0.
 
@@ -204,31 +202,60 @@ No npm `lint` / `build` scripts exist in the API repo — noted in IG-06 verific
 
 ## 8. Blockers Before Submission
 
-### Blocker §1 — No Facebook comment-reply outbound adapter
+### ✅ Blocker §1 — Facebook comment-reply outbound adapter — RESOLVED
 
-**Symptom**: `pages_manage_engagement` is requested but no code can reply to a Facebook Page comment from the Inbox composer. Resolver returns *"Facebook public comment replies require implementation and approval for `pages_manage_engagement`."*
+Shipped `domains/inbox/inbox.outbound.facebook.service.js` (~250 LOC,
+mirrors `inbox.outbound.youtube.service.js`):
 
-**Fix scope**: ~150 LOC, mirrors `inbox.outbound.youtube.service.js`.
+- `sendFacebookCommentReply(clientId, conversationId, userId, { body, idempotencyKey })`
+- Resolves FACEBOOK ChannelConnection, validates `status === CONNECTED`
+  + `externalAccountId` + `pages_manage_engagement` in scopes.
+- Writes Message in `SENDING` state BEFORE the provider call so a
+  mid-flight crash still leaves an auditable row.
+- `POST https://graph.facebook.com/v19.0/{comment-id}/comments`
+  with `message` + the decrypted Page access token.
+- Idempotency: same key returns the existing Message instead of
+  double-posting.
+- Error classification: 4xx (incl. Meta codes 10/190/200/230) →
+  `PROVIDER_FAILED 502`; 5xx → `PROVIDER_UNREACHABLE 503`. FAILED
+  Message gets the error reason stored for the audit trail.
+- Wired into `/reply` route dispatch in `inbox.routes.js` (FB branch).
+- Resolver flipped in `inbox.replyActions.js` — when an FB connection
+  with `pages_manage_engagement` is loaded into `extras.facebookConnection`,
+  `REPLY_PUBLIC_COMMENT.available` is `true`; otherwise returns
+  "Connect Facebook" / "Reconnect Facebook" copy with `requiresConfig: true`.
 
-**Files to create**:
-1. `domains/inbox/inbox.outbound.facebook.service.js` — `sendFacebookCommentReply({ conversation, comment, body })`. Resolve the FB ChannelConnection, decrypt the Page access token, `POST https://graph.facebook.com/v19.0/{comment-id}/comments` with `message` + `access_token`, persist outbound Message + return.
-2. `domains/inbox/inbox.routes.js` — wire `sendFacebookCommentReply` into the existing reply route (look at how YouTube is dispatched today).
-3. `domains/inbox/inbox.replyActions.js` — flip the FACEBOOK branch so when a connection has `pages_manage_engagement` AND the env flag for replies is on, return `available: true` instead of the honest "requires implementation" message.
-4. `tests/inboxOutboundFacebook.test.js` — happy path + missing-scope + Meta error code 10/200/230 → AUTH_FAILED.
+Tests in `tests/inboxOutboundFacebook.test.js` (12 tests) cover
+endpoint URL + payload, scope gating, tenant scoping, error
+classification.
 
-### Blocker §2 — No Instagram comment-reply outbound adapter
+### ✅ Blocker §2 — Instagram comment-reply outbound adapter — RESOLVED
 
-**Symptom**: `instagram_business_manage_comments` is requested but no code can reply to an Instagram comment from the Inbox composer. Resolver returns *"Instagram public comment replies require implementation and approval for `instagram_business_manage_comments`."*
+Shipped `domains/inbox/inbox.outbound.instagram.service.js` (~250 LOC):
 
-**Fix scope**: ~150 LOC, mirrors `inbox.outbound.youtube.service.js`. Use the Instagram Login token (NOT a Page token) since OAuth migrated to direct Business Login in IG-01.
+- `sendInstagramCommentReply(clientId, conversationId, userId, { body, idempotencyKey })`
+- Resolves INSTAGRAM ChannelConnection, validates
+  `instagram_business_manage_comments` in scopes (the new Business
+  Login scope; rejects connections that only carry legacy `instagram_manage_comments`).
+- Token refresh via `ensureValidAccessToken` → routes through
+  `instagramRefresh` (`graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token`).
+- `POST https://graph.facebook.com/v19.0/{ig-comment-id}/replies`
+  with `message` + the decrypted long-lived IG user token (NOT a
+  Page token). Endpoint stays on `graph.facebook.com` to match
+  the existing `instagram.adapter.js` publish/metrics convention;
+  `INSTAGRAM_GRAPH_BASE` constant in `meta.constants.js` is the
+  one-line swap target if a future runtime test forces the move.
+- Same Message lifecycle / idempotency / error classification as FB.
+- Wired into `/reply` route dispatch (INSTAGRAM branch).
+- Resolver flipped — gates on `instagram_business_manage_comments`
+  in the granted scopes; rejects legacy scope sets explicitly.
 
-**Files to create**:
-1. `domains/inbox/inbox.outbound.instagram.service.js` — `sendInstagramCommentReply({ conversation, comment, body })`. `POST https://graph.facebook.com/v19.0/{ig-comment-id}/replies` with `message` + `access_token` (the long-lived IG user token from `instagram.oauth.js exchangeCode`). NOTE: if a future runtime test shows the endpoint must move to `graph.instagram.com`, the `INSTAGRAM_GRAPH_BASE` constant in `domains/studio/meta.constants.js` is ready — swap there.
-2. `domains/inbox/inbox.routes.js` — wire same way as YouTube/FB.
-3. `domains/inbox/inbox.replyActions.js` — flip the INSTAGRAM branch.
-4. `tests/inboxOutboundInstagram.test.js` — happy path + permission error classification.
+Tests in `tests/inboxOutboundInstagram.test.js` (10 tests) cover
+endpoint URL (`/replies`, not `/comments`), IG Business Login token
+usage, scope gating against the NEW scope (with explicit legacy-scope
+rejection), tenant scoping, error classification.
 
-### Blocker §3 — Facebook Page picker UI
+### Blocker §3 — Facebook Page picker UI — Still open
 
 **Symptom**: `facebook.oauth.exchangeCode` calls `/me/accounts` and **picks the first Page automatically** (line 130). For reviewers / users who manage multiple Pages, this silently picks the wrong one with no user-facing recourse.
 
@@ -273,6 +300,16 @@ No npm `lint` / `build` scripts exist in the API repo — noted in IG-06 verific
 
 ## 10. Audit conclusion
 
-OAuth scope arrays, publishing, analytics sync, and comment ingestion are correct and demo-ready for FB + IG + Threads. The Threads reply path is implemented but gated. **The two outstanding code blockers are FB comment-reply send + IG comment-reply send.** Until those land, the App Review video cannot truthfully demonstrate `pages_manage_engagement` or the reply half of `instagram_business_manage_comments`.
+**Ready for the App Review video** once the staging env / Meta App Dashboard checklist in § 6 is set:
 
-Recommend: implement both outbound adapters before video (each ~150 LOC, ~half a day), then re-run this audit, then submit.
+- OAuth scope arrays match the spec target exactly for all three platforms.
+- Publishing + analytics sync wired end-to-end on FB + IG + Threads.
+- Comment ingestion wired for FB (`pages_read_user_content`) and IG (`instagram_business_manage_comments` read half) via the shared Meta webhook receiver.
+- **Comment reply wired for FB (`pages_manage_engagement`) and IG (`instagram_business_manage_comments` reply half) via the two new outbound adapters.**
+- Threads reply wired (gated by `THREADS_REPLY_ENABLED=false` env kill switch — flip for the demo).
+- No private DM scopes requested anywhere.
+- No legacy IG scopes in active code; every legacy-scope grep hit is a SAFE LEGACY REFERENCE (test fixture asserting absence, migration note, or reconnect-detector).
+
+**Recommended next move**: set the staging env vars, complete a real end-to-end test against Meta on a single test workspace (the staging verification steps in § 6), record the App Review video using the script in § 9, submit.
+
+**Out-of-scope nice-to-have**: Blocker §3 (FB Page picker UI). Not review-blocking when the reviewer's test account manages only one Page. Address when usage actually warrants multi-Page UX.
