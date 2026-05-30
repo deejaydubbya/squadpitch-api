@@ -170,8 +170,16 @@ export async function checkAndUpdateExpiredConnections(clientId) {
 }
 
 /**
- * Validate a connection by checking token expiry and (for INSTAGRAM)
- * making a lightweight Graph API call to verify the token works.
+ * Validate a connection by checking token expiry and (for channels
+ * with a live-validation endpoint) making a lightweight API call to
+ * verify the token still works.
+ *
+ * For INSTAGRAM the call uses the direct Instagram Login /
+ * Business Login surface (`graph.instagram.com/me`) — there's no
+ * Facebook Page involved. A token that returns `account_type`
+ * other than BUSINESS or CREATOR will still validate at the
+ * transport layer; UX copy that asks the user to "link to a Page"
+ * was removed with Prompt 01.
  */
 export async function validateConnection(clientId, channel) {
   let conn = await getConnectionForAdapter(clientId, channel);
@@ -194,8 +202,11 @@ export async function validateConnection(clientId, channel) {
 
   // Channel-specific live validation endpoints.
   const VALIDATION_ENDPOINTS = {
+    // Direct Instagram Business Login surface (post-Prompt-01).
+    // `account_type` lets future code distinguish PERSONAL vs
+    // BUSINESS vs CREATOR without a follow-up call.
     INSTAGRAM: (token) =>
-      `https://graph.instagram.com/me?fields=id&access_token=${encodeURIComponent(token)}`,
+      `https://graph.instagram.com/me?fields=id,username,account_type&access_token=${encodeURIComponent(token)}`,
     FACEBOOK: (token) =>
       `https://graph.facebook.com/v19.0/me?fields=id&access_token=${encodeURIComponent(token)}`,
     LINKEDIN: (token) => ({

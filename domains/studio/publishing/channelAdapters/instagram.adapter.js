@@ -1,9 +1,18 @@
-// Instagram Graph API adapter for publishing.
+// Instagram API adapter for publishing.
 //
 // Implements the 2-step container-based IG publish flow:
 //   1. POST /{ig-user-id}/media        -> create container
 //   2. POST /{ig-user-id}/media_publish -> publish container
 //   3. GET  /{media-id}?fields=permalink -> resolve permalink
+//
+// AFTER Prompt 01's migration the connection's `accessToken` is a
+// direct Instagram long-lived USER token (instagram_business_*
+// scopes), not a Facebook Page access token. The container/publish
+// endpoints below currently keep working when called against
+// graph.facebook.com with the IG user token; if a future runtime
+// test shows they need to move to graph.instagram.com, the
+// INSTAGRAM_GRAPH_BASE constant in `../../meta.constants.js` is
+// ready — swap the import + GRAPH_BASE assignment below.
 //
 // Only single-image posts in Phase 2. Carousels/video/Reels are out of
 // scope and will be added when we lift the "minimal" constraint.
@@ -121,7 +130,10 @@ export const instagramAdapter = {
   async publishPost({ draft, connection, client }) {
     const { mediaUrl, caption } = await this.validatePublishTarget({ draft, client });
     const igUserId = connection.externalAccountId;
-    const token = connection.accessToken; // already decrypted by caller
+    // Direct Instagram long-lived USER token (Prompt 01 migration);
+    // already decrypted by the caller. Was a Page access token in
+    // the pre-migration flow.
+    const token = connection.accessToken;
     const isVideo = draft.mediaType === "video";
     if (!igUserId) {
       throw new InstagramPublishError(

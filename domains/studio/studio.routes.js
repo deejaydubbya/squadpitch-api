@@ -3542,10 +3542,10 @@ studioRouter.get(
 // Admin/dev-only batch sync of Facebook + Instagram metrics for a
 // workspace. Used for Meta App Review: triggers real Graph API calls
 // against connections that include read_insights /
-// instagram_manage_insights so the App Review dashboard registers the
-// required API calls. Bypasses the 1h cooldown via force=true in the
-// service. Role gate runs before ownership so we don't leak workspace
-// existence to non-admins.
+// instagram_business_manage_insights so the App Review dashboard
+// registers the required API calls. Bypasses the 1h cooldown via
+// force=true in the service. Role gate runs before ownership so we
+// don't leak workspace existence to non-admins.
 studioRouter.post(
   `${BASE}/workspaces/:id/metrics/sync-meta`,
   requireInternalAccess,
@@ -3562,10 +3562,11 @@ studioRouter.post(
 
 // TEMPORARY — Meta App Review API check tool. Hits one Page-level
 // Insights endpoint (read_insights) and one IG user-level Insights
-// endpoint (instagram_manage_insights) so Meta's App Review dashboard
-// can detect actual API usage. Delete this route, the service it
-// calls, and the frontend button after Meta approves. See
-// docs/meta-app-review-api-checks.md for the removal checklist.
+// endpoint (instagram_business_manage_insights) so Meta's App
+// Review dashboard can detect actual API usage. Delete this route,
+// the service it calls, and the frontend button after Meta
+// approves. See docs/meta-app-review-api-checks.md for the removal
+// checklist.
 studioRouter.post(
   `${BASE}/workspaces/:id/dev/meta/app-review-checks`,
   requireInternalAccess,

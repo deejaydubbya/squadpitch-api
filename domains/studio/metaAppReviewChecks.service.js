@@ -2,8 +2,11 @@
 //
 // This module exists solely to make a single, real Graph API call
 // against each of the two scopes Meta App Review wants to detect:
-//   - read_insights              (Facebook Page Insights)
-//   - instagram_manage_insights  (Instagram Insights)
+//   - read_insights                        (Facebook Page Insights)
+//   - instagram_business_manage_insights   (Instagram Insights via
+//                                           Instagram Login /
+//                                           Business Login — see
+//                                           Prompt 01 migration)
 //
 // It is wired into POST /api/v1/workspaces/:id/dev/meta/app-review-checks,
 // which is gated by requireInternalAccess + requireClientOwner. The
@@ -209,7 +212,7 @@ export async function runFacebookPageInsightsCheck(connection) {
   });
 }
 
-// ── Instagram Insights check (instagram_manage_insights) ─────────────
+// ── Instagram Insights check (instagram_business_manage_insights) ────
 
 async function callIgUserInsights({ igUserId, token }) {
   // IG user/account-level insights. `reach` is a 2-day metric so we
@@ -245,7 +248,7 @@ async function callIgMediaInsights({ mediaId, token }) {
 }
 
 export async function runInstagramInsightsCheck(connection) {
-  const SCOPE = "instagram_manage_insights";
+  const SCOPE = "instagram_business_manage_insights";
   const PRIMARY_ENDPOINT_TEMPLATE = `${META_GRAPH_BASE}/{igUserId}/insights?metric=reach,profile_views&period=day`;
   if (!connection) {
     return checkResult({
@@ -367,7 +370,7 @@ function buildNextSteps({ facebook, instagram, fbScopes, igScopes }) {
   const steps = [];
   const fbHasScope = !fbScopes || fbScopes.includes("read_insights");
   const igHasScope =
-    !igScopes || igScopes.includes("instagram_manage_insights");
+    !igScopes || igScopes.includes("instagram_business_manage_insights");
 
   if (!fbHasScope) {
     steps.push(
@@ -376,7 +379,7 @@ function buildNextSteps({ facebook, instagram, fbScopes, igScopes }) {
   }
   if (!igHasScope) {
     steps.push(
-      "Disconnect and reconnect the Instagram channel to grant the instagram_manage_insights scope."
+      "Confirm the connected Instagram account is a Business or Creator account and reconnect to grant `instagram_business_manage_insights`."
     );
   }
   if (!facebook.success && fbHasScope) {
@@ -386,7 +389,7 @@ function buildNextSteps({ facebook, instagram, fbScopes, igScopes }) {
   }
   if (!instagram.success && igHasScope) {
     steps.push(
-      `Instagram check failed: ${instagram.message}. Confirm the IG account is a Business or Creator account linked to the connected Page.`
+      `Instagram check failed: ${instagram.message}. Confirm the connected Instagram account is a Business or Creator account and reconnect to grant \`instagram_business_manage_insights\`.`
     );
   }
   if (facebook.success && instagram.success) {
@@ -447,7 +450,7 @@ export async function runMetaAppReviewChecks(clientId) {
     instagram = await runInstagramInsightsCheck(igConn);
   } catch (err) {
     instagram = checkResult({
-      scope: "instagram_manage_insights",
+      scope: "instagram_business_manage_insights",
       attempted: true,
       success: false,
       endpoint: `${META_GRAPH_BASE}/{igUserId}/insights?metric=reach,profile_views&period=day`,

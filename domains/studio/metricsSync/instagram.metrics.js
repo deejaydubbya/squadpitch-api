@@ -1,12 +1,16 @@
 // Instagram metrics adapter.
 //
-// Uses IG Graph API to fetch post insights + basic fields.
-// GET /{media-id}/insights?metric=impressions,reach,saved,shares
-// GET /{media-id}?fields=like_count,comments_count,timestamp
+// Uses the Instagram API (with Instagram Login / Business Login
+// tokens — see Prompt 01 migration) to fetch post insights + basic
+// fields. The token is a direct Instagram long-lived USER token,
+// NOT a Facebook Page token.
+//   GET /{media-id}/insights?metric=impressions,reach,saved,shares
+//   GET /{media-id}?fields=like_count,comments_count,timestamp
 //
 // Meta error codes worth classifying explicitly:
 //   10  — "Application does not have permission for this action"
-//          (token lacks instagram_manage_insights for /insights endpoint)
+//          (token lacks instagram_business_manage_insights for the
+//          /insights endpoint)
 //   200 — "Permissions error"
 //   230 — "Permission denied"
 //   250 — "Requires extended permissions"
@@ -57,7 +61,9 @@ export async function fetchInstagramMetrics({ connection, externalPostId }) {
     throw Object.assign(new Error("Instagram auth failed"), { code: "AUTH_FAILED" });
   }
   if (insightsClass.kind === "permission_denied") {
-    // Most common cause: token missing instagram_manage_insights.
+    // Most common cause: token missing
+    // instagram_business_manage_insights. Reconnect through the
+    // Instagram Business Login flow to grant it.
     throw Object.assign(
       new Error(
         `Instagram permission denied (${insightsClass.code}): ${insightsClass.message ?? ""}`.trim()
