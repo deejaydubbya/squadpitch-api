@@ -28,6 +28,28 @@ function getBaseDomain() {
 }
 
 /**
+ * Public-facing base domain for [client].squadpitchsites.com URLs.
+ * Exported so other domains (e.g. ads exports) can render real
+ * URLs that match the public runtime's routing.
+ */
+export function getPublicSitesBaseDomain() {
+  return getBaseDomain();
+}
+
+/**
+ * Compose a public SquadSites page URL from a client slug + page
+ * slug. Returns null when either piece is missing; callers should
+ * surface a useful error rather than emit a partial URL.
+ */
+export function buildPublicSitePageUrl({ clientSlug, pageSlug } = {}) {
+  if (typeof clientSlug !== "string" || clientSlug.trim().length === 0) return null;
+  if (typeof pageSlug !== "string" || pageSlug.trim().length === 0) return null;
+  const cleanClient = clientSlug.trim().toLowerCase();
+  const cleanPage = pageSlug.trim().replace(/^\/+/, "");
+  return `https://${cleanClient}.${getBaseDomain()}/${cleanPage}`;
+}
+
+/**
  * Extract the client slug from a `[client].squadpitchsites.com`
  * hostname. Custom-domain resolution (Phase E) would also live
  * here, looking up a Domain table — for now we only support the
@@ -270,12 +292,20 @@ export async function createFormSubmission({
   const contactEmail = pickFieldValue(fieldDefs, fields, "email");
   const contactPhone = pickFieldValue(fieldDefs, fields, "phone");
 
+  // Sites-06 — tenant-scope the pageId / campaignId before write.
+  // The public submit endpoint accepts both fields from the public
+  // page renderer; we don't want a spoofed pageId from a different
+  // workspace landing on a submission. Silently null on mismatch
+  // (don't reject — bots / older renderers shouldn't fail).
+  const safePageId = await scopedPageId(pageId, form.clientId);
+  const safeCampaignId = await scopedCampaignId(campaignId, form.clientId);
+
   const submission = await prisma.formSubmission.create({
     data: {
       formId: form.id,
       clientId: form.clientId,
-      pageId: pageId || null,
-      campaignId: campaignId || null,
+      pageId: safePageId,
+      campaignId: safeCampaignId,
       dataJson: fields,
       contactEmail: contactEmail || null,
       contactPhone: contactPhone || null,
@@ -297,7 +327,24 @@ export async function createFormSubmission({
   // MVP keeps this inline; a future Redis-backed worker would
   // slot in by changing this single call to enqueue a job.
   intakeFormSubmission(submission).catch((err) => {
-    console.warn("[inbox.intake] failed for submission %s: %s", submission.id, err?.message ?? err);
+    // Full diagnostic — message + Prisma error code + stack — so
+    // ops can root-cause why an intake threw. The user-facing form
+    // submission already returned 200, but the Inbox surface won't
+    // show this conversation; a silent failure here is invisible.
+    console.error("[inbox.intake] FAILED — submission lost from Inbox surface:", {
+      submissionId: submission.id,
+      clientId: submission.clientId,
+      formId: submission.formId,
+      pageId: submission.pageId,
+      contactEmail: submission.contactEmail,
+      contactPhone: submission.contactPhone ? "<set>" : null, // don't log phone
+      errorName: err?.name,
+      errorMessage: err?.message,
+      // Prisma errors carry .code (e.g. P2002 unique constraint).
+      prismaCode: err?.code,
+      prismaMeta: err?.meta,
+      stack: err?.stack?.split("\n").slice(0, 8).join("\n"),
+    });
   });
 
   return submission;
@@ -349,6 +396,28 @@ export function buildAlternatesMap(siblingRows) {
       sib.language === "en" ? `/${sib.slug}` : `/${sib.language}/${sib.slug}`;
   }
   return out;
+}
+
+// Sites-06 — silently strip pageId / campaignId values that don't
+// belong to the form's workspace. Public submit endpoint accepts
+// these from a render-time prop; we don't trust the client to be
+// honest about cross-tenant ids.
+async function scopedPageId(pageId, clientId) {
+  if (typeof pageId !== "string" || !pageId || !clientId) return null;
+  const row = await prisma.sitePage.findFirst({
+    where: { id: pageId, clientId },
+    select: { id: true },
+  });
+  return row ? row.id : null;
+}
+
+async function scopedCampaignId(campaignId, clientId) {
+  if (typeof campaignId !== "string" || !campaignId || !clientId) return null;
+  const row = await prisma.campaign.findFirst({
+    where: { id: campaignId, clientId },
+    select: { id: true },
+  });
+  return row ? row.id : null;
 }
 
 function pickFieldValue(fieldDefs, submittedFields, wantedType) {

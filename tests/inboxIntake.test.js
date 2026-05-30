@@ -7,6 +7,7 @@
 // so the suite stays fast (no DB boot).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFile } from "node:fs/promises";
 
 const CLIENT_ID = "client-x";
 const SUBMISSION_ID = "sub-1";
@@ -40,6 +41,7 @@ function createPrismaMock(initialState = {}) {
     conversations: new Map(),
     contacts: new Map(),
     messages: [],
+    auditLogs: [],
     ...initialState,
   };
   // ids handed out by create — deterministic so assertions stay stable
@@ -81,7 +83,46 @@ function createPrismaMock(initialState = {}) {
         }
         return null;
       }),
+      // Used by the safe-merge phone/email collision check on update.
+      // Returns the first matching contact other than the one being
+      // updated, or null if there isn't one.
+      findFirst: vi.fn(async ({ where }) => {
+        for (const c of state.contacts.values()) {
+          if (where.clientId && c.clientId !== where.clientId) continue;
+          if (where.id?.not && c.id === where.id.not) continue;
+          if (where.email !== undefined && c.email !== where.email) continue;
+          if (where.phone !== undefined && c.phone !== where.phone) continue;
+          return c;
+        }
+        return null;
+      }),
       create: vi.fn(async ({ data }) => {
+        // Simulate the Postgres unique constraint enforcement so
+        // the intake's collision handling is actually exercised.
+        if (data.email) {
+          for (const c of state.contacts.values()) {
+            if (c.clientId === data.clientId && c.email === data.email) {
+              const e = new Error(
+                "Unique constraint failed on the fields: (`clientId`,`email`)",
+              );
+              e.code = "P2002";
+              e.meta = { modelName: "Contact", target: ["clientId", "email"] };
+              throw e;
+            }
+          }
+        }
+        if (data.phone) {
+          for (const c of state.contacts.values()) {
+            if (c.clientId === data.clientId && c.phone === data.phone) {
+              const e = new Error(
+                "Unique constraint failed on the fields: (`clientId`,`phone`)",
+              );
+              e.code = "P2002";
+              e.meta = { modelName: "Contact", target: ["clientId", "phone"] };
+              throw e;
+            }
+          }
+        }
         const id = `contact-${++contactCounter}`;
         const row = { id, ...data };
         state.contacts.set(id, row);
@@ -103,6 +144,40 @@ function createPrismaMock(initialState = {}) {
         return row;
       }),
     },
+    // Intake writes a system-actor AuditLog row when it adds a new
+    // alternate identity to an existing Contact. Tests inspect
+    // state.auditLogs to confirm the row was emitted.
+    auditLog: {
+      create: vi.fn(async ({ data }) => {
+        const row = { id: `audit-${state.auditLogs.length + 1}`, ...data };
+        state.auditLogs.push(row);
+        return row;
+      }),
+    },
+    // Used by the NEW_LEAD notification path. Returns lookups
+    // configurable via state.{clients,users,pages,forms} so tests
+    // can opt in to specific scenarios; defaults to null which
+    // means the notification path no-ops cleanly.
+    client: {
+      findUnique: vi.fn(async ({ where }) =>
+        state.clients?.get?.(where.id) ?? null,
+      ),
+    },
+    user: {
+      findUnique: vi.fn(async ({ where }) =>
+        state.users?.get?.(where.auth0Sub) ?? null,
+      ),
+    },
+    sitePage: {
+      findUnique: vi.fn(async ({ where }) =>
+        state.pages?.get?.(where.id) ?? null,
+      ),
+    },
+    form: {
+      findUnique: vi.fn(async ({ where }) =>
+        state.forms?.get?.(where.id) ?? null,
+      ),
+    },
   };
 }
 
@@ -114,6 +189,13 @@ vi.mock("../prisma.js", () => ({
   },
 }));
 
+// Mock the notification.service so we can spy on the NEW_LEAD
+// payload without booting BullMQ or the real notification fan-out.
+const enqueueNotificationSpy = vi.fn();
+vi.mock("../domains/notifications/notification.service.js", () => ({
+  enqueueNotification: (...args) => enqueueNotificationSpy(...args),
+}));
+
 const { intakeFormSubmission } = await import(
   "../domains/inbox/inbox.intake.service.js"
 );
@@ -121,6 +203,7 @@ const { intakeFormSubmission } = await import(
 describe("intakeFormSubmission", () => {
   beforeEach(() => {
     prismaMock = createPrismaMock();
+    enqueueNotificationSpy.mockClear();
   });
 
   it("creates Contact + Conversation + initial Message for a fresh submission", async () => {
@@ -218,7 +301,9 @@ describe("intakeFormSubmission", () => {
     expect(result.status).toBe("created");
     const contact = [...prismaMock.state.contacts.values()][0];
     expect(contact.email).toBeNull();
-    expect(contact.phone).toBe("+15551234567");
+    // Phone is stored normalized (non-digits stripped) so future
+    // lookups match across different submission formats.
+    expect(contact.phone).toBe("15551234567");
     expect(contact.name).toBe("Bob");
   });
 
@@ -250,5 +335,431 @@ describe("intakeFormSubmission", () => {
     // conversation" per the createConversationIfMissing comment.
     expect(prismaMock.state.conversations.size).toBe(2);
     expect(prismaMock.state.messages).toHaveLength(2);
+  });
+
+  // Regression for the prod bug surfaced 2026-05-15: a new
+  // submission with a NEW email but a phone that already belongs to
+  // a DIFFERENT contact in the workspace was P2002'ing on
+  // (clientId, phone) and silently dropping the lead from Inbox.
+  it("falls back to phone-key lookup when email doesn't match (cross-key resolution)", async () => {
+    // Seed: existing contact in the workspace with no email and a
+    // specific phone.
+    const phoneOnlySub = makeSubmission({
+      id: "sub-existing",
+      contactEmail: null,
+      contactPhone: "+15551234567",
+      dataJson: { phone: "+15551234567", name: "Phone-only first" },
+    });
+    await intakeFormSubmission(phoneOnlySub);
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const existingId = [...prismaMock.state.contacts.values()][0].id;
+
+    // New submission: brand-new email, but SAME phone. Old intake
+    // would try contact.create() and P2002 here.
+    const sameDifferentEmail = makeSubmission({
+      id: "sub-new-email",
+      contactEmail: "newperson@example.com",
+      contactPhone: "+15551234567",
+      dataJson: {
+        email: "newperson@example.com",
+        phone: "+15551234567",
+        name: "Same phone different email",
+      },
+    });
+    const result = await intakeFormSubmission(sameDifferentEmail);
+
+    // Intake succeeds and merges into the existing contact.
+    expect(result.status).toBe("created");
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const merged = [...prismaMock.state.contacts.values()][0];
+    expect(merged.id).toBe(existingId);
+    // Phone is preserved in normalized form (it was already the
+    // existing phone), and the previously-null email is now filled in.
+    expect(merged.phone).toBe("15551234567");
+    expect(merged.email).toBe("newperson@example.com");
+    // Still creates the second conversation + initial message.
+    expect(prismaMock.state.conversations.size).toBe(2);
+    expect(prismaMock.state.messages).toHaveLength(2);
+  });
+
+  it("does not overwrite an existing email when a different one arrives for the same phone", async () => {
+    // Existing contact with both email + phone set.
+    const firstSub = makeSubmission({
+      contactEmail: "owner@example.com",
+      contactPhone: "+15551234567",
+      dataJson: { email: "owner@example.com", phone: "+15551234567", name: "Owner" },
+    });
+    await intakeFormSubmission(firstSub);
+
+    // New submission: SAME phone, DIFFERENT email. The intake
+    // should not change the existing email (identity preservation).
+    const otherSub = makeSubmission({
+      id: "sub-other",
+      contactEmail: "shared@example.com",
+      contactPhone: "+15551234567",
+      dataJson: { email: "shared@example.com", phone: "+15551234567" },
+    });
+    const result = await intakeFormSubmission(otherSub);
+    expect(result.status).toBe("created");
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const merged = [...prismaMock.state.contacts.values()][0];
+    expect(merged.email).toBe("owner@example.com"); // not overwritten
+    expect(merged.phone).toBe("15551234567");
+    // The newly-submitted (but ignored as primary) email is preserved
+    // as an alternate so the UI can show "Also submitted with…".
+    expect(merged.enrichmentJson?.alternateEmails).toContain("shared@example.com");
+  });
+
+  it("does not overwrite an existing phone when a different one arrives for the same email", async () => {
+    const firstSub = makeSubmission({
+      contactEmail: "person@example.com",
+      contactPhone: "+15551111111",
+      dataJson: { email: "person@example.com", phone: "+15551111111", name: "P" },
+    });
+    await intakeFormSubmission(firstSub);
+
+    const otherSub = makeSubmission({
+      id: "sub-other-phone",
+      contactEmail: "person@example.com",
+      contactPhone: "+15552222222",
+      dataJson: { email: "person@example.com", phone: "+15552222222" },
+    });
+    const result = await intakeFormSubmission(otherSub);
+    expect(result.status).toBe("created");
+    const merged = [...prismaMock.state.contacts.values()][0];
+    expect(merged.email).toBe("person@example.com");
+    expect(merged.phone).toBe("15551111111"); // not overwritten
+    // The newly-submitted (but ignored as primary) phone is
+    // preserved as an alternate.
+    expect(merged.enrichmentJson?.alternatePhones).toContain("15552222222");
+  });
+
+  // ── Identity normalization + alternate preservation (spinstr404) ──
+
+  it("normalizes email case + phone formatting for matching", async () => {
+    // Seed contact with one form, then submit again with a
+    // different-cased email and a +-prefixed phone — both should
+    // resolve to the same Contact via normalized lookup.
+    await intakeFormSubmission(
+      makeSubmission({
+        contactEmail: "lead@example.com",
+        contactPhone: "5551234567",
+        dataJson: { email: "lead@example.com", phone: "5551234567" },
+      }),
+    );
+    expect(prismaMock.state.contacts.size).toBe(1);
+
+    const result = await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-norm",
+        contactEmail: "LEAD@EXAMPLE.COM",
+        contactPhone: "(555) 123-4567",
+        dataJson: { email: "LEAD@EXAMPLE.COM", phone: "(555) 123-4567" },
+      }),
+    );
+    expect(result.status).toBe("created");
+    // Still one contact — normalized matching collapses both forms.
+    expect(prismaMock.state.contacts.size).toBe(1);
+  });
+
+  it("FormSubmission row preserves the exact submitted email + phone (intake never touches it)", async () => {
+    // The intake service never updates FormSubmission — that table
+    // is written by sites.service.createFormSubmission. Confirm
+    // we don't accidentally call any update path that would
+    // overwrite the raw submitted values stored there.
+    const rawEmail = "Daniel.Wardlow+SquadPitch@Squadpitch.com";
+    const rawPhone = "+1 (555) 123-4567 x99";
+    const sub = makeSubmission({
+      contactEmail: rawEmail,
+      contactPhone: rawPhone,
+      dataJson: { email: rawEmail, phone: rawPhone },
+    });
+    await intakeFormSubmission(sub);
+
+    // Submission object retains the exact strings the user typed
+    // (we passed them in via fixture; nothing in intake mutates them).
+    expect(sub.contactEmail).toBe(rawEmail);
+    expect(sub.contactPhone).toBe(rawPhone);
+    // But the Contact row stores normalized values for matching.
+    const contact = [...prismaMock.state.contacts.values()][0];
+    expect(contact.email).toBe("daniel.wardlow+squadpitch@squadpitch.com");
+    expect(contact.phone).toBe("1555123456799");
+  });
+
+  it("does NOT auto-merge two contacts when only the name matches (no email/phone overlap)", async () => {
+    // First submission: name "Alice Smith", email A, phone A.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-aliceA",
+        contactEmail: "alice@one.com",
+        contactPhone: "5550001111",
+        dataJson: { name: "Alice Smith", email: "alice@one.com", phone: "5550001111" },
+      }),
+    );
+    // Second submission: SAME name, DIFFERENT email AND phone.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-aliceB",
+        contactEmail: "alice@two.com",
+        contactPhone: "5559998888",
+        dataJson: { name: "Alice Smith", email: "alice@two.com", phone: "5559998888" },
+      }),
+    );
+
+    // Two contacts — name alone never auto-merges.
+    expect(prismaMock.state.contacts.size).toBe(2);
+  });
+
+  it("a typo'd email does not overwrite an existing primary email", async () => {
+    // Seed contact with valid email + phone.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-original",
+        contactEmail: "alice@example.com",
+        contactPhone: "5551234567",
+        dataJson: { email: "alice@example.com", phone: "5551234567" },
+      }),
+    );
+
+    // Repeat submission: SAME phone, TYPO email.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-typo",
+        contactEmail: "alce@example.com", // typo
+        contactPhone: "5551234567",
+        dataJson: { email: "alce@example.com", phone: "5551234567" },
+      }),
+    );
+
+    // Phone-lookup matches the original contact. Email stays as-is
+    // (never overwritten); the typo lives in alternates.
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const merged = [...prismaMock.state.contacts.values()][0];
+    expect(merged.email).toBe("alice@example.com");
+    expect(merged.enrichmentJson?.alternateEmails).toContain("alce@example.com");
+  });
+
+  // ── Audit logging when alternates are added (spinstr409) ──
+
+  it("emits a system AuditLog row when intake preserves a new alternate email", async () => {
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-audit-1",
+        contactEmail: "primary@example.com",
+        contactPhone: "+15551234567",
+        dataJson: { email: "primary@example.com", phone: "+15551234567" },
+      }),
+    );
+    expect(prismaMock.state.auditLogs).toHaveLength(0);
+
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-audit-2",
+        contactEmail: "alternate@example.com",
+        contactPhone: "+15551234567",
+        dataJson: { email: "alternate@example.com", phone: "+15551234567" },
+      }),
+    );
+
+    expect(prismaMock.state.auditLogs).toHaveLength(1);
+    const row = prismaMock.state.auditLogs[0];
+    expect(row.actorSub).toBe("system:intake");
+    expect(row.action).toBe("contact.alternate.added");
+    expect(row.resourceType).toBe("Contact");
+    expect(row.metadata.addedAlternateEmails).toEqual(["alternate@example.com"]);
+    expect(row.metadata.addedAlternatePhones).toEqual([]);
+    expect(row.metadata.clientId).toBe(CLIENT_ID);
+    expect(row.metadata.submissionId).toBe("sub-audit-2");
+  });
+
+  it("does NOT emit an AuditLog row on a repeat submission with the same identity", async () => {
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-repeat-1",
+        contactEmail: "lead@example.com",
+        contactPhone: "+15559999999",
+        dataJson: { email: "lead@example.com", phone: "+15559999999" },
+      }),
+    );
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-repeat-2",
+        contactEmail: "lead@example.com",
+        contactPhone: "+15559999999",
+        dataJson: { email: "lead@example.com", phone: "+15559999999" },
+      }),
+    );
+    expect(prismaMock.state.auditLogs).toHaveLength(0);
+  });
+
+  it("emits the row when only a new alternate phone is added (no email change)", async () => {
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-ph-1",
+        contactEmail: "p@example.com",
+        contactPhone: "+15551111111",
+        dataJson: { email: "p@example.com", phone: "+15551111111" },
+      }),
+    );
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-ph-2",
+        contactEmail: "p@example.com",
+        contactPhone: "+15552222222",
+        dataJson: { email: "p@example.com", phone: "+15552222222" },
+      }),
+    );
+    expect(prismaMock.state.auditLogs).toHaveLength(1);
+    const row = prismaMock.state.auditLogs[0];
+    expect(row.metadata.addedAlternateEmails).toEqual([]);
+    expect(row.metadata.addedAlternatePhones).toEqual(["15552222222"]);
+  });
+
+  // ── NEW_LEAD notification (spinstr05) ──
+
+  // The notify-new-lead path is fire-and-forget. Tests need to
+  // let the microtask queue drain before asserting on the spy.
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  function seedClientAndOwner(state, { clientId = CLIENT_ID, auth0Sub = "auth0|owner-1", userId = "user-1" } = {}) {
+    state.clients ??= new Map();
+    state.users ??= new Map();
+    state.clients.set(clientId, { createdBy: auth0Sub });
+    state.users.set(auth0Sub, { id: userId });
+  }
+
+  it("fires NEW_LEAD notification with conversationId, page/form context, and a contactPreview", async () => {
+    seedClientAndOwner(prismaMock.state);
+    prismaMock.state.pages = new Map([[PAGE_ID, { title: "Pricing Inquiry" }]]);
+    prismaMock.state.forms = new Map([[FORM_ID, { name: "Contact form" }]]);
+
+    const result = await intakeFormSubmission(makeSubmission());
+    await flush();
+
+    expect(result.status).toBe("created");
+    expect(enqueueNotificationSpy).toHaveBeenCalledTimes(1);
+    const call = enqueueNotificationSpy.mock.calls[0][0];
+    expect(call.userId).toBe("user-1");
+    expect(call.eventType).toBe("NEW_LEAD");
+    expect(call.resourceType).toBe("conversation");
+    expect(call.resourceId).toBe(result.conversationId);
+    expect(call.payload).toMatchObject({
+      clientId: CLIENT_ID,
+      conversationId: result.conversationId,
+      sourcePageTitle: "Pricing Inquiry",
+      formName: "Contact form",
+    });
+    // Contact preview falls through name → email → phone.
+    // Fixture has name "Alice Smith".
+    expect(call.payload.contactPreview).toBe("Alice Smith");
+  });
+
+  it("does NOT fire NEW_LEAD when intake is a no-op replay (already_processed)", async () => {
+    seedClientAndOwner(prismaMock.state);
+    await intakeFormSubmission(makeSubmission());
+    // notifyNewLead is fire-and-forget — let its microtasks drain
+    // before clearing the spy, otherwise the first call's pending
+    // notification spuriously lands after mockClear.
+    await flush();
+    enqueueNotificationSpy.mockClear();
+
+    // Re-run with the same submission id — Conversation already
+    // exists, so intake short-circuits to "already_processed".
+    const second = await intakeFormSubmission(makeSubmission());
+    await flush();
+
+    expect(second.status).toBe("already_processed");
+    expect(enqueueNotificationSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire NEW_LEAD when intake skips for missing identity", async () => {
+    seedClientAndOwner(prismaMock.state);
+    const result = await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-noid",
+        contactEmail: null,
+        contactPhone: null,
+        dataJson: { message: "no contact info" },
+      }),
+    );
+    await flush();
+
+    expect(result.status).toBe("skipped");
+    expect(enqueueNotificationSpy).not.toHaveBeenCalled();
+  });
+
+  it("notification linkUrl points to /inbox?c=<conversationId> via the inApp template", async () => {
+    // Importing the template module here keeps the link-building
+    // contract pinned: any future template change that drops
+    // conversationId from the URL will fail this test.
+    const { inAppTemplates } = await import(
+      "../domains/notifications/inAppTemplates.js"
+    );
+    const tmpl = inAppTemplates.NEW_LEAD({
+      clientId: "client-x",
+      conversationId: "conv-xyz",
+      contactPreview: "alice@example.com",
+      sourcePageTitle: "Pricing",
+      formName: null,
+    });
+    expect(tmpl.linkUrl).toMatch(/\/workspaces\/client-x\/inbox\?c=conv-xyz$/);
+    expect(tmpl.title).toBe("New lead");
+    // Contact preview shows up in the message body.
+    expect(tmpl.message).toContain("alice@example.com");
+    expect(tmpl.message).toContain("Pricing");
+  });
+
+  it("NEW_LEAD is in the notification system's VALID_EVENTS set", async () => {
+    // Pin the registration. If a future cleanup removes NEW_LEAD
+    // from VALID_EVENTS, enqueueNotification would log a warning
+    // and silently drop the call — this test guards that.
+    const src = await readFile(
+      "domains/notifications/notification.service.js",
+      "utf8",
+    );
+    expect(src).toMatch(/NEW_LEAD/);
+    expect(src).toMatch(/VALID_EVENTS\s*=\s*new\s*Set\(\[[\s\S]*?"NEW_LEAD"/);
+  });
+
+  it("does not fire NEW_LEAD if Client.createdBy is missing (orphaned workspace)", async () => {
+    // No client seeded — Client.findUnique returns null. Intake
+    // still succeeds, but the notification path quietly no-ops.
+    const result = await intakeFormSubmission(makeSubmission());
+    await flush();
+
+    expect(result.status).toBe("created");
+    expect(enqueueNotificationSpy).not.toHaveBeenCalled();
+  });
+
+  // ── Detail payload exposes alternates ──
+
+  it("Contact row exposes alternateEmails / alternatePhones for the detail payload to read", async () => {
+    // The detail handler includes `contact: true` on the
+    // Conversation lookup, which returns the full Contact row
+    // including enrichmentJson. This test confirms the data the UI
+    // depends on actually lands on the row after a multi-identity
+    // submission sequence.
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-detail-1",
+        contactEmail: "owner@example.com",
+        contactPhone: "+15553334444",
+        dataJson: { email: "owner@example.com", phone: "+15553334444" },
+      }),
+    );
+    await intakeFormSubmission(
+      makeSubmission({
+        id: "sub-detail-2",
+        contactEmail: "owner.work@example.com",
+        contactPhone: "+15553334444",
+        dataJson: { email: "owner.work@example.com", phone: "+15553334444" },
+      }),
+    );
+
+    expect(prismaMock.state.contacts.size).toBe(1);
+    const contact = [...prismaMock.state.contacts.values()][0];
+    expect(contact.email).toBe("owner@example.com");
+    expect(contact.enrichmentJson.alternateEmails).toEqual(["owner.work@example.com"]);
+    expect(contact.enrichmentJson.alternatePhones ?? []).toEqual([]);
   });
 });

@@ -7,6 +7,16 @@ vi.mock("../domains/studio/threads.constants.js", () => ({
   THREADS_GRAPH_HOST: "https://graph.test",
 }));
 
+// spinstr418 — publishing is gated by env.THREADS_PUBLISHING_ENABLED
+// at the adapter entry. Tests assume the gate is open so the
+// existing two-step container/publish behavior is exercised.
+let envOverrides;
+vi.mock("../config/env.js", () => ({
+  get env() {
+    return envOverrides;
+  },
+}));
+
 const { threadsAdapter } = await import(
   "../domains/studio/publishing/channelAdapters/threads.adapter.js"
 );
@@ -17,6 +27,7 @@ const USER_ID = "9999";
 let fetchMock;
 const origFetch = global.fetch;
 beforeEach(() => {
+  envOverrides = { THREADS_PUBLISHING_ENABLED: true };
   fetchMock = vi.fn();
   global.fetch = fetchMock;
 });
@@ -89,6 +100,23 @@ describe("threadsAdapter.publishPost — text-only", () => {
         client: {},
       })
     ).rejects.toMatchObject({ code: "THREADS_PUBLISH_FAILED" });
+  });
+
+  // spinstr418 — kill switch must halt publishPost before any
+  // fetch happens. The env flag is separate from THREADS_ENABLED
+  // (which gates OAuth + Inbox) so a workspace can keep the
+  // Inbox integration on while we decide whether organic
+  // publishing should fire from a deploy.
+  it("refuses publishPost when THREADS_PUBLISHING_ENABLED is false (no fetch fired)", async () => {
+    envOverrides = { THREADS_PUBLISHING_ENABLED: false };
+    await expect(
+      threadsAdapter.publishPost({
+        draft: { body: "Hi", hashtags: [], mediaType: null },
+        connection: conn(),
+        client: {},
+      })
+    ).rejects.toMatchObject({ code: "THREADS_PUBLISHING_DISABLED" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

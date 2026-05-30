@@ -29,6 +29,7 @@ export const ChannelEnum = z.enum([
   "YOUTUBE",
   "PINTEREST",
   "THREADS",
+  "GOOGLE_BUSINESS_PROFILE",
 ]);
 
 export const MediaModeEnum = z.enum([
@@ -246,6 +247,23 @@ export const UpdateDataItemSchema = z.object({
 
 export const ListDataItemsQuerySchema = z.object({
   type: DataItemTypeEnum.optional(),
+  // Spinstr425 — Content Assets passes excludeTypes=PROPERTY so
+  // property records (which have their own Properties tab) don't
+  // leak into the generic asset view. Accepted as comma-separated
+  // string OR repeated query param; normalized to a string array
+  // before the handler reads it.
+  excludeTypes: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .transform((value) => {
+      if (!value) return undefined;
+      const list = Array.isArray(value) ? value : value.split(",");
+      const valid = list
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .filter((v) => DataItemTypeEnum.safeParse(v).success);
+      return valid.length > 0 ? valid : undefined;
+    }),
   status: DataItemStatusEnum.optional(),
   search: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),
@@ -741,7 +759,27 @@ export const ContentPreferencesUpdateSchema = z.object({
 
 export const AutopilotSettingsSchema = z.object({
   enabled: z.boolean().optional(),
-  mode: z.enum(["off", "draft_only", "schedule_approved", "auto_publish"]).optional(),
+  // Spinstr01 upgrade — full automation mode ladder.
+  // - off: nothing.
+  // - recommend_only: detector emits recs; no draft generation.
+  // - draft_on_click: MVP behavior. Recs + Generate button.
+  // - auto_generate_drafts: detector auto-generates drafts for
+  //   high-confidence recs after persisting them.
+  // - schedule_after_approval: on approve, system also schedules
+  //   approved drafts into safe default slots.
+  // - auto_publish_guarded: REJECTED on save. Listed in the UI
+  //   as Coming Soon. Backend refuses to persist it.
+  // Legacy "draft_only" still accepted on the wire and normalized
+  //   to "draft_on_click" on read.
+  mode: z.enum([
+    "off",
+    "recommend_only",
+    "draft_on_click",
+    "auto_generate_drafts",
+    "schedule_after_approval",
+    // Accepted on save for backward compat, normalized on read.
+    "draft_only",
+  ]).optional(),
   // Channel permissions
   preferredChannels: z.array(ChannelEnum).max(6).optional(),
   // Content source permissions
@@ -832,6 +870,26 @@ export const ListingCSVImportSchema = z.object({
 
 export const ListingUrlImportSchema = z.object({
   url: z.string().url().max(2000),
+});
+
+// URL-01 — campaign URL intake (analyze + confirm).
+// SSRF / scheme safety is enforced in
+// urlCampaignIntake.assertSafeExternalUrl(); the Zod-level URL
+// validation here is just a shape check.
+export const UrlIntakeAnalyzeSchema = z.object({
+  url: z.string().url().max(2000),
+  preferredIntent: z.enum(["campaign", "single_post"]).optional(),
+});
+
+export const UrlIntakeConfirmSchema = z.object({
+  url: z.string().url().max(2000).optional(),
+  // The selected listing is whatever shape analyze returned in
+  // listings[].normalized, possibly with user edits. We keep
+  // this loose (passthrough) and let confirmUrlListing /
+  // normalizeListing do the strict validation.
+  selectedListing: z
+    .object({})
+    .passthrough(),
 });
 
 export const ListingConfirmUrlSchema = z.object({

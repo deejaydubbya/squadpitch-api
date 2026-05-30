@@ -2,6 +2,7 @@ export default {
   key: "real_estate",
   label: "Real Estate",
   description: "Residential and commercial real estate agents, brokers, and teams.",
+  status: "active",
   onboarding: {
     websitePlaceholder: "smithrealty.com",
     extraContextLabel: "Property or market details",

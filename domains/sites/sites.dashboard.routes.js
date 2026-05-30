@@ -21,6 +21,7 @@ import {
   UpdateFormSchema,
   UpdateSubmissionSchema,
   ListSubmissionsQuerySchema,
+  FormStatsQuerySchema,
   GeneratePageSchema,
 } from "./sites.schemas.js";
 import * as service from "./sites.dashboard.service.js";
@@ -445,6 +446,28 @@ sitesDashboardRouter.delete(
       res.json(result);
     } catch (err) {
       handleServiceError(res, err, next);
+    }
+  },
+);
+
+// Spinstr427 — lightweight form stats for the editor's lead-form
+// block context card. Tenant-scoped by form existence.
+sitesDashboardRouter.get(
+  `${BASE}/workspaces/:id/site/forms/:formId/stats`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = FormStatsQuerySchema.safeParse(req.query);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const stats = await service.getFormStats(
+        req.params.id,
+        req.params.formId,
+        parsed.data,
+      );
+      if (!stats) return sendError(res, 404, "FORM_NOT_FOUND", "Form not found");
+      res.json(stats);
+    } catch (err) {
+      next(err);
     }
   },
 );

@@ -19,13 +19,19 @@ import { activityTemplates, NOTIFICATION_EVENTS, ACTIVITY_EVENTS } from "./activ
 import { PUSH_EVENTS, buildPushPayload } from "./pushTemplates.js";
 import { dispatchEvent as dispatchIntegrationEvent } from "../integrations/integration.service.js";
 
-// Only these 5 event types exist.
+// Notification event types. NEW_LEAD was added when SquadInbox
+// shipped — fired by the FormSubmission intake when a new
+// Conversation is created. Email/SMS/push templates are intentionally
+// omitted for NEW_LEAD: contact PII shouldn't surface on a lock
+// screen, and the in-app + activity surfaces already point users
+// straight to the conversation.
 const VALID_EVENTS = new Set([
   "POST_PUBLISHED",
   "POST_FAILED",
   "USAGE_LIMIT_NEARING",
   "CONNECTION_EXPIRED",
   "BATCH_COMPLETE",
+  "NEW_LEAD",
 ]);
 
 // SMS is only sent for these critical events.

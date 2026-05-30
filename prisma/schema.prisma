@@ -40,6 +40,12 @@ enum Channel {
   YOUTUBE
   PINTEREST
   THREADS
+  // Google Business Profile — Inbox-only surface (no publishing).
+  // Connected via OAuth + business.manage scope (Google sensitive-
+  // scope verification required). Reviews ingestion + reply land
+  // in a follow-up prompt; for now this exists so the channel
+  // appears in Settings → Channels as a "Coming soon" tile.
+  GOOGLE_BUSINESS_PROFILE
 }
 
 enum MediaMode {
@@ -173,51 +179,60 @@ model User {
 // ── Client ─────────────────────────────────────────────────────────────
 
 model Client {
-  id              String       @id @default(cuid())
-  name            String
-  slug            String       @unique
-  status          ClientStatus @default(ACTIVE)
-  logoUrl         String?
-  industryKey     String?
-  timezone        String       @default("UTC")
+  id                   String       @id @default(cuid())
+  name                 String
+  slug                 String       @unique
+  status               ClientStatus @default(ACTIVE)
+  logoUrl              String?
+  industryKey          String?
+  timezone             String       @default("UTC")
   // Workspace-wide default language for *generated content*
   // (campaign copy, social posts, captions, landing-page copy,
   // inbox AI replies). NOT the dashboard UI language — that
   // stays English in Phase 0. ISO 639-1 code, gated to the
   // allow-list in `lib/languages.js`. Existing rows default to
   // "en" via this column default.
-  defaultLanguage String       @default("en")
-  createdBy       String
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  defaultLanguage      String       @default("en")
+  // Inbox contact retention window. Documentary only today —
+  // there is NO auto-purge worker; manual purge requires an
+  // explicit DELETE call. Stored so a future retention worker
+  // (and the workspace settings UI) can show the policy without
+  // a schema change.
+  contactRetentionDays Int?
+  createdBy            String
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
-  brandProfile         BrandProfile?
-  voiceProfile         VoiceProfile?
-  mediaProfile         MediaProfile?
-  brandPersona         BrandPersona?
-  contentPreferences   ContentPreferences?
-  campaigns            Campaign[]
-  site                 Site?
-  channelSettings      ChannelSettings[]
-  drafts               Draft[]
-  moderationLogs       ModerationLog[]
-  connections          ChannelConnection[]
-  mediaAssets          MediaAsset[]
-  assetFolders         AssetFolder[]
-  postMetrics          PostMetrics[]
-  postMetricSnapshots  PostMetricSnapshot[]
-  rawMetrics           RawMetric[]
-  normalizedMetrics    NormalizedMetric[]
-  postInsights         PostInsight[]
-  workspaceAnalytics   WorkspaceAnalytics?
-  analyticsSnapshots   AnalyticsSnapshot[]
-  dataSources          WorkspaceDataSource[]
-  dataItems            WorkspaceDataItem[]
-  techStackConnections WorkspaceTechStackConnection[]
-  trackableLinks       TrackableLink[]
-  conversionEvents     ConversionEvent[]
-  contacts             Contact[]
-  conversations        Conversation[]
+  brandProfile                     BrandProfile?
+  voiceProfile                     VoiceProfile?
+  mediaProfile                     MediaProfile?
+  brandPersona                     BrandPersona?
+  contentPreferences               ContentPreferences?
+  campaigns                        Campaign[]
+  site                             Site?
+  channelSettings                  ChannelSettings[]
+  drafts                           Draft[]
+  moderationLogs                   ModerationLog[]
+  connections                      ChannelConnection[]
+  mediaAssets                      MediaAsset[]
+  assetFolders                     AssetFolder[]
+  postMetrics                      PostMetrics[]
+  postMetricSnapshots              PostMetricSnapshot[]
+  rawMetrics                       RawMetric[]
+  normalizedMetrics                NormalizedMetric[]
+  postInsights                     PostInsight[]
+  workspaceAnalytics               WorkspaceAnalytics?
+  analyticsSnapshots               AnalyticsSnapshot[]
+  dataSources                      WorkspaceDataSource[]
+  dataItems                        WorkspaceDataItem[]
+  techStackConnections             WorkspaceTechStackConnection[]
+  trackableLinks                   TrackableLink[]
+  conversionEvents                 ConversionEvent[]
+  contacts                         Contact[]
+  conversations                    Conversation[]
+  adPackages                       AdPackage[]
+  autopilotCampaignRecommendations AutopilotCampaignRecommendation[]
+  autopilotRuns                    AutopilotRun[]
 
   @@index([status])
   @@map("clients")
@@ -585,6 +600,54 @@ enum ConversationSource {
   SOCIAL
   EMAIL_REPLY
   MANUAL
+  // Public review surface (Google Business Profile reviews today,
+  // Facebook Page Recommendations / Yelp / etc. later). Distinct
+  // from SOCIAL so the UI can render a "Google review" / "Public
+  // response" framing rather than a generic comment chip.
+  REVIEW
+  // Public-comment surface (YouTube today; LinkedIn org pending
+  // Community Management API approval). Distinct from SOCIAL_DM so
+  // the AI prompt branches into the safer public-comment voice and
+  // the UI labels the row as a comment rather than a DM.
+  SOCIAL_COMMENT
+}
+
+// Per-network provider for a Conversation. Coarser sourceType
+// (FORM/SOCIAL/...) stays as the high-level bucket; provider is
+// the specific origin so the reply-action resolver can decide
+// what's actually possible (SEND_EMAIL vs REPLY_DM vs review-reply).
+// SQUADSITES covers the standard public-form intake path.
+enum ConversationProvider {
+  SQUADSITES
+  EMAIL
+  SMS
+  FACEBOOK
+  INSTAGRAM
+  GOOGLE_BUSINESS
+  YOUTUBE
+  LINKEDIN
+  X
+  TIKTOK
+  THREADS
+  PINTEREST
+  WEB_CHAT
+  MANUAL
+}
+
+// Privacy framing for an individual Message. Drives the UI's
+// channel-aware composer rendering AND filters what is safe to
+// include in AI prompts.
+//   PUBLIC   — visible to anyone who can see the source (e.g. a
+//              social comment reply that lives on the platform).
+//   PRIVATE  — between the workspace and the lead only (email,
+//              SMS, DM, form submission).
+//   INTERNAL — workspace-only; never shown to the lead. Audit
+//              SYSTEM messages and any future "private team note"
+//              flavored messages.
+enum MessageVisibility {
+  PUBLIC
+  PRIVATE
+  INTERNAL
 }
 
 enum ConversationStatus {
@@ -606,6 +669,23 @@ enum MessageChannel {
   SMS
   SOCIAL_DM
   MANUAL_LOG
+}
+
+// Delivery lifecycle for outbound Messages we actually try to send
+// via a provider (Postmark, Twilio, Meta, etc). Nullable on the
+// column because existing FORM_SUBMISSION / MANUAL_LOG rows have
+// no real "delivery" — they were just recorded on the thread.
+//   DRAFT     — composed but not yet attempted (reserved for future
+//               "save draft" UX; current send path skips it).
+//   SENDING   — provider call in flight; written BEFORE the call so
+//               an in-flight crash leaves an auditable row.
+//   SENT      — provider accepted the message; providerMessageId set.
+//   FAILED    — provider rejected or call raised; errorReason set.
+enum MessageDeliveryStatus {
+  DRAFT
+  SENDING
+  SENT
+  FAILED
 }
 
 model Contact {
@@ -660,6 +740,18 @@ model Conversation {
   pageId                 String?
   campaignId             String?
 
+  // Per-network provider — finer-grained than sourceType. Drives
+  // the reply-action resolver (getAvailableReplyActions). Defaults
+  // to SQUADSITES so existing FormSubmission conversations match
+  // current production behavior after the backfill migration.
+  provider ConversationProvider @default(SQUADSITES)
+
+  // External thread/conversation id on the source provider. For
+  // social DMs this is the platform's conversation id; for email
+  // it's null because the RFC In-Reply-To chain lives on Message
+  // rows. Nullable — only set when the provider gives us one.
+  externalThreadId String?
+
   status ConversationStatus @default(OPEN)
   spam   Boolean            @default(false)
 
@@ -693,6 +785,7 @@ model Conversation {
   aiReplies AIReplySuggestion[]
 
   @@index([clientId, status, lastMessageAt])
+  @@index([clientId, provider, lastMessageAt])
   @@index([contactId])
   @@index([assignedUserId])
   @@map("conversations")
@@ -716,8 +809,25 @@ model Message {
   payloadJson Json?
 
   // External provider id for outbound channels (Postmark, Twilio).
-  // Unused for MVP since outbound delivery is deferred.
+  // Set after a successful provider call.
   externalMessageId String?
+
+  // Delivery lifecycle for real outbound sends (Inbox email reply
+  // via Postmark today; SMS/social later). NULL for legacy
+  // FORM_SUBMISSION + MANUAL_LOG rows that don't represent a
+  // real provider call.
+  deliveryStatus    MessageDeliveryStatus?
+  // Provider's own message id (Postmark MessageID, Twilio SID, etc.)
+  // — separate from externalMessageId because that field is also
+  // used for inbound threading (the contact's email Message-ID
+  // when we ingest a reply).
+  providerMessageId String?
+  // Last error reason when deliveryStatus = FAILED. Free-form so
+  // we can keep provider language verbatim.
+  errorReason       String?                @db.Text
+  // When the most recent send attempt was made. Used to enforce
+  // idempotency / rate limits at the audit layer.
+  lastAttemptedAt   DateTime?
 
   // The user who composed an outbound/system message. Null for
   // inbound CONTACT messages.
@@ -726,11 +836,36 @@ model Message {
   // Provenance: which AI suggestion was accepted, if any.
   fromSuggestionId String?
 
+  // Idempotency key for outbound sends. The web composer generates
+  // a fresh UUID per Send click; a retried request (double-click,
+  // network retry, server-restart-during-call) with the same key
+  // returns the existing Message rather than firing a second
+  // provider call. Nullable for legacy rows; uniqueness is per
+  // conversation so different conversations can coincidentally
+  // reuse a key (UUIDs make that effectively impossible anyway).
+  idempotencyKey String?
+
+  // Privacy framing. PRIVATE for direct channels (email, SMS, form
+  // submissions, DMs); PUBLIC for surfaces that live on the
+  // provider (e.g. a comment-reply on a social post); INTERNAL for
+  // workspace-only audit/system rows. Defaulted to PRIVATE so
+  // existing rows backfill safely.
+  visibility MessageVisibility @default(PRIVATE)
+
+  // Public-surface link, when applicable. For a social comment
+  // this is the post URL on the platform; for an email it's null
+  // (the email itself isn't web-addressable). Used by the UI to
+  // offer "Open on Facebook" / "Open on YouTube" actions next to
+  // the message body when present.
+  sourceUrl String?
+
   createdAt DateTime @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
+  @@unique([conversationId, idempotencyKey])
   @@index([conversationId, createdAt])
+  @@index([deliveryStatus])
   @@map("messages")
 }
 
@@ -780,6 +915,235 @@ model AIReplySuggestion {
 
   @@index([conversationId, createdAt])
   @@map("ai_reply_suggestions")
+}
+
+// ── SquadAds ───────────────────────────────────────────────────────────
+//
+// MVP is export-only: AdPackage is the workspace artifact users
+// generate, save, and download. We never call Meta Marketing API,
+// Google Ads API, or any other ad-platform API — every "publish"
+// affordance is replaced with "Export." The names are deliberately
+// "AdPackage" (not "AdCampaign") to keep them distinct from the
+// first-class Campaign model that already exists for the content
+// pipeline.
+
+enum AdObjective {
+  AWARENESS
+  TRAFFIC
+  LEADS
+  ENGAGEMENT
+  EVENT
+}
+
+enum AdPackageStatus {
+  DRAFT
+  READY
+  EXPORTED
+  ARCHIVED
+}
+
+// Meta's Special Ad Categories — restrict targeting on age, gender,
+// ZIP, and detailed targeting. We auto-tag HOUSING for real-estate
+// workspaces and PROPERTY-sourced packages; users can manually
+// pick the others if their content requires it.
+enum AdSpecialCategory {
+  NONE
+  HOUSING
+  EMPLOYMENT
+  CREDIT
+  SOCIAL_ISSUES
+}
+
+enum AdDestinationKind {
+  SITE_PAGE
+  EXTERNAL_URL
+  SOCIAL_PROFILE
+}
+
+// What kind of workspace artifact seeded the package. Mirrors the
+// SiteSourceType pattern so source-context loaders can be shared.
+enum AdSourceType {
+  CAMPAIGN
+  SITE_PAGE
+  DRAFT
+  PROPERTY
+  CONTENT_ASSET
+  IDEA
+}
+
+model AdPackage {
+  id              String            @id @default(cuid())
+  clientId        String
+  name            String
+  objective       AdObjective
+  status          AdPackageStatus   @default(DRAFT)
+  specialCategory AdSpecialCategory @default(NONE)
+
+  // Source attribution — mirrors SitePage.sourceType/sourceId.
+  // sourceId nullable for IDEA (free-form text only).
+  sourceType AdSourceType
+  sourceId   String?
+  sourceIdea String?      @db.Text
+
+  // Generation provenance — same bookkeeping shape as
+  // AIReplySuggestion so future spend analytics is consistent.
+  generatedByModel String?
+  promptTokens     Int     @default(0)
+  completionTokens Int     @default(0)
+
+  // Append-only export history.
+  // [{ format, url, generatedAt, generatedBy }]
+  exportsJson Json @default("[]")
+
+  // Mandatory user review trail before status can flip to READY.
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  reviewNotes      String?   @db.Text
+
+  // Free-form workspace metadata (used today for the
+  // requiresBudgetReview flag the export gate consults).
+  metadataJson Json?
+
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client      Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  creatives   AdCreative[]
+  audience    AdAudience?
+  budget      AdBudget?
+  destination AdDestination?
+
+  @@index([clientId, status, updatedAt])
+  @@index([clientId, sourceType, sourceId])
+  @@map("ad_packages")
+}
+
+model AdCreative {
+  id           String @id @default(cuid())
+  adPackageId  String
+  // 1..N A/B variants. The unique constraint on (adPackageId,
+  // variantIndex) keeps the export bundle ordering stable.
+  variantIndex Int
+
+  // Optional channel hint so the export PDF can label "Recommended
+  // for Instagram Reels" etc. Reuses the existing organic Channel
+  // enum; ad publishing is deferred so no new channel values needed.
+  channel Channel?
+
+  headline    String  @db.Text
+  primaryText String  @db.Text
+  description String? @db.Text
+  cta         String? // "Learn More" | "Sign Up" | "Get Quote" | etc.
+
+  // MediaAsset reuse — no new image storage.
+  primaryAssetId String?
+  primaryAsset   MediaAsset? @relation("AdCreativePrimaryAsset", fields: [primaryAssetId], references: [id], onDelete: SetNull)
+
+  // Carousel / additional creative — array of MediaAsset ids.
+  // Not FK-enforced because Prisma can't model a relation list off
+  // a JSON column; service layer is responsible for asset lookups.
+  additionalAssetIdsJson Json @default("[]")
+
+  // AI-generated rationale shown in the UI and included in the
+  // export so the paid-media team understands the angle.
+  rationale String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adPackage AdPackage @relation(fields: [adPackageId], references: [id], onDelete: Cascade)
+
+  @@unique([adPackageId, variantIndex])
+  @@index([adPackageId])
+  @@map("ad_creatives")
+}
+
+model AdAudience {
+  id          String @id @default(cuid())
+  adPackageId String @unique // 1:1
+
+  // [{ kind: 'country' | 'region' | 'city' | 'postal', value: '...' }]
+  locationsJson Json @default("[]")
+
+  // Demographics — forcibly cleared at service layer when
+  // specialCategory != NONE per Fair Housing / Meta SAC rules.
+  ageMin      Int?
+  ageMax      Int?
+  gendersJson Json @default("[\"all\"]")
+
+  interestsJson           Json @default("[]")
+  // [{ kind: 'lookalike' | 'retargeting' | 'engaged_recent', description }]
+  customAudienceHintsJson Json @default("[]")
+  // ISO codes: ['en', 'es']
+  languagesJson           Json @default("[]")
+
+  // Denormalized so the export bundle's compliance disclaimer can
+  // be generated without re-resolving the workspace's industry.
+  housingRestricted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adPackage AdPackage @relation(fields: [adPackageId], references: [id], onDelete: Cascade)
+
+  @@map("ad_audiences")
+}
+
+model AdBudget {
+  id          String @id @default(cuid())
+  adPackageId String @unique // 1:1
+
+  // Cents — matches billing-table convention to avoid float drift.
+  // Service enforces "exactly one of dailyBudgetCents / totalBudgetCents".
+  dailyBudgetCents Int?
+  totalBudgetCents Int?
+  currency         String @default("USD")
+  durationDays     Int?
+
+  startsAt DateTime?
+  endsAt   DateTime?
+
+  // What the AI suggested vs. what the user kept — diff lets us
+  // measure suggestion acceptance later.
+  suggestedDailyBudgetCents Int?
+  suggestedTotalBudgetCents Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adPackage AdPackage @relation(fields: [adPackageId], references: [id], onDelete: Cascade)
+
+  @@map("ad_budgets")
+}
+
+model AdDestination {
+  id          String @id @default(cuid())
+  adPackageId String @unique // 1:1
+
+  kind AdDestinationKind
+
+  // Discriminated union — exactly one is non-null based on kind.
+  // Service enforces; DB allows nulls to keep the schema simple.
+  sitePageId    String?
+  externalUrl   String?
+  socialProfile String? // e.g. "instagram:smithrealty"
+
+  // UTM params appended to the destination URL on export.
+  // { source, medium, campaign, content, term }
+  utmJson Json?
+
+  // Pixel/conversion ids the user pasted in — preserved in the
+  // export bundle's README so the paid-media team can re-apply
+  // them in the ad platform.
+  pixelIdsJson Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  adPackage AdPackage @relation(fields: [adPackageId], references: [id], onDelete: Cascade)
+
+  @@map("ad_destinations")
 }
 
 model MediaProfile {
@@ -1039,8 +1403,12 @@ model MediaAsset {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  client      Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  draftAssets DraftAsset[]
+  client               Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  draftAssets          DraftAsset[]
+  // Back-relation for AdCreative.primaryAsset. The relation is
+  // named because future fields may also reference MediaAsset and
+  // we want each FK clearly attributed.
+  adCreativesAsPrimary AdCreative[] @relation("AdCreativePrimaryAsset")
 
   @@index([clientId, status])
   @@index([clientId, source])
@@ -1881,4 +2249,140 @@ model AuditLog {
   @@index([action, createdAt])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// ── Autopilot Campaign Recommendations (spinstr/Phase 2) ───────────────
+//
+// Persistent campaign-recommendation rows. Each represents one
+// opportunity the evaluator detected (a new listing, an open
+// house this week, a 5-star review, etc.). The workspace owner
+// reviews / dismisses / generates drafts from them via the
+// Campaign Inbox UI.
+//
+// Idempotency: every detector emits via (clientId, triggerType,
+// triggerObjectId). A re-run on the same opportunity touches
+// updatedAt + expiresAt rather than creating a duplicate row.
+// The composite unique enforces that at the DB layer.
+//
+// Lifecycle (docs/AUTOPILOT_PRODUCT_AUDIT.md §4):
+//   NEEDS_REVIEW → (DRAFT_GENERATED) → APPROVED → SCHEDULED
+//   NEEDS_REVIEW → DISMISSED
+//   any → EXPIRED (set by the next evaluator run when the
+//                  underlying opportunity has passed)
+model AutopilotCampaignRecommendation {
+  id                  String                        @id @default(cuid())
+  clientId            String
+  createdAt           DateTime                      @default(now())
+  updatedAt           DateTime                      @updatedAt
+  expiresAt           DateTime?
+  triggerType         AutopilotTriggerType
+  // The business object that kicked this recommendation off.
+  // Nullable on triggers that don't reference a specific object
+  // (e.g. INACTIVITY_GAP, SEASONAL).
+  triggerObjectType   String?
+  triggerObjectId     String?
+  status              AutopilotRecommendationStatus @default(NEEDS_REVIEW)
+  // Surface copy the inbox renders verbatim.
+  headline            String                        @db.Text
+  whatWeNoticed       String                        @db.Text
+  whyItMatters        String                        @db.Text
+  // Channel + angle hints — Phase 3's generator consumes these.
+  recommendedChannels String[]
+  recommendedAngles   Json
+  // Populated once Phase 3 generates drafts from this rec. Array
+  // of Draft ids so the inbox can show "3 drafts ready" without
+  // an extra join.
+  generatedDraftIds   String[]
+  dismissedReason     String?                       @db.Text
+  decidedBy           String?
+  // Free-form per-trigger payload (e.g. price-drop deltas, open-
+  // house date). Whitelist-shaped per detector — never echoes
+  // arbitrary upstream JSON.
+  payloadJson         Json?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  // Idempotency: one row per (workspace × triggerType × business object).
+  // triggerObjectId nullable means triggers without a specific
+  // object (INACTIVITY_GAP) can only have one open rec per
+  // workspace per type — exactly what we want.
+  @@unique([clientId, triggerType, triggerObjectId], name: "uniq_rec_per_trigger_object")
+  // Hot list query: open recs for a workspace, newest first.
+  @@index([clientId, status, createdAt])
+  // Expiry sweep: find recs to mark EXPIRED.
+  @@index([expiresAt])
+  @@map("autopilot_campaign_recommendations")
+}
+
+enum AutopilotTriggerType {
+  NEW_LISTING
+  PRICE_DROP
+  OPEN_HOUSE
+  JUST_SOLD
+  STALE_LISTING
+  NEW_REVIEW
+  MARKET_UPDATE
+  SEASONAL
+  INACTIVITY_GAP
+}
+
+enum AutopilotRecommendationStatus {
+  NEEDS_REVIEW
+  DRAFT_GENERATED
+  APPROVED
+  SCHEDULED
+  DISMISSED
+  EXPIRED
+}
+
+// ── Autopilot run history (Phase 5) ────────────────────────────────────
+//
+// One row per evaluator pass. Captures what the evaluator
+// decided + per-workspace counts, so the activity feed can show
+// "ran 3h ago — found 2 new opportunities" or "skipped: no
+// channels connected" instead of just per-draft history.
+//
+// Manual runs (user clicked "Run now"), scheduled runs (BullMQ
+// worker), and the internal evaluate-all loop all write here.
+// errorMessage is set when the evaluator threw — the rest of the
+// fields are still populated so we know which workspace failed
+// and why.
+model AutopilotRun {
+  id                     String             @id @default(cuid())
+  clientId               String
+  triggerSource          AutopilotRunSource
+  status                 AutopilotRunStatus
+  reason                 String?            @db.Text
+  recommendationsCreated Int                @default(0)
+  recommendationsUpdated Int                @default(0)
+  recommendationsExpired Int                @default(0)
+  // Snapshot of the settings + readiness at run time so a
+  // historical row stays meaningful even after the workspace's
+  // config changes.
+  settingsSnapshot       Json?
+  readinessSnapshot      Json?
+  startedAt              DateTime           @default(now())
+  finishedAt             DateTime?
+  errorMessage           String?            @db.Text
+  metadata               Json?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, startedAt])
+  @@index([startedAt])
+  @@map("autopilot_runs")
+}
+
+enum AutopilotRunSource {
+  MANUAL
+  SCHEDULED
+  EVENT
+}
+
+enum AutopilotRunStatus {
+  CREATED_RECOMMENDATIONS
+  UPDATED_RECOMMENDATIONS
+  NO_ACTION
+  SKIPPED
+  ERROR
 }

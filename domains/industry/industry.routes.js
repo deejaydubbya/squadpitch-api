@@ -37,6 +37,10 @@ function formatProfilePublic(profile) {
     key: profile.key,
     label: profile.label,
     description: profile.description,
+    // spinstr421 — onboarding grid uses these to render
+    // coming-soon cards as disabled with a badge.
+    status: profile.status ?? "active",
+    isComplianceSensitive: profile.isComplianceSensitive === true,
     onboarding: profile.onboarding,
     content: {
       starterBlueprintSlugs: profile.content.starterBlueprintSlugs,

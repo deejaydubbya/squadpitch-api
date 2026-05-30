@@ -2,6 +2,7 @@ export default {
   key: "home_services",
   label: "Home Services",
   description: "Contractors, plumbers, electricians, HVAC, landscapers, and home improvement pros.",
+  status: "coming_soon",
   onboarding: {
     websitePlaceholder: "acmeplumbing.com",
     extraContextLabel: "Services or project details",

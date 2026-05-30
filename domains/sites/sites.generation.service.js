@@ -20,6 +20,9 @@
 
 import { prisma } from "../../prisma.js";
 import { loadClientGenerationContext } from "../studio/generation/clientOrchestrator.js";
+// industry-03 — fabrication rules per industry come from the
+// module registry (see domains/industry/modules/*).
+import { getIndustryModuleOrGeneric } from "../industry/modules/index.js";
 import {
   generateStructuredContent,
   OpenAIProviderError,
@@ -180,6 +183,11 @@ export async function generatePageFromSource({
   sourceId,
   pageGoal,
   customPrompt,
+  // Sites-05 — optional template hint. When set, biases the LLM
+  // toward a specific block scaffold + page intent. Backwards
+  // compatible: omitting `template` keeps the existing pre-sites-05
+  // behavior.
+  template,
   userId,
   language,
 }) {
@@ -217,8 +225,8 @@ export async function generatePageFromSource({
 
   // 3. Build prompts. System prompt sets persona + output rules.
   //    User prompt provides the brief.
-  const systemPrompt = buildSystemPrompt({ ctx, pageGoal, language: resolvedLanguage });
-  const userPrompt = buildUserPrompt({ ctx, source, pageGoal, customPrompt });
+  const systemPrompt = buildSystemPrompt({ ctx, pageGoal, template, language: resolvedLanguage });
+  const userPrompt = buildUserPrompt({ ctx, source, pageGoal, customPrompt, template });
 
   // 4. Call OpenAI with the JSON-schema-strict response format.
   const result = await generateStructuredContent({
@@ -243,13 +251,13 @@ export async function generatePageFromSource({
     model: result.model,
     promptTokens: result.usage?.prompt_tokens ?? 0,
     completionTokens: result.usage?.completion_tokens ?? 0,
-    metadata: { source: "site_page", sourceType, pageGoal },
+    metadata: { source: "site_page", sourceType, pageGoal, template: template ?? null },
   });
 
   // 6. Normalize the LLM output. The strict response_format makes
   //    this mostly defensive — but we still trim slugs, drop
   //    invalid blocks, and fill missing defaults.
-  return normalizeGeneratedPage({
+  const normalized = normalizeGeneratedPage({
     raw: result.parsed,
     sourceType,
     sourceId: source.id ?? sourceId,
@@ -259,6 +267,25 @@ export async function generatePageFromSource({
     usage: result.usage,
     language: resolvedLanguage,
   });
+
+  // 7. Sites-05 — template scaffold pass. Ensures the required
+  //    block types for the chosen template exist (appends empty
+  //    placeholders for any the LLM forgot) so the deterministic
+  //    fill below has something to populate. Idempotent.
+  if (template) {
+    normalized.payload = applyTemplateScaffold(normalized.payload, template);
+    normalized.templateUsed = template;
+  }
+
+  // 8. Sites-02 — deterministic structured fields for PROPERTY
+  //    sources. The LLM keeps writing the marketing copy; we
+  //    overwrite the *facts* (key_details rows, gallery imageUrls,
+  //    hero imageUrl, title/slug) from the property's dataJson so
+  //    nothing is invented. Idempotent — applying twice is a noop.
+  if (sourceType === "PROPERTY") {
+    normalized.payload = applyPropertyDeterministicFields(normalized.payload, source);
+  }
+  return normalized;
 }
 
 // ── Source resolution ──────────────────────────────────────────────────
@@ -355,7 +382,131 @@ async function resolveSource({ clientId, sourceType, sourceId, customPrompt }) {
 
 // ── Prompt assembly ────────────────────────────────────────────────────
 
-function buildSystemPrompt({ ctx, pageGoal, language }) {
+// Sites-05 — template scaffolds. Each template lists the block
+// types in display order. Block fields are filled in either by
+// the LLM (copy) or by applyPropertyDeterministicFields (facts).
+// The scaffold pass ensures the required block types exist so
+// the deterministic step has something to fill; it never removes
+// or reorders blocks the LLM emitted in addition to the scaffold.
+export const SITE_TEMPLATES = Object.freeze({
+  property_listing: {
+    label: "Property Listing Page",
+    pageGoal: "LISTING",
+    blocks: ["hero", "key_details", "gallery", "paragraph", "cta", "lead_form", "contact"],
+    intent:
+      "Showcase the property with photos, key details, and a clear path to request a showing.",
+  },
+  open_house: {
+    label: "Open House Page",
+    pageGoal: "EVENT",
+    blocks: ["hero", "key_details", "gallery", "paragraph", "cta", "lead_form", "contact"],
+    intent:
+      "Drive open-house RSVPs. If the property has an open_house event date in its data, surface it; otherwise stay generic.",
+  },
+  just_sold: {
+    label: "Just Sold Page",
+    pageGoal: "LEAD_CAPTURE",
+    blocks: ["hero", "paragraph", "gallery", "cta", "lead_form", "contact"],
+    intent:
+      "Social proof of a recent sale. Convert future sellers. Do NOT quote the sale price unless it is explicitly in the source data.",
+  },
+  seller_lead: {
+    label: "Seller Lead Page",
+    pageGoal: "LEAD_CAPTURE",
+    blocks: ["hero", "paragraph", "key_details", "faq", "cta", "lead_form", "contact"],
+    intent:
+      "Convert potential sellers. Lead with the seller value proposition; use the FAQ to address common objections.",
+  },
+  buyer_lead: {
+    label: "Buyer Lead Page",
+    pageGoal: "LEAD_CAPTURE",
+    blocks: ["hero", "paragraph", "faq", "cta", "lead_form", "contact"],
+    intent:
+      "Convert potential buyers. Lead with the buyer value proposition; use the FAQ to address common buyer questions.",
+  },
+  neighborhood_guide: {
+    label: "Neighborhood Guide",
+    pageGoal: "LEAD_CAPTURE",
+    blocks: ["hero", "paragraph", "key_details", "cta", "lead_form", "contact"],
+    intent:
+      "Educational guide. Provide a high-level overview only. Do NOT invent specific facts — no school ratings, no walkability scores, no specific amenities unless explicitly provided.",
+  },
+});
+
+// Generate an empty block of a given type. Used by the scaffold
+// pass to insert placeholders the LLM forgot; downstream the
+// deterministic fill or the user fills these in.
+function emptyBlockFor(type) {
+  switch (type) {
+    case "hero":
+      return { type: "hero", headline: "", subheadline: "" };
+    case "paragraph":
+      return { type: "paragraph", body: "" };
+    case "image":
+      return null; // image without imageUrl is dropped by normalizer
+    case "cta":
+      return { type: "cta", label: "Get in touch", href: "#contact" };
+    case "lead_form":
+      return { type: "lead_form", formId: "__PENDING__" };
+    case "gallery":
+      return { type: "gallery", imageUrls: [], layout: "grid" };
+    case "key_details":
+      return { type: "key_details", heading: "Highlights", items: [] };
+    case "testimonial":
+      return null; // can't fabricate a quote
+    case "faq":
+      return { type: "faq", heading: "Frequently asked questions", items: [] };
+    case "contact":
+      return { type: "contact", heading: "Get in touch" };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Sites-05 — ensure the template's required block types exist in
+ * the payload. The LLM may have emitted them in any order plus
+ * extras; we preserve everything the LLM produced and only append
+ * placeholders for missing required types.
+ *
+ * Exported for unit tests.
+ */
+export function applyTemplateScaffold(payload, template) {
+  const tpl = SITE_TEMPLATES[template];
+  if (!payload || !tpl) return payload;
+  const blocks = Array.isArray(payload.blocksJson) ? [...payload.blocksJson] : [];
+  const present = new Set(blocks.map((b) => (b && typeof b === "object" ? b.type : null)));
+  // Append in scaffold order, but only for missing types. Don't
+  // touch the LLM's existing order.
+  for (const type of tpl.blocks) {
+    if (present.has(type)) continue;
+    const empty = emptyBlockFor(type);
+    if (empty) {
+      blocks.push(empty);
+      present.add(type);
+    }
+  }
+  return { ...payload, blocksJson: blocks };
+}
+
+// Sites-05 — explicit list of facts the LLM is NOT allowed to
+// fabricate. Included verbatim in the system prompt.
+//
+// industry-02 introduced the neutral/real-estate split (was a
+// single RE-flavored list injected for every workspace).
+// industry-03 moves the lists into the industry module registry
+// so future industries can supply their own no-fabrication rules
+// without touching this file. The real_estate module returns the
+// neutral baseline + RE-specific items; the generic module
+// returns the neutral baseline only.
+function getFabricationRulesForIndustry(industryKey) {
+  return getIndustryModuleOrGeneric(industryKey).promptAddons.getFactsLlmMayNotFabricate();
+}
+
+// industry-02 — exported so the no-industry safety tests can
+// assert what the LLM receives for null/non-RE vs real_estate
+// workspaces without spinning up a full generation pipeline.
+export function buildSystemPrompt({ ctx, pageGoal, template, language }) {
   const brandName = ctx.client?.name ?? "the business";
   const industryName = ctx.client?.industryKey ?? null;
   const voice = ctx.voice ?? null;
@@ -381,9 +532,19 @@ function buildSystemPrompt({ ctx, pageGoal, language }) {
 
   const langDirective = buildLanguageInstructions(language);
 
+  const tpl = template ? SITE_TEMPLATES[template] : null;
+  const templateLines = tpl
+    ? [
+        ``,
+        `Template: **${tpl.label}** — ${tpl.intent}`,
+        `Preferred block order: ${tpl.blocks.join(" → ")}.`,
+      ]
+    : [];
+
   return [
     `You write conversion-focused landing-page copy for ${brandName}${industryName ? ` (industry: ${industryName})` : ""}.`,
     `The page's goal is to ${goalBlurb}.`,
+    ...templateLines,
     "",
     brandLines.length > 0 ? `Brand context:\n${brandLines.join("\n")}` : "",
     voiceLines.length > 0 ? `\nVoice profile:\n${voiceLines.join("\n")}` : "",
@@ -398,27 +559,31 @@ function buildSystemPrompt({ ctx, pageGoal, language }) {
     "- Slug: lowercase, dash-separated, no spaces, max 60 chars,",
     "  derived from the page topic (NOT the brand name).",
     "- Use second-person ('you') in body copy when natural.",
-    "- Don't fabricate facts about specific properties / data the",
-    "  brief doesn't mention. Stick to the supplied context.",
     "- CTA href: leave as '#contact' if no specific URL is supplied —",
     "  the workspace owner will replace it.",
+    "",
+    "Grounding rules (Sites-05) — you MUST NOT fabricate:",
+    ...getFabricationRulesForIndustry(industryName).map((rule) => `- ${rule}`),
+    "Only state these facts if they appear verbatim in the supplied source data. If unsure, omit the fact rather than guess.",
     langDirective ? "\n" + langDirective : "",
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-function buildUserPrompt({ source, pageGoal, customPrompt }) {
+function buildUserPrompt({ source, pageGoal, customPrompt, template }) {
+  const tpl = template ? SITE_TEMPLATES[template] : null;
   const lines = [
     `# Page brief`,
     ``,
     `**Source type:** ${source.kind}`,
     `**Source title:** ${source.title}`,
     `**Page goal:** ${pageGoal}`,
+    tpl ? `**Template:** ${tpl.label} — ${tpl.intent}` : null,
     ``,
     `## Context`,
     source.brief || "(no additional context)",
-  ];
+  ].filter(Boolean);
   if (customPrompt && source.kind !== "idea") {
     lines.push("", `## Additional notes from the user`, customPrompt);
   }
@@ -644,6 +809,116 @@ function trimString(s, max) {
   if (typeof s !== "string") return "";
   const trimmed = s.trim();
   return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+}
+
+// Sites-02 — deterministic property field application. Called after
+// the LLM emits a normalized page payload. Walks the blocks and
+// rewrites the structured fields that should come from the
+// property's dataJson rather than the model's imagination:
+//   - hero.imageUrl  → property primary image
+//   - key_details.items → price / beds / baths / sqft / type / year / status
+//   - gallery.imageUrls → property photos
+//   - top-level title + slug → address-derived when available
+// LLM-generated narrative copy (hero headline/subheadline,
+// paragraph body, etc.) is preserved. Idempotent.
+export function applyPropertyDeterministicFields(payload, source) {
+  if (!payload || !source) return payload;
+  const data = source.dataJson && typeof source.dataJson === "object" ? source.dataJson : {};
+  const facts = readPropertyFacts(data, source.title);
+
+  const blocks = Array.isArray(payload.blocksJson) ? payload.blocksJson.slice() : [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    if (!block || typeof block !== "object") continue;
+    if (block.type === "hero" && facts.primaryImage) {
+      blocks[i] = { ...block, imageUrl: facts.primaryImage };
+    } else if (block.type === "key_details") {
+      const items = buildKeyDetailFacts(facts);
+      if (items.length > 0) blocks[i] = { ...block, items };
+    } else if (block.type === "gallery" && facts.images.length > 0) {
+      blocks[i] = { ...block, imageUrls: facts.images };
+    } else if (block.type === "image" && !block.imageUrl && facts.primaryImage) {
+      blocks[i] = { ...block, imageUrl: facts.primaryImage };
+    }
+  }
+
+  const next = { ...payload, blocksJson: blocks };
+  // Title + slug: overwrite when the LLM left a placeholder title;
+  // otherwise leave the model's pick intact.
+  if (facts.addressLine && (!payload.title || payload.title.startsWith("Untitled"))) {
+    next.title = facts.addressLine.slice(0, 200);
+    next.slug = sanitizeSlug(null, facts.addressLine);
+  }
+  return next;
+}
+
+function readPropertyFacts(data, fallbackTitle) {
+  const num = (v) => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = Number(v.replace(/[^\d.\-]/g, ""));
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  };
+  const str = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const street = str(data.street) ?? str(data.address);
+  const city = str(data.city);
+  const state = str(data.state);
+  const zip = str(data.zip) ?? str(data.zipCode) ?? str(data.postalCode);
+  const addressLine = [street, city, state, zip].filter(Boolean).join(", ") || str(fallbackTitle) || "";
+
+  // Photo precedence: _photos[isPrimary] > imageUrl > images[0].
+  const photoMeta = Array.isArray(data._photos) ? data._photos : [];
+  const primaryFromMeta = photoMeta.find((p) => p && p.isPrimary === true)?.url ?? null;
+  const heroImage = str(data.imageUrl);
+  const imagesRaw = Array.isArray(data.images) ? data.images : [];
+  const seen = new Set();
+  const images = [];
+  for (const url of [
+    primaryFromMeta,
+    heroImage,
+    ...imagesRaw,
+    ...photoMeta.map((p) => (p && p.url) || null),
+  ]) {
+    if (typeof url !== "string" || !url) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    images.push(url);
+  }
+  const primaryImage = primaryFromMeta ?? heroImage ?? images[0] ?? null;
+
+  return {
+    addressLine,
+    primaryImage,
+    images,
+    price: num(data.price),
+    beds: num(data.bedrooms ?? data.beds),
+    baths: num(data.bathrooms ?? data.baths),
+    sqft: num(data.sqft ?? data.squareFeet),
+    propertyType: str(data.propertyType),
+    yearBuilt: num(data.yearBuilt),
+    status: str(data.status),
+  };
+}
+
+function buildKeyDetailFacts(facts) {
+  const out = [];
+  if (facts.price != null) {
+    const formatted = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(facts.price);
+    out.push({ label: "Price", value: formatted });
+  }
+  if (facts.beds != null) out.push({ label: "Beds", value: String(facts.beds) });
+  if (facts.baths != null) out.push({ label: "Baths", value: String(facts.baths) });
+  if (facts.sqft != null) out.push({ label: "Sq Ft", value: facts.sqft.toLocaleString() });
+  if (facts.propertyType) out.push({ label: "Type", value: facts.propertyType });
+  if (facts.yearBuilt != null) out.push({ label: "Year Built", value: String(facts.yearBuilt) });
+  if (facts.status) out.push({ label: "Status", value: facts.status.replace(/_/g, " ") });
+  return out;
 }
 
 function sanitizeSlug(raw, fallback) {

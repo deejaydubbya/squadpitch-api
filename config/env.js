@@ -43,13 +43,29 @@ export const env = {
   META_OAUTH_REDIRECT_URI: process.env.META_OAUTH_REDIRECT_URI,
 
   // Instagram Login / Business Login app (instagram_business_*
-  // scopes). May be a SEPARATE Meta App from META_APP_ID — the
-  // Instagram API surface is a distinct product. Falls back to
-  // META_* in instagram.oauth.js for migration convenience until
-  // ops moves Instagram onto its own app credentials.
+  // scopes, including instagram_business_manage_comments for the
+  // Inbox comments ingestion path). May be a SEPARATE Meta App
+  // from META_APP_ID — the Instagram API surface is a distinct
+  // product. Falls back to META_* in instagram.oauth.js for
+  // migration convenience until ops moves Instagram onto its own
+  // app credentials.
   INSTAGRAM_APP_ID: process.env.INSTAGRAM_APP_ID,
   INSTAGRAM_APP_SECRET: process.env.INSTAGRAM_APP_SECRET,
   INSTAGRAM_OAUTH_REDIRECT_URI: process.env.INSTAGRAM_OAUTH_REDIRECT_URI,
+
+  // Meta Inbox ingestion (Facebook Page comments + Instagram comments).
+  // Verify token is the value entered in the Meta App Dashboard's
+  // webhook subscription form — Meta sends it back on every GET
+  // verification handshake so we can confirm it's really them.
+  // The feature flag stays false until the Meta App Review grants
+  // pages_read_user_content / instagram_business_manage_comments.
+  // When false, the webhook still 200-OKs every POST but writes
+  // nothing — so we can deploy the receiver, prove it's reachable,
+  // and have ops visibility into payload shapes without persisting
+  // anything.
+  META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN,
+  META_INBOX_INGESTION_ENABLED:
+    String(process.env.META_INBOX_INGESTION_ENABLED ?? "false").toLowerCase() === "true",
 
   // OAuth state signing (HMAC secret, random 32+ bytes)
   OAUTH_STATE_SECRET: process.env.OAUTH_STATE_SECRET,
@@ -121,6 +137,14 @@ export const env = {
   YOUTUBE_CLIENT_SECRET: process.env.YOUTUBE_CLIENT_SECRET,
   YOUTUBE_REDIRECT_URI: process.env.YOUTUBE_REDIRECT_URI,
 
+  // Google Business Profile — Inbox reviews channel. Separate OAuth
+  // client from YouTube because the scope (business.manage) requires
+  // Google sensitive-scope verification independent of the YouTube
+  // scope set. Same Google Cloud project is fine; different client.
+  GOOGLE_BUSINESS_PROFILE_CLIENT_ID: process.env.GOOGLE_BUSINESS_PROFILE_CLIENT_ID,
+  GOOGLE_BUSINESS_PROFILE_CLIENT_SECRET: process.env.GOOGLE_BUSINESS_PROFILE_CLIENT_SECRET,
+  GOOGLE_BUSINESS_PROFILE_REDIRECT_URI: process.env.GOOGLE_BUSINESS_PROFILE_REDIRECT_URI,
+
   // Threads (Meta — separate Threads-only app, NOT the existing
   // Facebook/Instagram app). Threads has its own developer app on
   // developers.facebook.com with its own client_id/secret and uses the
@@ -137,15 +161,103 @@ export const env = {
   // publish dispatch reject with THREADS_DISABLED. Lets us hold the
   // channel back while App Review is pending without rolling back
   // code. Defaults true in production once configured.
+  // THREADS_INTEGRATION_ENABLED is an accepted alias for
+  // THREADS_ENABLED — the prompt that introduced the Threads
+  // Inbox integration used the longer name, and we honor either
+  // so docs and Fly secrets commands work as written without a
+  // rename migration.
   THREADS_ENABLED:
-    String(process.env.THREADS_ENABLED ?? "true").toLowerCase() === "true",
+    String(
+      process.env.THREADS_ENABLED ?? process.env.THREADS_INTEGRATION_ENABLED ?? "true",
+    ).toLowerCase() === "true",
+  // Autopilot scheduler — default OFF so a deploy doesn't start
+  // a fleet-wide eval loop on day one. When ENABLED is true, the
+  // autopilotEvaluatorWorker fires every INTERVAL_MIN minutes
+  // and calls runScheduledAutopilot for each opt-in workspace.
+  // The internal evaluate-all endpoint stays available either
+  // way for external cron + manual triggers.
+  AUTOPILOT_SCHEDULER_ENABLED:
+    String(process.env.AUTOPILOT_SCHEDULER_ENABLED ?? "false").toLowerCase() === "true",
+  AUTOPILOT_SCHEDULER_INTERVAL_MIN:
+    Number(process.env.AUTOPILOT_SCHEDULER_INTERVAL_MIN) > 0
+      ? Number(process.env.AUTOPILOT_SCHEDULER_INTERVAL_MIN)
+      : 360, // 6 hours default
+
+  // Per-feature gate for the SquadInbox reply path. Default OFF
+  // so a fresh deploy doesn't accidentally start posting public
+  // replies on Threads. The resolver + outbound service both
+  // check this flag before any Threads write.
+  THREADS_REPLY_ENABLED:
+    String(process.env.THREADS_REPLY_ENABLED ?? "false").toLowerCase() === "true",
+  // Per-feature gate for the Threads publish adapter (organic
+  // content publishing from Squadpitch Studio). Default OFF
+  // until the workspace has explicitly opted in — flipping this
+  // false halts publishPost at the channel-dispatch level so
+  // even a scheduled Draft won't fire on the wrong workspace.
+  THREADS_PUBLISHING_ENABLED:
+    String(process.env.THREADS_PUBLISHING_ENABLED ?? "false").toLowerCase() === "true",
+  // Per-feature gate for any Threads insights fetcher. Default
+  // OFF. Reserved for the analytics sync worker once it's wired
+  // for Threads — Inbox functionality must NOT depend on this.
+  THREADS_INSIGHTS_ENABLED:
+    String(process.env.THREADS_INSIGHTS_ENABLED ?? "false").toLowerCase() === "true",
 
   // Notifications
   POSTMARK_SERVER_TOKEN: process.env.POSTMARK_SERVER_TOKEN,
   NOTIFICATION_FROM_EMAIL: process.env.NOTIFICATION_FROM_EMAIL ?? "notifications@squadpitch.com",
+
+  // Inbox outbound email — deliberately namespaced separately from
+  // NOTIFICATION_FROM_EMAIL so the system-notification path and the
+  // user→lead Inbox reply path can't accidentally share each
+  // other's sender or routing config. Postmark server token is
+  // shared (one account); From/Reply behaviors are separate.
+  POSTMARK_MESSAGE_STREAM: process.env.POSTMARK_MESSAGE_STREAM ?? "outbound",
+  INBOX_EMAIL_FROM: process.env.INBOX_EMAIL_FROM,
+  INBOX_EMAIL_REPLY_DOMAIN: process.env.INBOX_EMAIL_REPLY_DOMAIN,
+  // HMAC secret the Postmark inbound webhook signs with. Required
+  // by the inbound parser (separate prompt); set today so the
+  // shape exists.
+  POSTMARK_INBOUND_WEBHOOK_SECRET: process.env.POSTMARK_INBOUND_WEBHOOK_SECRET,
+  // Per-workspace daily send cap. Conservative default so a runaway
+  // workspace (or a bug) can't blast a Postmark account dry.
+  INBOX_EMAIL_DAILY_CAP: Number.isFinite(parseInt(process.env.INBOX_EMAIL_DAILY_CAP, 10))
+    ? parseInt(process.env.INBOX_EMAIL_DAILY_CAP, 10)
+    : 50,
+
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
   TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
+  // Exact public URL Twilio uses to POST inbound SMS to us.
+  // Required for X-Twilio-Signature verification — the HMAC is
+  // computed over (URL + sorted form params), and Fly's proxy
+  // headers can make in-process URL reconstruction unreliable
+  // (req.protocol, req.headers.host etc. may not reflect what
+  // Twilio actually called). Default falls back to the prod URL
+  // so a deploy without the secret still validates correctly in
+  // production; dev/staging should override.
+  TWILIO_INBOUND_WEBHOOK_URL:
+    process.env.TWILIO_INBOUND_WEBHOOK_URL ??
+    "https://squadpitch-api.fly.dev/api/v1/inbox/webhooks/twilio/inbound",
+  // SMS sending gates. Two independently-flippable flags so the
+  // workspace can hold sending back even after A2P approval lands
+  // (or vice versa — flip A2P_APPROVED to acknowledge approval
+  // without enabling sending, then flip SENDING_ENABLED later).
+  // Both must be true for the inbox outbound SMS path to fire.
+  //
+  //   SMS_A2P_APPROVED       — Twilio Brand + Campaign both
+  //                            APPROVED. Set this when Twilio
+  //                            Console confirms approval.
+  //   SMS_SENDING_ENABLED    — operational kill switch for the
+  //                            inbox send path. Lets us roll
+  //                            the code without enabling live
+  //                            send on day one.
+  //
+  // Notifications-side SMS (OTPs, internal alerts) is unaffected
+  // by these flags — those go through transactional channels.
+  SMS_A2P_APPROVED:
+    String(process.env.SMS_A2P_APPROVED ?? "false").toLowerCase() === "true",
+  SMS_SENDING_ENABLED:
+    String(process.env.SMS_SENDING_ENABLED ?? "false").toLowerCase() === "true",
   VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY,
   VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
   APP_URL: process.env.APP_URL ?? "https://squadpitch-web.fly.dev",

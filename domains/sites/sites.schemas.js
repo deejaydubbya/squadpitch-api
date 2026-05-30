@@ -95,7 +95,15 @@ const LeadFormBlockSchema = z.object({
 
 const GalleryBlockSchema = z.object({
   type: z.literal("gallery"),
-  imageUrls: z.array(z.string().url()).min(1).max(20),
+  // Cap raised iteratively: 20 → 50 → 100 as real-estate listings
+  // with full professional shoots routinely exceed earlier caps.
+  // 100 covers luxury / mansion listings, MLS imports, and
+  // virtual-tour galleries while still preventing a truly runaway
+  // payload (the runtime renderer .map()s every URL into the DOM,
+  // so an unbounded array would tank LCP). If we hit 100 in
+  // practice, look at lazy-loading / pagination in the renderer
+  // before raising further.
+  imageUrls: z.array(z.string().url()).min(1).max(100),
   layout: z.enum(["grid", "carousel"]).optional().default("grid"),
 });
 
@@ -286,11 +294,35 @@ export const UpdateSubmissionSchema = z.object({
 export const ListSubmissionsQuerySchema = z.object({
   status: SubmissionStatusEnum.optional(),
   formId: z.string().max(64).optional(),
+  // Spinstr427 — pageId filter so the lead-form block can deep-link
+  // a submissions view to a single page. Tenant-scoped at the service
+  // layer (cross-workspace pageIds match nothing → empty result).
+  pageId: z.string().max(64).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),
   cursor: z.string().max(64).optional(),
 });
 
+// Spinstr427 — form stats endpoint query (optional pageId for
+// page-scoped stats).
+export const FormStatsQuerySchema = z.object({
+  pageId: z.string().max(64).optional(),
+});
+
 // ── Page generation ────────────────────────────────────────────────────
+
+// Sites-05 — template hint. Optional. When set, biases the LLM
+// toward a specific block scaffold + page intent; the generation
+// service runs a scaffold pass that ensures the required block
+// types exist (placeholders for missing) so the property
+// deterministic fill has something to populate.
+export const SiteTemplateEnum = z.enum([
+  "property_listing",
+  "open_house",
+  "just_sold",
+  "seller_lead",
+  "buyer_lead",
+  "neighborhood_guide",
+]);
 
 export const GeneratePageSchema = z.object({
   sourceType: SiteSourceTypeEnum,
@@ -305,4 +337,5 @@ export const GeneratePageSchema = z.object({
   // to the workspace `defaultLanguage` when unset. Currently gated
   // to the supported set in lib/languages.js.
   language: z.enum(["en", "es"]).optional(),
+  template: SiteTemplateEnum.optional(),
 });

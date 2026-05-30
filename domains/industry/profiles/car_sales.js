@@ -2,6 +2,7 @@ export default {
   key: "car_sales",
   label: "Car Sales",
   description: "Auto dealerships, independent car lots, and vehicle sales professionals.",
+  status: "active",
   onboarding: {
     websitePlaceholder: "citymotors.com",
     extraContextLabel: "Inventory or dealership details",

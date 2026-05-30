@@ -6,6 +6,14 @@
 // routes and services must NEVER assemble prompts inline.
 
 import { buildContentContext } from "../../industry/contentContextBuilder.js";
+// industry-03 — campaign-type instructions now come from the
+// industry module registry instead of a single local map. RE
+// keys (just_listed / open_house / price_drop / just_sold /
+// listing_spotlight) resolve via the real_estate module; generic
+// keys (awareness / lead_generation / educational / etc.)
+// resolve via the generic module. No-industry workspaces never
+// see a real-estate-specific instruction.
+import { getIndustryModuleOrGeneric } from "../../industry/modules/index.js";
 import { buildPatternPromptBlock } from "../viralPatterns.js";
 import { getMaxCharsForChannel } from "../channelLimits.js";
 import { buildLanguageInstructions } from "./languageInstructions.js";
@@ -921,89 +929,18 @@ export const CAMPAIGN_OUTPUT_SCHEMA = {
  * Build the user prompt for a listing campaign. Injects property details
  * and asks for 4 distinct content pieces with channel-specific instructions.
  */
-/**
- * Campaign-type-specific prompt instructions.
- * Each type changes tone, CTA language, urgency, and output structure.
- */
-const CAMPAIGN_TYPE_INSTRUCTIONS = {
-  just_listed: `CAMPAIGN TYPE: JUST LISTED
-- Tone: Excitement, fresh-to-market energy
-- Emphasize unique features and first-look exclusivity
-- CTA: "Schedule a showing", "See it before it's gone", "DM for details"
-- Urgency: Fresh-to-market, don't wait
-- Every channel should convey the thrill of a brand-new listing`,
-
-  open_house: `CAMPAIGN TYPE: OPEN HOUSE
-- Tone: Event-focused, inviting, warm
-- Include date/time if provided, emphasize attendance
-- CTA: "Join us", "Mark your calendar", "RSVP", "Stop by"
-- Urgency: Limited-time event, specific date/time
-- Make the reader feel personally invited`,
-
-  price_drop: `CAMPAIGN TYPE: PRICE DROP
-- Tone: Value-driven, opportunity-focused
-- Lead with the new price or savings amount
-- CTA: "New price", "Now within reach", "Don't miss this value"
-- Urgency: Price won't last, act-now energy
-- Frame as an opportunity, not a sign of desperation`,
-
-  just_sold: `CAMPAIGN TYPE: JUST SOLD
-- Tone: Celebration, confidence, proof of results
-- Highlight speed of sale, final price if appropriate
-- CTA: "Thinking of selling?", "Ready to be next?", "Let's talk about your home"
-- Urgency: None — this is trust-building, not time-pressure
-- Position the agent as effective and reliable`,
-
-  listing_spotlight: `CAMPAIGN TYPE: LISTING SPOTLIGHT
-- Tone: Lifestyle/showcase, aspirational, storytelling
-- Focus on the neighborhood, lifestyle, and emotional appeal
-- CTA: "Imagine living here", "Discover this home", "Learn more"
-- Urgency: Low — focus on aspiration and desire
-- Paint a picture of life in this home and neighborhood`,
-
-  // ── Generic cross-industry types (for Content Asset + Idea sources)
-  awareness: `CAMPAIGN TYPE: AWARENESS
-- Tone: Inviting, top-of-funnel, conversational
-- Goal: Make new people aware of the brand, topic, or offer
-- CTA: "Follow for more", "Save for later", "Send this to someone who needs it"
-- Urgency: Low — focus on intrigue, not pressure
-- Lead with a clear hook that explains why this matters`,
-
-  lead_generation: `CAMPAIGN TYPE: LEAD GENERATION
-- Tone: Direct, helpful, confidence-inspiring
-- Goal: Convert viewers into inquiries, sign-ups, or DM conversations
-- CTA: "DM me to get started", "Link in bio", "Comment 'YES' for details"
-- Urgency: Medium — make the next step easy and obvious
-- Every post needs an unmistakable call-to-action`,
-
-  educational: `CAMPAIGN TYPE: EDUCATIONAL
-- Tone: Authoritative but accessible, generous, teacher-like
-- Goal: Teach the audience something useful over a sequence
-- CTA: "Save this", "Follow for more tips", "Send this to a friend"
-- Urgency: None — value-first, no hard sell
-- Each post should leave the viewer smarter than they started`,
-
-  promotion_offer: `CAMPAIGN TYPE: PROMOTION / OFFER
-- Tone: Value-driven, energetic, time-aware
-- Goal: Highlight a deal, discount, or limited-time offer
-- CTA: "Claim yours", "Use code at checkout", "Tap link to redeem"
-- Urgency: High — make the deadline / scarcity explicit
-- Lead with the offer; don't bury it`,
-
-  social_proof: `CAMPAIGN TYPE: TESTIMONIAL / SOCIAL PROOF
-- Tone: Genuine, story-led, trust-building
-- Goal: Spotlight reviews, client results, or case studies
-- CTA: "Be next", "Read the full story", "Book a chat"
-- Urgency: Low — focus on credibility, not pressure
-- Quote the customer directly when possible; never invent quotes`,
-
-  event_announcement: `CAMPAIGN TYPE: EVENT / ANNOUNCEMENT
-- Tone: Excited, inviting, attendance-focused
-- Goal: Promote an upcoming event or news moment
-- CTA: "RSVP now", "Mark your calendar", "Join us", "Spread the word"
-- Urgency: Medium-high — make the date/time unmistakable
-- Repeat key event details (date/time/where) across posts`,
-};
+// industry-03 — campaign-type instructions moved into the
+// industry module registry. The map that used to live here is
+// now split across:
+//   - domains/industry/modules/real_estate/prompts.js (RE keys:
+//     just_listed / open_house / price_drop / just_sold /
+//     listing_spotlight)
+//   - domains/industry/modules/generic/prompts.js (cross-industry
+//     keys: awareness / lead_generation / educational /
+//     promotion_offer / social_proof / event_announcement)
+// Callers go through getIndustryModuleOrGeneric(ctx.industryKey)
+// so no-industry workspaces never receive the RE-specific
+// instructions.
 
 /**
  * Build a normalized, structured property context block for AI prompts.
@@ -1147,8 +1084,18 @@ Each post must match its slot's channel, campaignDay, and label. Use the label a
   }
 
   // Campaign type instructions
-  const typeKey = campaignType ?? "just_listed";
-  const typeInstructions = CAMPAIGN_TYPE_INSTRUCTIONS[typeKey];
+  // industry-01 — was `campaignType ?? "just_listed"`, which
+  // silently turned every missing-campaign-type generation into a
+  // real-estate "just listed" prompt for ALL industries.
+  // industry-03 — now routed through the industry module registry.
+  // The module decides which instructions apply (real-estate
+  // workspaces still get the listing-aware copy; generic
+  // workspaces never do). Missing campaign type → skipped.
+  const typeKey = campaignType ?? null;
+  const industryModule = getIndustryModuleOrGeneric(ctx?.industryKey);
+  const typeInstructions = typeKey
+    ? industryModule.promptAddons.getCampaignTypeInstructions(typeKey)
+    : null;
   if (typeInstructions) {
     lines.push(`\n${typeInstructions}\n`);
   }
@@ -1402,8 +1349,18 @@ export function buildRegeneratePostUserPrompt(ctx, propertyData, campaignType, s
   }
 
   // Campaign type instructions
-  const typeKey = campaignType ?? "just_listed";
-  const typeInstructions = CAMPAIGN_TYPE_INSTRUCTIONS[typeKey];
+  // industry-01 — was `campaignType ?? "just_listed"`, which
+  // silently turned every missing-campaign-type generation into a
+  // real-estate "just listed" prompt for ALL industries.
+  // industry-03 — now routed through the industry module registry.
+  // The module decides which instructions apply (real-estate
+  // workspaces still get the listing-aware copy; generic
+  // workspaces never do). Missing campaign type → skipped.
+  const typeKey = campaignType ?? null;
+  const industryModule = getIndustryModuleOrGeneric(ctx?.industryKey);
+  const typeInstructions = typeKey
+    ? industryModule.promptAddons.getCampaignTypeInstructions(typeKey)
+    : null;
   if (typeInstructions) {
     lines.push(`\n${typeInstructions}\n`);
   }

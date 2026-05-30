@@ -1,0 +1,386 @@
+// Channel-aware reply action resolver.
+//
+// Given a Conversation (with its Contact + Provider) and the
+// workspace's current provider configuration, return an ordered
+// list of action descriptors the composer can render. Email is the
+// only fully-wired send channel today; everything else returns
+// `available: false` with a recognizable reason so the UI can show
+// "Connect <provider>" rather than a misleading send button.
+//
+// Shape pinned by the spinstr07 prompt:
+//   SEND_EMAIL             — contact.email + email provider configured
+//   SEND_SMS               — contact.phone + SMS provider configured
+//   REPLY_PUBLIC_COMMENT   — provider supports comment replies AND
+//                            the conversation has an externalMessageId
+//   REPLY_DM               — provider supports DM AND externalThreadId
+//   REPLY_REVIEW           — provider supports review replies
+//   LOG_EXTERNAL_REPLY     — always available
+//   INTERNAL_NOTE          — always available
+//
+// Each entry carries an `available` boolean + (when not) a
+// `reason` string the UI surfaces verbatim.
+
+import { env } from "../../config/env.js";
+import { emailCapabilityFor } from "./inbox.outbound.email.service.js";
+import { capabilityFor as providerMatrixFor } from "./providerCapabilities.js";
+import {
+  isAccessDeniedMarker,
+  ACCESS_DENIED_RESOLVER_REASON,
+} from "./gbpReviewAccessMarker.js";
+
+// Per-provider capability map. Drives which actions are
+// theoretically possible for a given Conversation.provider — does
+// NOT decide whether we can actually fire the send today (that's
+// the second pass below, gated on env config + contact channels).
+const PROVIDER_CAPABILITIES = {
+  SQUADSITES:    { supportsEmail: true,  supportsSms: true,  supportsComment: false, supportsDm: false, supportsReview: false },
+  EMAIL:         { supportsEmail: true,  supportsSms: false, supportsComment: false, supportsDm: false, supportsReview: false },
+  SMS:           { supportsEmail: false, supportsSms: true,  supportsComment: false, supportsDm: false, supportsReview: false },
+  FACEBOOK:      { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: true  },
+  INSTAGRAM:     { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
+  GOOGLE_BUSINESS:{ supportsEmail: false, supportsSms: false, supportsComment: false, supportsDm: false, supportsReview: true  },
+  YOUTUBE:       { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
+  LINKEDIN:      { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
+  X:             { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
+  TIKTOK:        { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
+  THREADS:       { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
+  PINTEREST:     { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
+  WEB_CHAT:      { supportsEmail: true,  supportsSms: false, supportsComment: false, supportsDm: true,  supportsReview: false },
+  MANUAL:        { supportsEmail: true,  supportsSms: true,  supportsComment: false, supportsDm: false, supportsReview: false },
+};
+
+function capabilitiesFor(provider) {
+  return PROVIDER_CAPABILITIES[provider] ?? PROVIDER_CAPABILITIES.MANUAL;
+}
+
+// SMS provider config — mirrors isEmailProviderConfigured() in
+// inbox.outbound.email.service.js but for Twilio. No send code
+// path uses this yet; the resolver still wants to be honest about
+// whether sending is *possible* so the UI can offer Connect copy.
+function isSmsProviderConfigured() {
+  return Boolean(
+    env.TWILIO_ACCOUNT_SID &&
+      env.TWILIO_AUTH_TOKEN &&
+      env.TWILIO_FROM_NUMBER,
+  );
+}
+
+// Look up the most recent inbound message on the conversation —
+// some action availabilities key off whether THAT message has an
+// externalMessageId/externalThreadId (a public-comment reply needs
+// the comment id; a DM reply needs the thread id).
+function pickLastInbound(conversation) {
+  if (!Array.isArray(conversation?.messages)) return null;
+  for (const m of conversation.messages) {
+    if (m.party === "CONTACT") return m;
+  }
+  return null;
+}
+
+// YouTube's comment-reply scope. Pulled from the OAuth module
+// constants to avoid string drift. We check presence on the
+// connection's stored scopes (Google omits scopes the user
+// declined) before flipping REPLY_PUBLIC_COMMENT to available.
+const YOUTUBE_REPLY_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
+
+// LinkedIn org-comment ingestion + reply requires Community
+// Management API approval from LinkedIn Developer Platform.
+// We submitted the app in April 2026; approval is "Review in
+// progress" at time of writing (spinstr416). Surface the
+// truthful pending-approval reason rather than a generic
+// "isn't connected yet" so the user knows what we're waiting on.
+const LINKEDIN_COMMUNITY_API_PENDING_REASON =
+  "Pending LinkedIn Community Management API approval.";
+
+/**
+ * Resolve the ordered list of reply actions for a Conversation.
+ *
+ * @param {object} conversation — must include contact + (optionally) messages.
+ * @param {object} [extras]    — pre-loaded per-conversation state the
+ *                                resolver can't fetch itself (it's sync):
+ *                                { gbpConnection? } — the workspace's
+ *                                GOOGLE_BUSINESS_PROFILE ChannelConnection
+ *                                row, when known. Used to flip REPLY_REVIEW
+ *                                from "Connect..." to available.
+ *                                { youtubeConnection? } — the workspace's
+ *                                YOUTUBE ChannelConnection row. Used to
+ *                                decide whether REPLY_PUBLIC_COMMENT for a
+ *                                YouTube conversation is wireable today
+ *                                (gated on youtube.force-ssl in scopes).
+ * @returns {Array<{action: string, label: string, available: boolean, reason: string|null, requiresConfig: boolean}>}
+ */
+export function getAvailableReplyActions(conversation, extras = {}) {
+  if (!conversation) return [];
+  const provider = conversation.provider ?? "SQUADSITES";
+  const caps = capabilitiesFor(provider);
+  const contact = conversation.contact ?? {};
+  const lastInbound = pickLastInbound(conversation);
+
+  const actions = [];
+
+  // ── SEND_EMAIL ──────────────────────────────────────────────────────
+  if (caps.supportsEmail) {
+    // Re-use the existing email-capability check so the resolver
+    // can't disagree with the actual outbound service.
+    const cap = emailCapabilityFor({ conversation, contact });
+    actions.push({
+      action: "SEND_EMAIL",
+      label: "Send email",
+      available: cap.available,
+      reason: cap.available ? null : cap.reason,
+      // Distinguishes a missing channel (contact has no email) from
+      // a missing config (workspace hasn't wired Postmark). The UI
+      // uses this to choose "Add an email address" vs "Connect email".
+      requiresConfig:
+        !cap.available && (cap.reason ?? "").toLowerCase().includes("configured"),
+    });
+  }
+
+  // ── SEND_SMS ────────────────────────────────────────────────────────
+  if (caps.supportsSms) {
+    const smsConfigured = isSmsProviderConfigured();
+    const hasPhone = Boolean(contact.phone);
+    const optedOut = contact.enrichmentJson?.smsOptOut === true;
+    // Two independent env flags. A2P_APPROVED reflects Twilio
+    // approval state; SENDING_ENABLED is the kill switch. Both
+    // must be true to send. Surface the most blocking reason
+    // first so the UI shows the actionable step.
+    const a2pApproved = Boolean(env.SMS_A2P_APPROVED);
+    const sendingEnabled = Boolean(env.SMS_SENDING_ENABLED);
+    const blocker = !smsConfigured
+      ? "SMS sending is not configured for this workspace yet."
+      : !a2pApproved
+        ? "Awaiting Twilio business profile / A2P 10DLC approval."
+        : !sendingEnabled
+          ? "SMS sending is not enabled in this workspace."
+          : !hasPhone
+            ? "This lead has no phone number on file."
+            : optedOut
+              ? "Contact has opted out of SMS (replied STOP)."
+              : conversation.spam
+                ? "Conversation is marked as spam — unmark before sending."
+                : null;
+    actions.push({
+      action: "SEND_SMS",
+      label: "Send SMS",
+      available: blocker === null,
+      reason: blocker,
+      requiresConfig: !smsConfigured || !a2pApproved || !sendingEnabled,
+    });
+  }
+
+  // Provider-matrix lookup — tells us WHY a reply path isn't
+  // connected (missing OAuth scope, no adapter yet, etc.) so the
+  // resolver can surface the truth rather than a generic
+  // "isn't connected yet" message.
+  const matrix = providerMatrixFor(provider);
+  const scopeBlocker =
+    matrix.missingScopes.length > 0
+      ? `Pending Meta App Review for additional scopes (${matrix.missingScopes.join(", ")}).`
+      : null;
+
+  // ── REPLY_PUBLIC_COMMENT ────────────────────────────────────────────
+  if (caps.supportsComment) {
+    const hasCommentId = Boolean(
+      lastInbound?.externalMessageId || lastInbound?.sourceUrl,
+    );
+    let available = false;
+    let reason;
+    let requiresConfig = hasCommentId;
+
+    if (!hasCommentId) {
+      reason = "No public comment to reply to on this conversation.";
+    } else if (provider === "LINKEDIN") {
+      // LinkedIn org-comment ingestion + reply is gated on the
+      // Community Management API approval (still "Review in
+      // progress"). Pin the truthful reason regardless of token /
+      // scope state — we will not write to LinkedIn until approval
+      // lands. Personal LinkedIn isn't usable for org comments
+      // either; same blocker.
+      reason = LINKEDIN_COMMUNITY_API_PENDING_REASON;
+      requiresConfig = false;
+    } else if (provider === "THREADS") {
+      // Threads ingestion is wired (read-only). Reply publishing
+      // is gated behind:
+      //   1. env.THREADS_REPLY_ENABLED — operational kill switch
+      //   2. The connection carries threads_manage_replies in its
+      //      granted scopes — Meta omits scopes the user declined,
+      //      so we can't assume it from THREADS_SCOPES.
+      const th = extras?.threadsConnection ?? null;
+      if (!env.THREADS_REPLY_ENABLED) {
+        reason = "Threads reply publishing is not enabled.";
+        requiresConfig = false;
+      } else if (!th) {
+        reason = "Connect Threads to reply to comments.";
+        requiresConfig = true;
+      } else if (th.status !== "CONNECTED") {
+        reason = "Threads connection needs to be reconnected.";
+        requiresConfig = true;
+      } else if (
+        !Array.isArray(th.scopes) ||
+        !th.scopes.includes("threads_manage_replies")
+      ) {
+        reason =
+          "Reconnect Threads and grant the reply permission (threads_manage_replies).";
+        requiresConfig = true;
+      } else {
+        available = true;
+        reason = null;
+        requiresConfig = false;
+      }
+    } else if (provider === "YOUTUBE") {
+      // YouTube comment reply is wireable today IF the connection
+      // granted the youtube.force-ssl scope. Test users on the
+      // Google Cloud project can grant it; everyone else hits the
+      // unverified-app block from Google. We surface the exact
+      // missing-scope blocker so the user can reconnect.
+      const yt = extras?.youtubeConnection ?? null;
+      const hasScope =
+        yt &&
+        yt.status === "CONNECTED" &&
+        Array.isArray(yt.scopes) &&
+        yt.scopes.includes(YOUTUBE_REPLY_SCOPE);
+      if (!yt) {
+        reason = "Connect YouTube to reply to comments.";
+        requiresConfig = true;
+      } else if (yt.status !== "CONNECTED") {
+        reason = "YouTube connection needs to be reconnected.";
+        requiresConfig = true;
+      } else if (!hasScope) {
+        reason =
+          "Reconnect YouTube and grant the comment-reply permission (youtube.force-ssl).";
+        requiresConfig = true;
+      } else {
+        available = true;
+        reason = null;
+        requiresConfig = false;
+      }
+    } else if (scopeBlocker) {
+      reason = scopeBlocker;
+    } else {
+      reason = `Public comment reply isn't connected yet for ${humanizeProvider(provider)}.`;
+    }
+
+    actions.push({
+      action: "REPLY_PUBLIC_COMMENT",
+      label: "Reply to comment",
+      available,
+      reason,
+      requiresConfig,
+    });
+  }
+
+  // ── REPLY_DM ────────────────────────────────────────────────────────
+  if (caps.supportsDm) {
+    const hasThread = Boolean(conversation.externalThreadId);
+    let reason;
+    if (!hasThread) {
+      reason = `No ${humanizeProvider(provider)} thread on this conversation.`;
+    } else if (provider === "LINKEDIN") {
+      reason = LINKEDIN_COMMUNITY_API_PENDING_REASON;
+    } else if (scopeBlocker) {
+      reason = scopeBlocker;
+    } else {
+      reason = `${humanizeProvider(provider)} DM sending isn't connected yet.`;
+    }
+    actions.push({
+      action: "REPLY_DM",
+      label: "Reply via DM",
+      available: false,
+      reason,
+      requiresConfig: hasThread,
+    });
+  }
+
+  // ── REPLY_REVIEW ────────────────────────────────────────────────────
+  if (caps.supportsReview) {
+    // GBP case — when the workspace has a fully-configured
+    // GOOGLE_BUSINESS_PROFILE connection (location picked +
+    // business.manage in scopes), the action becomes available.
+    if (provider === "GOOGLE_BUSINESS") {
+      const gbp = extras?.gbpConnection ?? null;
+      let available = false;
+      let reason = "Connect a Google Business Profile location to reply to reviews.";
+      let requiresConfig = true;
+      if (gbp && gbp.status === "CONNECTED") {
+        const hasLocation = typeof gbp.externalAccountId === "string" &&
+          gbp.externalAccountId.includes("/locations/");
+        const hasScope = Array.isArray(gbp.scopes) &&
+          gbp.scopes.includes("https://www.googleapis.com/auth/business.manage");
+        // The poller or a prior reply attempt may have learned
+        // that Google hasn't allowlisted this project for the
+        // legacy reviews API. The marker takes precedence over
+        // location/scope — we don't want to mark REPLY_REVIEW
+        // available if Google will reject it anyway.
+        if (isAccessDeniedMarker(gbp.lastError)) {
+          available = false;
+          reason = ACCESS_DENIED_RESOLVER_REASON;
+          // Already-granted scope doesn't make this requiresConfig —
+          // there's nothing to configure on our side; we're waiting
+          // on Google.
+          requiresConfig = false;
+        } else if (!hasLocation) {
+          available = false;
+          reason = "Pick a Google Business Profile location to reply to reviews.";
+          requiresConfig = true;
+        } else if (!hasScope) {
+          available = false;
+          reason = "Google Business Profile is connected, but review reply permission is not available.";
+          requiresConfig = true;
+        } else {
+          available = true;
+          reason = null;
+          requiresConfig = false;
+        }
+      }
+      actions.push({
+        action: "REPLY_REVIEW",
+        label: "Reply to review",
+        available,
+        reason,
+        requiresConfig,
+      });
+    } else {
+      actions.push({
+        action: "REPLY_REVIEW",
+        label: "Reply to review",
+        available: false,
+        reason:
+          scopeBlocker ?? `${humanizeProvider(provider)} review replies aren't connected yet.`,
+        requiresConfig: true,
+      });
+    }
+  }
+
+  // ── LOG_EXTERNAL_REPLY ──────────────────────────────────────────────
+  // Always offered — records that the workspace user replied
+  // outside Squadpitch (in another tool) without sending anything.
+  actions.push({
+    action: "LOG_EXTERNAL_REPLY",
+    label: "Log external reply",
+    available: true,
+    reason: null,
+    requiresConfig: false,
+  });
+
+  // ── INTERNAL_NOTE ───────────────────────────────────────────────────
+  // Also always offered — workspace-private team note.
+  actions.push({
+    action: "INTERNAL_NOTE",
+    label: "Internal note",
+    available: true,
+    reason: null,
+    requiresConfig: false,
+  });
+
+  return actions;
+}
+
+function humanizeProvider(p) {
+  if (!p) return "this channel";
+  return p
+    .toLowerCase()
+    .split("_")
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join(" ");
+}

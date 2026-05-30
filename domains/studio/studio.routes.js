@@ -78,6 +78,8 @@ import {
   ListingCSVImportSchema,
   ListingUrlImportSchema,
   ListingConfirmUrlSchema,
+  UrlIntakeAnalyzeSchema,
+  UrlIntakeConfirmSchema,
   GBPCallbackSchema,
   GBPSetLocationSchema,
   GBPReplySchema,
@@ -143,6 +145,7 @@ import { evaluateFlag } from "../internal/config.service.js";
 import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
+import * as urlCampaignIntake from "./urlCampaignIntake.service.js";
 import * as gbpProvider from "../integrations/providers/gbpProvider.js";
 import { syncGBP, getGBPReviews, getGBPBusinessProfile, getGBPInsights } from "./gbpSync.service.js";
 import { reanalyzeAllReviews } from "./gbpReviewAnalysis.service.js";
@@ -235,6 +238,24 @@ studioRouter.patch(`${BASE}/workspaces/:id`, requireClientOwner, async (req, res
   try {
     const parsed = UpdateClientSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
+    // spinstr421 — refuse to assign a coming-soon industryKey.
+    // The onboarding selector already grays these out, but the
+    // server still pre-flights so a hand-crafted request can't
+    // sneak past the UI. Pass-through is fine for clearing the
+    // value (null) or omitting it entirely.
+    if (parsed.data.industryKey) {
+      const { isIndustryKeySelectable } = await import(
+        "../industry/registry.js"
+      );
+      if (!isIndustryKeySelectable(parsed.data.industryKey)) {
+        return sendError(
+          res,
+          400,
+          "INDUSTRY_NOT_SELECTABLE",
+          "That industry isn't available yet. Choose Real Estate or Car Sales.",
+        );
+      }
+    }
     const actorSub = getAuth0Sub(req);
     const client = await service.updateClient(req.params.id, parsed.data, actorSub);
     res.json(service.formatClient(client));
@@ -755,32 +776,60 @@ studioRouter.post(
   }
 );
 
-studioRouter.get(`${BASE}/business-data/:itemId`, async (req, res, next) => {
-  try {
-    const item = await dataService.getDataItem(req.params.itemId);
-    if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
-    res.json(dataService.formatDataItem(item));
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.patch(`${BASE}/business-data/:itemId`, async (req, res, next) => {
-  try {
-    const parsed = UpdateDataItemSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const item = await dataService.updateDataItem(req.params.itemId, parsed.data);
-    res.json(dataService.formatDataItem(item));
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.post(
-  `${BASE}/business-data/:itemId/archive`,
+// Workspace-scoped business-data item routes. Replaces the legacy
+// /business-data/:itemId routes which had no ownership check —
+// any authenticated user could read/modify/delete any workspace's
+// items by guessing cuid ids. Every handler now runs
+// requireClientOwner (auth → owner of :id matches) AND the service
+// layer scopes every query by clientId (defense in depth).
+//
+// The "Item not found" response intentionally covers both "doesn't
+// exist" and "exists in a different workspace" so we don't leak
+// existence across tenants.
+studioRouter.get(
+  `${BASE}/workspaces/:id/business-data/:itemId`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
-      const item = await dataService.archiveDataItem(req.params.itemId);
+      const item = await dataService.getDataItem(req.params.id, req.params.itemId);
+      if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
+      res.json(dataService.formatDataItem(item));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.patch(
+  `${BASE}/workspaces/:id/business-data/:itemId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpdateDataItemSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const item = await dataService.updateDataItem(
+        req.params.id,
+        req.params.itemId,
+        parsed.data,
+      );
+      if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
+      res.json(dataService.formatDataItem(item));
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/business-data/:itemId/archive`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const item = await dataService.archiveDataItem(
+        req.params.id,
+        req.params.itemId,
+      );
+      if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
       res.json(dataService.formatDataItem(item));
     } catch (err) {
       next(err);
@@ -789,10 +838,15 @@ studioRouter.post(
 );
 
 studioRouter.delete(
-  `${BASE}/business-data/:itemId`,
+  `${BASE}/workspaces/:id/business-data/:itemId`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
-      await dataService.deleteDataItem(req.params.itemId);
+      const ok = await dataService.deleteDataItem(
+        req.params.id,
+        req.params.itemId,
+      );
+      if (!ok) return sendError(res, 404, "NOT_FOUND", "Data item not found");
       res.json({ ok: true });
     } catch (err) {
       next(err);
@@ -843,12 +897,17 @@ studioRouter.get(
   }
 );
 
+// Workspace-scoped — replaces the legacy unscoped variant.
+// Service-layer findFirst is keyed on (id, clientId), so an
+// id-guess from another workspace returns no opportunities.
 studioRouter.get(
-  `${BASE}/business-data/:itemId/opportunities`,
+  `${BASE}/workspaces/:id/business-data/:itemId/opportunities`,
+  requireClientOwner,
   async (req, res, next) => {
     try {
       const channel = req.query.channel || undefined;
       const opportunities = await opportunityService.getOpportunitiesForItem(
+        req.params.id,
         req.params.itemId,
         { channel }
       );
@@ -1432,7 +1491,17 @@ studioRouter.post(
       const result = await importService.extractFromUrl(parsed.data.url, { hint: parsed.data.hint });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1448,7 +1517,17 @@ studioRouter.post(
       const result = await importService.extractFromText(parsed.data.text, { hint: parsed.data.hint });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1464,7 +1543,17 @@ studioRouter.post(
       const result = importService.previewCSV(parsed.data.csvContent);
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1483,7 +1572,17 @@ studioRouter.post(
       });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1503,7 +1602,17 @@ studioRouter.post(
       });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1521,7 +1630,17 @@ studioRouter.post(
       });
       res.json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -1541,7 +1660,17 @@ studioRouter.post(
       });
       res.status(201).json(result);
     } catch (err) {
-      if (err.status) return sendError(res, err.status, "IMPORT_ERROR", err.message);
+      if (err.status) {
+        // industry-01 — preserve caller-supplied err.code (e.g.
+        // INDUSTRY_NOT_SUPPORTED from the listingIngestion gate);
+        // fall back to IMPORT_ERROR for legacy errors that only
+        // set status. Also forward industry-error extras so the FE
+        // can render "this requires real-estate" messaging.
+        const extras = {};
+        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
+        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+      }
       next(err);
     }
   }
@@ -3996,6 +4125,308 @@ studioRouter.post(
   }
 );
 
+// ── Google Business Profile location picker ──────────────────────────
+//
+// Mirrors the Pinterest board picker pattern: OAuth completes
+// with externalAccountId="accounts/{a}" as a sentinel; the user
+// must pick a specific location before reviews polling or reply
+// send can fire. The polling worker + outbound reply service both
+// refuse to act on connections lacking "/locations/" in their
+// externalAccountId, so a half-finished connection cannot leak
+// reviews into the inbox or attempt to send a reply against a
+// non-existent location.
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/connections/GOOGLE_BUSINESS_PROFILE/locations`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "GOOGLE_BUSINESS_PROFILE",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "Connect Google Business Profile first, then choose which location to manage.",
+        );
+      }
+      const { listLocations } = await import("./gbpLocations.service.js");
+      const result = await listLocations({ connectionId: conn.id });
+      if (result.status === "access_denied") {
+        return res.json({
+          status: "access_denied",
+          locations: [],
+          message:
+            "Awaiting Google Business Profile API access approval. Listing locations requires Google allowlisting.",
+          providerMessage: result.providerMessage ?? null,
+        });
+      }
+      if (result.status === "empty") {
+        return res.json({
+          status: "empty",
+          locations: [],
+          message:
+            "No Google Business Profile locations were found for this account. Add a location in Google Business Profile, then refresh.",
+        });
+      }
+      res.json({ status: "ok", locations: result.locations });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+// Manual probe — workspace owner clicks "Check review API access"
+// in the Settings tile after submitting Google's allowlist
+// request. Runs reviews.list with pageSize=1 against the
+// connection's selected location; on success clears any stale
+// REVIEW_API_ACCESS_DENIED marker (so the resolver flips
+// REPLY_REVIEW back to available), on denial persists the
+// marker. No fake ingestion — this calls the real Google API.
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/GOOGLE_BUSINESS_PROFILE/check-review-access`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { checkGbpReviewAccess } = await import(
+        "./gbpReviewAccessCheck.service.js"
+      );
+      const result = await checkGbpReviewAccess({ clientId: req.params.id });
+      res.json(result);
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/GOOGLE_BUSINESS_PROFILE/locations/select`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { locationName, locationTitle } = req.body ?? {};
+      if (!locationName || typeof locationName !== "string") {
+        return validationError(res, [
+          { path: ["locationName"], message: "locationName is required" },
+        ]);
+      }
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "GOOGLE_BUSINESS_PROFILE",
+          },
+        },
+        select: { id: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No Google Business Profile connection.",
+        );
+      }
+      const { saveSelectedLocation } = await import("./gbpLocations.service.js");
+      const updated = await saveSelectedLocation({
+        connectionId: conn.id,
+        locationName,
+        locationTitle: typeof locationTitle === "string" ? locationTitle : null,
+      });
+      res.json({ connection: updated });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+// ── YouTube comment sync ──────────────────────────────────────────────
+//
+// Trigger the YouTube comment poller for a single workspace right
+// now (rather than waiting for the next 15-minute tick). Used by the
+// "Sync comments now" button on the YouTube Settings tile + makes
+// end-to-end testing tractable (post a comment on a video → click
+// → see it land in the Inbox seconds later instead of waiting up to
+// 15 min).
+//
+// Enqueues a one-shot poll-connection BullMQ job — work happens
+// asynchronously so the request returns immediately. The user reads
+// the result in the Inbox; this endpoint just acknowledges the
+// queue write. Returns 202 with the connection id so the UI can
+// optionally poll for completion (not wired in the first cut —
+// the existing 15-min refresh is fine).
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/YOUTUBE/sync-comments`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "YOUTUBE",
+          },
+        },
+        select: { id: true, status: true, externalAccountId: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No YouTube connection on this workspace.",
+        );
+      }
+      if (conn.status !== "CONNECTED") {
+        return sendError(
+          res,
+          400,
+          "CONNECTION_NOT_ACTIVE",
+          "YouTube connection is not active. Reconnect to sync comments.",
+        );
+      }
+      if (!conn.externalAccountId) {
+        return sendError(
+          res,
+          400,
+          "NO_CHANNEL_ID",
+          "YouTube connection is missing a channel id; reconnect to refresh it.",
+        );
+      }
+      const { enqueueYouTubeCommentPollForConnection } = await import(
+        "../../workers/youtubeCommentPollerWorker.js"
+      );
+      try {
+        await enqueueYouTubeCommentPollForConnection(conn.id);
+      } catch (err) {
+        // Redis unavailable in some dev environments — fall back to
+        // running the tick inline so the dev / test experience still
+        // works without a queue. In prod (Fly), Redis is configured
+        // so this branch is rarely hit.
+        if (err?.code === "QUEUE_UNAVAILABLE") {
+          const { pollYouTubeCommentsForConnection } = await import(
+            "../inbox/youtubeCommentPoller.service.js"
+          );
+          const full = await prisma.channelConnection.findUnique({
+            where: { id: conn.id },
+          });
+          if (full) await pollYouTubeCommentsForConnection(full);
+        } else {
+          throw err;
+        }
+      }
+      return res.status(202).json({
+        status: "queued",
+        connectionId: conn.id,
+        message:
+          "YouTube comment sync queued. Comments will appear in the Inbox shortly.",
+      });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+// ── Threads reply sync ────────────────────────────────────────────────
+//
+// Trigger the Threads reply poller for a single workspace right
+// now (rather than waiting for the next 15-minute tick). Mirrors
+// the YouTube sync-comments endpoint. Enqueues a one-shot
+// poll-connection BullMQ job; the work happens asynchronously.
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/THREADS/sync-replies`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "THREADS",
+          },
+        },
+        select: { id: true, status: true, externalAccountId: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No Threads connection on this workspace.",
+        );
+      }
+      if (conn.status !== "CONNECTED") {
+        return sendError(
+          res,
+          400,
+          "CONNECTION_NOT_ACTIVE",
+          "Threads connection is not active. Reconnect to sync replies.",
+        );
+      }
+      if (!conn.externalAccountId) {
+        return sendError(
+          res,
+          400,
+          "NO_USER_ID",
+          "Threads connection is missing a user id; reconnect to refresh it.",
+        );
+      }
+      const { enqueueThreadsReplyPollForConnection } = await import(
+        "../../workers/threadsReplyPollerWorker.js"
+      );
+      try {
+        await enqueueThreadsReplyPollForConnection(conn.id);
+      } catch (err) {
+        // Same Redis-down fallback as the YouTube sync endpoint —
+        // dev environments without Redis still get a working
+        // sync via inline execution.
+        if (err?.code === "QUEUE_UNAVAILABLE") {
+          const { pollThreadsRepliesForConnection } = await import(
+            "../inbox/threadsReplyPoller.service.js"
+          );
+          const full = await prisma.channelConnection.findUnique({
+            where: { id: conn.id },
+          });
+          if (full) await pollThreadsRepliesForConnection(full);
+        } else {
+          throw err;
+        }
+      }
+      return res.status(202).json({
+        status: "queued",
+        connectionId: conn.id,
+        message:
+          "Threads reply sync queued. Replies will appear in the Inbox shortly.",
+      });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
 // ── Tech Stack ────────────────────────────────────────────────────────
 
 /**
@@ -4494,12 +4925,14 @@ studioRouter.post(
 
 /**
  * POST /api/v1/internal/autopilot/evaluate-all
- * Internal endpoint — runs scheduled autopilot for all enabled workspaces.
- * Intended to be called by an external cron job (e.g. daily).
- * No workspace ownership check — protected by route prefix / API key in production.
+ * Internal endpoint — runs scheduled autopilot for all enabled
+ * workspaces. Intended for an external cron / our BullMQ worker.
+ * Phase 5 added requireInternalAccess so a normal user JWT can't
+ * trigger a fleet-wide evaluation.
  */
 studioRouter.post(
   `${BASE}/internal/autopilot/evaluate-all`,
+  requireInternalAccess,
   async (req, res, next) => {
     try {
       const result = await evaluateAllAutopilotWorkspaces();
@@ -4508,6 +4941,31 @@ studioRouter.post(
       next(err);
     }
   }
+);
+
+/**
+ * GET /api/v1/workspaces/:id/autopilot/runs
+ * Phase 5 — run history. Workspace-owner gated. Most recent
+ * first. Empty list returns 200.
+ */
+studioRouter.get(
+  `${BASE}/workspaces/:id/autopilot/runs`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { listRuns } = await import("./autopilotRun.service.js");
+      const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 100);
+      const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+      const result = await listRuns({
+        clientId: req.params.id,
+        limit,
+        offset,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 /**
@@ -4544,6 +5002,196 @@ studioRouter.get(
     }
   }
 );
+
+// ── Autopilot Campaign Recommendations (Phase 2) ─────────────────────
+//
+// Read + dismiss endpoints for the Campaign Inbox surface. Phase 3
+// will add generate/approve/convert. All three routes are
+// real-estate-gated at the service layer indirectly via the
+// evaluator (non-real-estate workspaces don't get recommendations
+// written, so the list comes back empty — no special-case here).
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/autopilot/campaign-recommendations`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { listRecommendations, getStats } = await import(
+        "./autopilotCampaignRecommendation.service.js"
+      );
+      const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
+      const offset = Math.max(parseInt(req.query.offset) || 0, 0);
+      // Optional status filter — accepts comma-separated FE-style
+      // values, mapped back to BE enum names for the query.
+      const statusFilter = parseStatusFilter(req.query.status);
+      const [{ recommendations }, stats] = await Promise.all([
+        listRecommendations({
+          clientId: req.params.id,
+          status: statusFilter,
+          limit,
+          offset,
+        }),
+        getStats(req.params.id),
+      ]);
+      res.json({
+        recommendations,
+        pendingCount: stats.pendingCount,
+        readyCount: stats.readyCount,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/autopilot/campaign-stats`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { getStats } = await import(
+        "./autopilotCampaignRecommendation.service.js"
+      );
+      const stats = await getStats(req.params.id);
+      res.json(stats);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// Phase 4 — approve a recommendation (+ optionally schedule child drafts).
+studioRouter.post(
+  `${BASE}/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/approve`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { approveRecommendation, auditRecommendationEvent } = await import(
+        "./autopilotCampaignRecommendation.service.js"
+      );
+      const scheduleAt =
+        typeof req.body?.scheduleAt === "string" ? req.body.scheduleAt : null;
+      const result = await approveRecommendation({
+        clientId: req.params.id,
+        recommendationId: req.params.recommendationId,
+        userId: getAuth0Sub(req),
+        scheduleAt,
+      });
+      await auditRecommendationEvent(
+        req,
+        `autopilot.recommendation.approve.${result.status}`,
+        req.params.recommendationId,
+        {
+          clientId: req.params.id,
+          draftCount: result.drafts.length,
+          scheduledAt: scheduleAt,
+          partial: result.status === "partial_success",
+        },
+      );
+      const code =
+        result.status === "success" || result.status === "partial_success"
+          ? 201
+          : 200;
+      res.status(code).json(result);
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+// Phase 3 — generate drafts from a recommendation.
+studioRouter.post(
+  `${BASE}/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/generate`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const {
+        generateDraftsForRecommendation,
+        auditRecommendationEvent,
+      } = await import("./autopilotCampaignRecommendation.service.js");
+      const result = await generateDraftsForRecommendation({
+        clientId: req.params.id,
+        recommendationId: req.params.recommendationId,
+        userId: getAuth0Sub(req),
+      });
+      await auditRecommendationEvent(
+        req,
+        `autopilot.recommendation.generate.${result.status}`,
+        req.params.recommendationId,
+        {
+          clientId: req.params.id,
+          draftCount: result.drafts.length,
+          skippedCount: result.skipped.length,
+          alreadyGenerated: Boolean(result.alreadyGenerated),
+        },
+      );
+      const code =
+        result.status === "success" || result.status === "partial_success" ? 201 : 200;
+      res.status(code).json(result);
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/autopilot/campaign-recommendations/:recommendationId/dismiss`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { dismissRecommendation, auditRecommendationEvent } = await import(
+        "./autopilotCampaignRecommendation.service.js"
+      );
+      const reason =
+        typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : null;
+      const recommendation = await dismissRecommendation({
+        clientId: req.params.id,
+        recommendationId: req.params.recommendationId,
+        reason,
+        actorSub: getAuth0Sub(req),
+      });
+      await auditRecommendationEvent(
+        req,
+        "autopilot.recommendation.dismissed",
+        req.params.recommendationId,
+        { clientId: req.params.id, reason },
+      );
+      res.json({ recommendation });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+// FE sends status filter as the lowercase strings the UI uses
+// (pending / ready / approved / dismissed / expired / all).
+// Map to the BE enum names for the query.
+function parseStatusFilter(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const map = {
+    pending: "NEEDS_REVIEW",
+    ready: "DRAFT_GENERATED",
+    approved: "APPROVED",
+    scheduled: "SCHEDULED",
+    dismissed: "DISMISSED",
+    expired: "EXPIRED",
+  };
+  const out = [];
+  for (const token of raw.split(",").map((t) => t.trim().toLowerCase())) {
+    if (token === "all") return null;
+    if (map[token]) out.push(map[token]);
+  }
+  return out.length > 0 ? out : null;
+}
 
 // ── Planner Suggestions ──────────────────────────────────────────────────
 
@@ -4765,6 +5413,51 @@ studioRouter.post(
   }
 );
 
+// ── Campaign URL Intake (URL-01) ─────────────────────────────────────
+//
+// Unified URL → campaign workflow used by the dashboard, Create
+// assistant, and Property Library. Two endpoints:
+//   - analyze: classify the URL + return preview rows (no DB write)
+//   - confirm: persist the selected listing as a WorkspaceDataItem
+// SSRF / private-IP / unsafe-scheme protection lives in
+// urlCampaignIntake.assertSafeExternalUrl().
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/campaign-intake/url/analyze`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UrlIntakeAnalyzeSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await urlCampaignIntake.analyzeUrl(req.params.id, parsed.data);
+      res.json(result);
+    } catch (err) {
+      if (err?.code === "UNSAFE_URL") {
+        return sendError(res, 400, "UNSAFE_URL", err.message, { reason: err.reason });
+      }
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/campaign-intake/url/confirm`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UrlIntakeConfirmSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const result = await urlCampaignIntake.confirmUrl(req.params.id, parsed.data);
+      res.status(result.created ? 201 : 200).json(result);
+    } catch (err) {
+      if (err?.code === "UNSAFE_URL") {
+        return sendError(res, 400, "UNSAFE_URL", err.message, { reason: err.reason });
+      }
+      next(err);
+    }
+  },
+);
+
 // ── Listing Campaign ──────────────────────────────────────────────────────
 
 /**
@@ -4842,7 +5535,14 @@ studioRouter.post(
             highlights: propertyData.highlights ? propertyData.highlights.split(",").map((s) => s.trim()).filter(Boolean) : [],
             propertyType: propertyData.propertyType || undefined,
           });
-          resolvedDataItemId = listingResult.dataItem?.id ?? null;
+          // URL-01 fix: ingestManualListing returns
+          // { listing, created, existingId? } — never .dataItem.
+          // The previous `.dataItem?.id ?? null` silently always
+          // resolved to null, which broke source attribution for
+          // every campaign generated from a freshly-ingested
+          // listing (the data_item link never got recorded).
+          resolvedDataItemId =
+            listingResult.listing?.id ?? listingResult.existingId ?? null;
         }
 
         // Load generation context + RE assets

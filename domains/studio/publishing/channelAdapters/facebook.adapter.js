@@ -99,27 +99,74 @@ export const facebookAdapter = {
       });
     }
 
-    const externalPostId = postResult?.id ?? postResult?.post_id;
+    // For image posts the /photos endpoint returns BOTH a photo
+    // media id (`id`) and the feed post id (`post_id` in the
+    // shape `<page_id>_<feed_post_id>`). Prefer post_id because:
+    //   1. Fetching ?fields=permalink_url against the post_id
+    //      returns the canonical post URL
+    //      (https://facebook.com/<page>/posts/<id>) which loads
+    //      cleanly in incognito.
+    //   2. Fetching against the photo id returns the photo
+    //      lightbox URL (https://facebook.com/photo.php?fbid=...)
+    //      which Facebook routes through a login interstitial
+    //      for logged-out viewers — making public posts look
+    //      private. This was the spinstr410 bug.
+    // /feed and /videos only return `id` (no `post_id`), so the
+    // fallback covers text-only + video posts.
+    const externalPostId = postResult?.post_id ?? postResult?.id;
     if (!externalPostId) {
       throw new FacebookPublishError(
         "Facebook publish response missing post ID",
         { metaError: postResult }
       );
     }
+    // Diagnostic — PII-free fingerprint of the publish response so
+    // ops can verify the right field landed in externalPostId
+    // without grepping for actual ids/tokens.
+    console.log("[facebook.adapter] publish response shape:", {
+      pageId,
+      hasId: typeof postResult?.id === "string",
+      hasPostId: typeof postResult?.post_id === "string",
+      preferredField: postResult?.post_id ? "post_id" : "id",
+    });
 
-    // Resolve permalink (non-fatal)
+    // Resolve permalink + visibility state (non-fatal). We pull
+    // is_published / is_hidden / privacy alongside permalink_url
+    // so the diagnostic log surfaces Facebook's verdict on the
+    // post — distinguishes "our URL is wrong" (preferredField
+    // log) from "Facebook is gating the post" (privacy/published
+    // state below). The latter usually means the Meta App needs
+    // Page Public Content Access from App Review.
     let externalPostUrl = null;
+    let publishedVerdict = null;
     try {
       const metaRes = await fetch(
-        `${GRAPH_BASE}/${externalPostId}?fields=permalink_url&access_token=${encodeURIComponent(token)}`
+        `${GRAPH_BASE}/${externalPostId}?fields=permalink_url,is_published,is_hidden,privacy&access_token=${encodeURIComponent(token)}`
       );
       const metaBody = await metaRes.json().catch(() => ({}));
-      if (metaRes.ok && metaBody?.permalink_url) {
-        externalPostUrl = metaBody.permalink_url;
+      if (metaRes.ok) {
+        if (metaBody?.permalink_url) externalPostUrl = metaBody.permalink_url;
+        publishedVerdict = {
+          is_published: metaBody?.is_published ?? null,
+          is_hidden: metaBody?.is_hidden ?? null,
+          privacy_value: metaBody?.privacy?.value ?? null,
+        };
+      } else {
+        publishedVerdict = {
+          probe_failed: true,
+          status: metaRes.status,
+          error: metaBody?.error?.message ?? null,
+        };
       }
-    } catch {
-      // non-fatal
+    } catch (err) {
+      publishedVerdict = { probe_failed: true, error: String(err?.message ?? err) };
     }
+    console.log("[facebook.adapter] post visibility verdict:", {
+      pageId,
+      externalPostId,
+      externalPostUrl,
+      ...publishedVerdict,
+    });
 
     return { externalPostId, externalPostUrl };
   },

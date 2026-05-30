@@ -2,6 +2,13 @@ export default {
   key: "finance",
   label: "Financial Advisor",
   description: "Financial advisors, accountants, wealth managers, and fintech companies.",
+  status: "coming_soon",
+  isComplianceSensitive: true,
+  complianceNotes: [
+    "Don't provide investment advice in public content.",
+    "Avoid return guarantees or projections.",
+    "Encourage compliance review before publishing.",
+  ],
   onboarding: {
     websitePlaceholder: "brightfinancial.com",
     extraContextLabel: "Services or specialties",

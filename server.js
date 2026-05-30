@@ -19,6 +19,9 @@ import { metaThreadsWebhookRouter } from "./domains/integrations/metaThreadsWebh
 import { publicSitesRouter } from "./domains/sites/public.routes.js";
 import { sitesDashboardRouter } from "./domains/sites/sites.dashboard.routes.js";
 import { inboxRouter } from "./domains/inbox/inbox.routes.js";
+import { inboxWebhookRouter } from "./domains/inbox/inbox.webhook.routes.js";
+import { inboxMetaWebhookRouter } from "./domains/inbox/inbox.meta.webhook.routes.js";
+import { adsRouter } from "./domains/ads/ads.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
 import { webhookRouter } from "./domains/notifications/webhook.routes.js";
 import { integrationRouter } from "./domains/integrations/integration.routes.js";
@@ -92,7 +95,20 @@ app.use((req, _res, next) => {
 });
 
 // body parsing
-app.use(express.json({ limit: "1mb" }));
+//
+// Skip the global JSON parser for the Meta Inbox webhook — that
+// route needs raw request bytes to verify the X-Hub-Signature-256
+// HMAC, which it captures via its own per-route express.json
+// instance with a `verify` hook. If we let the global parser
+// consume the stream first, the per-route hook gets an empty
+// rawBody and signature verification fails. Mirrors the
+// /listing-campaign/upload-images carve-out above.
+app.use((req, _res, next) => {
+  if (req.url.startsWith("/api/v1/webhooks/meta/inbox")) {
+    return next();
+  }
+  express.json({ limit: "1mb" })(req, _res, next);
+});
 
 // Raw body parsing for asset uploads (images + videos up to 500 MB)
 app.use(
@@ -154,6 +170,18 @@ app.use(metaThreadsWebhookRouter);
 // requireAuth.
 app.use(publicSitesRouter);
 
+// SquadInbox inbound webhook — Postmark calls this directly to
+// deliver parsed lead replies. Verified via shared-secret
+// (POSTMARK_INBOUND_WEBHOOK_SECRET); no Bearer auth.
+app.use(inboxWebhookRouter);
+
+// SquadInbox Meta webhook — Facebook Page + Instagram comment
+// events. GET = subscription verification; POST = signed event
+// delivery. Body writes gated by META_INBOX_INGESTION_ENABLED so
+// the receiver can deploy before Meta App Review grants the new
+// scopes.
+app.use(inboxMetaWebhookRouter);
+
 // Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
 app.use("/api", (req, res, next) => {
   if (req.path === "/v1/billing/webhook") return next("route");
@@ -173,6 +201,10 @@ app.use(sitesDashboardRouter);
 
 // SquadInbox dashboard surface. Same auth pattern.
 app.use(inboxRouter);
+
+// SquadAds dashboard surface. Export-only MVP — no calls to any
+// ad-platform API. Same auth pattern as Inbox.
+app.use(adsRouter);
 
 // Billing domain (webhook handler verifies via Stripe signature, not Bearer token)
 app.use(billingRouter);
@@ -219,7 +251,17 @@ app.use((err, req, res, _next) => {
   // non-5xx responses so the client can branch on it; never leak details
   // for 5xx.
   const code = status >= 500 ? "INTERNAL" : (err?.code || "REQUEST_FAILED");
-  return sendError(res, status, code, message);
+  // industry-01 — forward IndustryNotSupportedError extras
+  // (actualIndustry / requiredIndustry) so the FE can render a
+  // "this feature requires X industry" message + deep-link to
+  // workspace settings. Only sent for non-5xx — 5xx never leaks
+  // structured detail.
+  const opts = {};
+  if (status < 500) {
+    if (err?.actualIndustry !== undefined) opts.actualIndustry = err.actualIndustry;
+    if (err?.requiredIndustry !== undefined) opts.requiredIndustry = err.requiredIndustry;
+  }
+  return sendError(res, status, code, message, opts);
 });
 
 // ===== Boot & graceful shutdown =====
@@ -233,6 +275,10 @@ let metricsSyncWorker;
 let recalculateAnalyticsWorker;
 let refreshInsightsWorker;
 let personaTrainingWorker;
+let gbpReviewPollerWorker;
+let youtubeCommentPollerWorker;
+let threadsReplyPollerWorker;
+let autopilotEvaluatorWorker;
 
 let server;
 (async () => {
@@ -304,6 +350,26 @@ let server;
         "./workers/personaTrainingWorker.js"
       );
       personaTrainingWorker = startPersonaTrainingWorker();
+
+      const { startGbpReviewPollerWorker } = await import(
+        "./workers/gbpReviewPollerWorker.js"
+      );
+      gbpReviewPollerWorker = startGbpReviewPollerWorker();
+
+      const { startYouTubeCommentPollerWorker } = await import(
+        "./workers/youtubeCommentPollerWorker.js"
+      );
+      youtubeCommentPollerWorker = startYouTubeCommentPollerWorker();
+
+      const { startThreadsReplyPollerWorker } = await import(
+        "./workers/threadsReplyPollerWorker.js"
+      );
+      threadsReplyPollerWorker = startThreadsReplyPollerWorker();
+
+      const { startAutopilotEvaluatorWorker } = await import(
+        "./workers/autopilotEvaluatorWorker.js"
+      );
+      autopilotEvaluatorWorker = startAutopilotEvaluatorWorker();
     }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
@@ -322,6 +388,10 @@ const shutdown = (sig) => async () => {
   try { if (recalculateAnalyticsWorker) await recalculateAnalyticsWorker.close(); } catch {}
   try { if (refreshInsightsWorker) await refreshInsightsWorker.close(); } catch {}
   try { if (personaTrainingWorker) await personaTrainingWorker.close(); } catch {}
+  try { if (gbpReviewPollerWorker) await gbpReviewPollerWorker.close(); } catch {}
+  try { if (youtubeCommentPollerWorker) await youtubeCommentPollerWorker.close(); } catch {}
+  try { if (threadsReplyPollerWorker) await threadsReplyPollerWorker.close(); } catch {}
+  try { if (autopilotEvaluatorWorker) await autopilotEvaluatorWorker.close(); } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
   } catch {}

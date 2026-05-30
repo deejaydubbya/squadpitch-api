@@ -98,4 +98,19 @@ describe("API route module boot smoke", () => {
     const mod = await import("../domains/sites/public.routes.js");
     expect(mod.publicSitesRouter).toBeTruthy();
   });
+
+  it("inbox.routes loads without import errors", async () => {
+    const mod = await import("../domains/inbox/inbox.routes.js");
+    expect(mod.inboxRouter).toBeTruthy();
+  });
+
+  it("ads.routes loads without import errors", async () => {
+    const mod = await import("../domains/ads/ads.routes.js");
+    expect(mod.adsRouter).toBeTruthy();
+  });
+
+  it("inbox.webhook.routes loads without import errors", async () => {
+    const mod = await import("../domains/inbox/inbox.webhook.routes.js");
+    expect(mod.inboxWebhookRouter).toBeTruthy();
+  });
 });

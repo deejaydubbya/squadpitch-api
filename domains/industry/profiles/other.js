@@ -2,6 +2,7 @@ export default {
   key: "other",
   label: "Something Else",
   description: "Any industry not listed above — we'll adapt to your business.",
+  status: "coming_soon",
   onboarding: {
     websitePlaceholder: "yourwebsite.com",
     extraContextLabel: "Business details",
