@@ -37,10 +37,19 @@ export const env = {
     process.env.REPLICATE_SAM2_MODEL ??
     "meta/sam-2:fe97b453a6455861e3bac769b441ca1f1086110da7466dbb65cf1eecfd60dc83",
 
-  // Meta / Instagram / Facebook OAuth
+  // Meta / Facebook OAuth — Facebook Login app (Page scopes).
   META_APP_ID: process.env.META_APP_ID,
   META_APP_SECRET: process.env.META_APP_SECRET,
   META_OAUTH_REDIRECT_URI: process.env.META_OAUTH_REDIRECT_URI,
+
+  // Instagram Login / Business Login app (instagram_business_*
+  // scopes). May be a SEPARATE Meta App from META_APP_ID — the
+  // Instagram API surface is a distinct product. Falls back to
+  // META_* in instagram.oauth.js for migration convenience until
+  // ops moves Instagram onto its own app credentials.
+  INSTAGRAM_APP_ID: process.env.INSTAGRAM_APP_ID,
+  INSTAGRAM_APP_SECRET: process.env.INSTAGRAM_APP_SECRET,
+  INSTAGRAM_OAUTH_REDIRECT_URI: process.env.INSTAGRAM_OAUTH_REDIRECT_URI,
 
   // OAuth state signing (HMAC secret, random 32+ bytes)
   OAUTH_STATE_SECRET: process.env.OAUTH_STATE_SECRET,
@@ -213,7 +222,17 @@ export function bootEnvWarnings() {
     console.warn("[BOOT] OPENAI_API_KEY missing; generation will fail until configured");
   }
   if (!env.META_APP_ID || !env.META_APP_SECRET || !env.META_OAUTH_REDIRECT_URI) {
-    console.warn("[BOOT] META_APP_ID / META_APP_SECRET / META_OAUTH_REDIRECT_URI missing; Instagram OAuth disabled");
+    console.warn("[BOOT] META_APP_ID / META_APP_SECRET / META_OAUTH_REDIRECT_URI missing; Facebook OAuth disabled");
+  }
+  // Instagram now uses its own Business Login app. Falls back to
+  // META_* if INSTAGRAM_* isn't set (intentional migration path),
+  // so this warning fires only when BOTH are missing.
+  if (
+    !(env.INSTAGRAM_APP_ID || env.META_APP_ID)
+    || !(env.INSTAGRAM_APP_SECRET || env.META_APP_SECRET)
+    || !(env.INSTAGRAM_OAUTH_REDIRECT_URI || env.META_OAUTH_REDIRECT_URI)
+  ) {
+    console.warn("[BOOT] INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET / INSTAGRAM_OAUTH_REDIRECT_URI (or META_* fallback) missing; Instagram OAuth disabled");
   }
   if (!env.OAUTH_STATE_SECRET) {
     console.warn("[BOOT] OAUTH_STATE_SECRET missing; OAuth state signing disabled");
