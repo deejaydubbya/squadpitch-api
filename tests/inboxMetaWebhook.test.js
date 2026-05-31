@@ -32,6 +32,7 @@ const { inboxMetaWebhookRouter } = await import(
 
 const VERIFY_TOKEN = "spinstr-test-verify-token";
 const APP_SECRET = "test-app-secret-32-bytes-or-more";
+const IG_APP_SECRET = "test-ig-app-secret-32-bytes-or-more";
 const PATH = "/api/v1/webhooks/meta/inbox";
 
 function bootServer() {
@@ -68,15 +69,16 @@ function bootServer() {
   };
 }
 
-function signBody(body) {
+function signBody(body, secret = APP_SECRET) {
   return (
-    "sha256=" + createHmac("sha256", APP_SECRET).update(body).digest("hex")
+    "sha256=" + createHmac("sha256", secret).update(body).digest("hex")
   );
 }
 
 beforeEach(() => {
   envOverrides = {
     META_APP_SECRET: APP_SECRET,
+    INSTAGRAM_APP_SECRET: IG_APP_SECRET,
     META_WEBHOOK_VERIFY_TOKEN: VERIFY_TOKEN,
     META_INBOX_INGESTION_ENABLED: false,
   };
@@ -207,6 +209,77 @@ describe("Meta webhook — POST signature verification", () => {
         body,
       });
       expect(res.status).toBe(200);
+    } finally {
+      server.close();
+    }
+  });
+
+  // IG-01..06 split Instagram onto its own Meta App (with a separate
+  // INSTAGRAM_APP_SECRET) while Facebook stayed on META_APP_SECRET.
+  // The dedicated IG app signs its webhooks with INSTAGRAM_APP_SECRET,
+  // so the verifier has to accept either secret. Pin both happy paths
+  // and the both-secrets-set-but-neither-matches reject path.
+  it("accepts a body signed with INSTAGRAM_APP_SECRET (dedicated IG app)", async () => {
+    const { server, request } = bootServer();
+    try {
+      const body = JSON.stringify({ object: "instagram", entry: [] });
+      const sig = signBody(body, IG_APP_SECRET);
+      const res = await request({
+        method: "POST",
+        path: PATH,
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+          "x-hub-signature-256": sig,
+        },
+        body,
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("still 403s when signature matches neither META nor INSTAGRAM secret", async () => {
+    const { server, request } = bootServer();
+    try {
+      const body = JSON.stringify({ object: "instagram", entry: [] });
+      const sig = signBody(body, "totally-different-secret-xyz-padding-32b");
+      const res = await request({
+        method: "POST",
+        path: PATH,
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+          "x-hub-signature-256": sig,
+        },
+        body,
+      });
+      expect(res.status).toBe(403);
+      expect(processSpy).not.toHaveBeenCalled();
+    } finally {
+      server.close();
+    }
+  });
+
+  it("still 403s when neither secret is configured (env unset)", async () => {
+    envOverrides.META_APP_SECRET = undefined;
+    envOverrides.INSTAGRAM_APP_SECRET = undefined;
+    const { server, request } = bootServer();
+    try {
+      const body = JSON.stringify({ object: "page", entry: [] });
+      const sig = signBody(body); // signed with APP_SECRET, but env says no secrets
+      const res = await request({
+        method: "POST",
+        path: PATH,
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+          "x-hub-signature-256": sig,
+        },
+        body,
+      });
+      expect(res.status).toBe(403);
     } finally {
       server.close();
     }

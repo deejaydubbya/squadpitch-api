@@ -94,7 +94,9 @@ inboxMetaWebhookRouter.get(PATH, (req, res) => {
 // ── POST — event delivery ──────────────────────────────────────────────
 //
 // Signature verification: X-Hub-Signature-256 = "sha256=<hex>".
-// Computed as HMAC-SHA256(req.rawBody, META_APP_SECRET).
+// Computed as HMAC-SHA256(req.rawBody, <app_secret>). Either
+// META_APP_SECRET (Facebook product) or INSTAGRAM_APP_SECRET (the
+// dedicated IG Business Login app) is accepted — see verifyHubSignature.
 //
 // Even when ingestion is disabled we still verify the signature —
 // the only way Meta can know the receiver is healthy is by getting
@@ -138,27 +140,45 @@ inboxMetaWebhookRouter.post(PATH, rawJsonParser, async (req, res, next) => {
 
 // ── Signature verification ─────────────────────────────────────────────
 
+// Meta signs each webhook with the app secret of whichever app the
+// subscription belongs to. Since IG-01..06 split Instagram onto a
+// dedicated app (with its own INSTAGRAM_APP_SECRET) while Facebook
+// stays on the original META_APP_SECRET, the verifier has to accept
+// either secret. We try each in turn — both checks are timing-safe,
+// and we only return false when neither matches. Order is
+// META_APP_SECRET first since that's the historical path; ordering
+// has no security impact because each candidate is itself constant-
+// time-compared.
 export function verifyHubSignature(req) {
-  if (!env.META_APP_SECRET) return false;
   const header = req.headers["x-hub-signature-256"];
   if (typeof header !== "string" || !header.startsWith("sha256=")) return false;
   const provided = header.slice("sha256=".length);
   if (!req.rawBody || !Buffer.isBuffer(req.rawBody)) return false;
 
-  const expected = createHmac("sha256", env.META_APP_SECRET)
-    .update(req.rawBody)
-    .digest("hex");
+  const candidates = [env.META_APP_SECRET, env.INSTAGRAM_APP_SECRET].filter(
+    (secret) => typeof secret === "string" && secret.length > 0,
+  );
+  if (candidates.length === 0) return false;
 
-  // Length differing would crash timingSafeEqual; treat as mismatch.
-  if (provided.length !== expected.length) return false;
-  try {
-    return cryptoTimingSafeEqual(
-      Buffer.from(provided, "hex"),
-      Buffer.from(expected, "hex"),
-    );
-  } catch {
-    return false;
+  for (const secret of candidates) {
+    const expected = createHmac("sha256", secret)
+      .update(req.rawBody)
+      .digest("hex");
+    if (provided.length !== expected.length) continue;
+    try {
+      if (
+        cryptoTimingSafeEqual(
+          Buffer.from(provided, "hex"),
+          Buffer.from(expected, "hex"),
+        )
+      ) {
+        return true;
+      }
+    } catch {
+      // length-mismatch from a malformed hex slips here — keep trying
+    }
   }
+  return false;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -179,7 +199,8 @@ function timingSafeEqualStrings(a, b) {
 function auditSigAttempt(req) {
   const header = req.headers["x-hub-signature-256"];
   return {
-    hasSecret: Boolean(env.META_APP_SECRET),
+    hasMetaSecret: Boolean(env.META_APP_SECRET),
+    hasInstagramSecret: Boolean(env.INSTAGRAM_APP_SECRET),
     hasHeader: typeof header === "string",
     headerLen: typeof header === "string" ? header.length : 0,
     bodyLen: req.rawBody?.length ?? 0,
