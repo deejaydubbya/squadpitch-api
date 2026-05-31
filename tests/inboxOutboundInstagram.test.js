@@ -178,8 +178,11 @@ describe("sendInstagramCommentReply — happy path", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, opts] = fetchMock.mock.calls[0];
     // IG reply endpoint is /replies (FB is /comments).
+    // Host is graph.instagram.com — direct IG Business Login tokens
+    // are rejected by graph.facebook.com with "Cannot parse access
+    // token". Confirmed in prod 2026-05-31 on the publish path.
     expect(url).toBe(
-      `https://graph.facebook.com/v19.0/${IG_COMMENT_ID}/replies`,
+      `https://graph.instagram.com/${IG_COMMENT_ID}/replies`,
     );
     expect(opts.method).toBe("POST");
     expect(opts.headers["Content-Type"]).toBe(

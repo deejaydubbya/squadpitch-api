@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../domains/studio/meta.constants.js", () => ({
-  META_GRAPH_BASE: "https://graph.test/v20.0",
+  INSTAGRAM_GRAPH_BASE: "https://graph.test/v20.0",
 }));
 
 const { fetchInstagramMetrics } = await import(

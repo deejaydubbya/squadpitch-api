@@ -7,19 +7,18 @@
 //
 // AFTER Prompt 01's migration the connection's `accessToken` is a
 // direct Instagram long-lived USER token (instagram_business_*
-// scopes), not a Facebook Page access token. The container/publish
-// endpoints below currently keep working when called against
-// graph.facebook.com with the IG user token; if a future runtime
-// test shows they need to move to graph.instagram.com, the
-// INSTAGRAM_GRAPH_BASE constant in `../../meta.constants.js` is
-// ready — swap the import + GRAPH_BASE assignment below.
+// scopes), not a Facebook Page access token. Direct IG tokens are
+// only valid against graph.instagram.com — graph.facebook.com
+// rejects them with "Invalid OAuth access token - Cannot parse
+// access token" because it parses tokens as FB-format. Confirmed
+// in prod 2026-05-31 on first publish attempt.
 //
 // Only single-image posts in Phase 2. Carousels/video/Reels are out of
 // scope and will be added when we lift the "minimal" constraint.
 
-import { META_GRAPH_BASE } from "../../meta.constants.js";
+import { INSTAGRAM_GRAPH_BASE } from "../../meta.constants.js";
 
-const GRAPH_BASE = META_GRAPH_BASE;
+const GRAPH_BASE = INSTAGRAM_GRAPH_BASE;
 const IG_CAPTION_MAX = 2200;
 
 class InstagramPublishError extends Error {

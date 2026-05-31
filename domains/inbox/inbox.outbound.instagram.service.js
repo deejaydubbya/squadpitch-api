@@ -2,13 +2,11 @@
 //
 // Post-IG-01 migration the INSTAGRAM ChannelConnection stores a
 // direct Instagram long-lived USER token (instagram_business_*
-// scopes), NOT a Facebook Page access token. The reply endpoint
-// itself still lives at graph.facebook.com — Meta accepts the IG
-// Business Login token there for the IG Business endpoints, and
-// the existing publish/metrics paths use the same host. The
-// `INSTAGRAM_GRAPH_BASE` constant in meta.constants.js is the
-// one-line swap target if a future runtime test shows the endpoint
-// needs to move to graph.instagram.com.
+// scopes), NOT a Facebook Page access token. Direct IG tokens are
+// only valid against graph.instagram.com — graph.facebook.com
+// rejects them with "Invalid OAuth access token - Cannot parse
+// access token". Confirmed during publish path failure 2026-05-31,
+// so all IG Business endpoints route through INSTAGRAM_GRAPH_BASE.
 //
 // Mirrors inbox.outbound.facebook.service.js shape: write a
 // Message in SENDING state before the provider call, flip to
@@ -25,7 +23,7 @@
 //       - have instagram_business_manage_comments in scopes
 //       - have a long-lived token (refreshable via instagramRefresh)
 //
-// Endpoint: `POST graph.facebook.com/v19.0/{ig-comment-id}/replies`
+// Endpoint: `POST graph.instagram.com/{ig-comment-id}/replies`
 // authenticated with the long-lived IG user token. Returns
 // `{ id: "<new_comment_id>" }`.
 //
@@ -34,7 +32,7 @@
 
 import { prisma } from "../../prisma.js";
 import { decryptToken } from "../../lib/tokenCrypto.js";
-import { META_GRAPH_BASE } from "../studio/meta.constants.js";
+import { INSTAGRAM_GRAPH_BASE } from "../studio/meta.constants.js";
 import { ensureValidAccessToken } from "../studio/tokenRefreshService.js";
 
 const REQUIRED_SCOPE = "instagram_business_manage_comments";
@@ -226,7 +224,7 @@ export async function sendInstagramCommentReply(
   let publishedId;
   try {
     const published = await instagramPost(
-      `${META_GRAPH_BASE}/${encodeURIComponent(inbound.externalMessageId)}/replies`,
+      `${INSTAGRAM_GRAPH_BASE}/${encodeURIComponent(inbound.externalMessageId)}/replies`,
       {
         message: trimmed,
         access_token: accessToken,

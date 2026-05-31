@@ -19,7 +19,7 @@
 // the service maps them to provider_permission_denied — distinct from
 // the transient/retry path used for 5xx + 429.
 
-import { META_GRAPH_BASE } from "../meta.constants.js";
+import { INSTAGRAM_GRAPH_BASE } from "../meta.constants.js";
 
 const META_PERMISSION_CODES = new Set([10, 200, 230, 250]);
 
@@ -48,7 +48,7 @@ export async function fetchInstagramMetrics({ connection, externalPostId }) {
 
   // Fetch insights (impressions, reach, saved, shares)
   const insightsUrl =
-    `${META_GRAPH_BASE}/${externalPostId}/insights` +
+    `${INSTAGRAM_GRAPH_BASE}/${externalPostId}/insights` +
     `?metric=impressions,reach,saved,shares` +
     `&access_token=${encodeURIComponent(token)}`;
 
@@ -91,7 +91,7 @@ export async function fetchInstagramMetrics({ connection, externalPostId }) {
 
   // Fetch basic fields (likes, comments)
   const fieldsUrl =
-    `${META_GRAPH_BASE}/${externalPostId}` +
+    `${INSTAGRAM_GRAPH_BASE}/${externalPostId}` +
     `?fields=like_count,comments_count,timestamp` +
     `&access_token=${encodeURIComponent(token)}`;
 
