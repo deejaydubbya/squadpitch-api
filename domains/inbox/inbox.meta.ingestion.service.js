@@ -157,6 +157,18 @@ async function ingestInstagramComment({ igAccountId, value }) {
   if (!igAccountId || !value || typeof value !== "object") {
     return { status: "skipped", reason: "BAD_IG_CHANGE" };
   }
+  // Structural fingerprint — PII-safe identifier echoes only. Lets
+  // us diagnose "webhook arrived but no inbox row" without dumping
+  // the comment body. Order matters: log BEFORE the echo guard so
+  // we can see whether a silent skip came from a self-comment.
+  console.log("[meta.inbox] ig-comment", {
+    igAccountId,
+    commenterId: typeof value.from?.id === "string" ? value.from.id : null,
+    commenterUsername: typeof value.from?.username === "string" ? value.from.username : null,
+    commentId: typeof value.id === "string" ? value.id : null,
+    mediaId: typeof value.media?.id === "string" ? value.media.id : null,
+    parentCommentId: typeof value.parent_id === "string" ? value.parent_id : null,
+  });
   // Echo guard — our own outbound IG comments come back through
   // the webhook with from.id = the IG user id (the workspace's
   // own account).

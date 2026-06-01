@@ -124,6 +124,18 @@ inboxMetaWebhookRouter.post(PATH, rawJsonParser, async (req, res, next) => {
 
   try {
     const result = await processMetaWebhookPayload(body);
+    // Surface the per-payload outcome so a "no inbox row appeared"
+    // debugging session can immediately see WHY — UNKNOWN_ACCOUNT,
+    // ECHO_FROM_ACCOUNT, IGNORED_ITEM:reaction, etc. The reasons
+    // array is PII-safe (it's reason codes, not user content).
+    console.log("[meta.inbox] result", {
+      object: typeof body?.object === "string" ? body.object : null,
+      processed: result.processed,
+      created: result.created,
+      duplicate: result.duplicate,
+      skipped: result.skipped,
+      reasons: result.reasons,
+    });
     return res.status(200).json({ ok: true, ingested: true, ...result });
   } catch (err) {
     console.error("[meta.inbox] ingestion error:", {
