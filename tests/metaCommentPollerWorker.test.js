@@ -1,10 +1,15 @@
 // Boot behavior of the Facebook + Instagram comment poller workers.
 //
 // Covers the gate matrix:
-//   - META_COMMENT_POLLING_ENABLED=false → start() returns a noop
-//     close handle, never instantiates a BullMQ Queue/Worker.
-//   - META_COMMENT_POLLING_ENABLED=true + no Redis → start() returns
-//     a noop close handle and logs a clear disabled warning.
+//   - No Redis → start() returns a noop close handle, never
+//     instantiates a Queue/Worker.
+//   - META_COMMENT_POLLING_ENABLED=false + Redis → Worker DOES start
+//     (so manual /sync-comments jobs get processed) but the recurring
+//     scheduled tick is NOT added. The original 2026-06-02 bug was
+//     that the Worker skipped entirely, leaving manual-enqueued jobs
+//     to sit in Redis with no consumer.
+//   - META_COMMENT_POLLING_ENABLED=true + Redis → Worker starts AND
+//     the recurring tick is added.
 //
 // Also pins a sanity check that the deprecated webhook env vars
 // (META_WEBHOOK_VERIFY_TOKEN + META_INBOX_INGESTION_ENABLED) are NOT
@@ -13,10 +18,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Capture every Queue/Worker construction so we can assert "no
-// instances created" when the worker is disabled.
+// Capture every Queue/Worker construction + queue.add() call so we
+// can assert which jobs were scheduled.
 const queueInstances = [];
 const workerInstances = [];
+const queueAddCalls = [];
 
 vi.mock("bullmq", () => ({
   Queue: class FakeQueue {
@@ -24,7 +30,8 @@ vi.mock("bullmq", () => ({
       queueInstances.push({ name, opts });
       this.name = name;
     }
-    add() {
+    add(jobName, data, opts) {
+      queueAddCalls.push({ queue: this.name, jobName, data, opts });
       return Promise.resolve();
     }
     close() {
@@ -69,6 +76,7 @@ beforeEach(() => {
   redisAvailable = true;
   queueInstances.length = 0;
   workerInstances.length = 0;
+  queueAddCalls.length = 0;
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   vi.resetModules();
@@ -80,23 +88,7 @@ afterEach(() => {
 });
 
 describe("facebookCommentPollerWorker — gating", () => {
-  it("returns a noop and skips queue/worker construction when META_COMMENT_POLLING_ENABLED=false", async () => {
-    envOverrides = { META_COMMENT_POLLING_ENABLED: false };
-    const mod = await import("../workers/facebookCommentPollerWorker.js");
-    const handle = mod.startFacebookCommentPollerWorker();
-    expect(typeof handle.close).toBe("function");
-    await handle.close();
-    expect(queueInstances).toHaveLength(0);
-    expect(workerInstances).toHaveLength(0);
-    expect(
-      warnSpy.mock.calls.some((args) =>
-        String(args[0] ?? "").includes("META_COMMENT_POLLING_ENABLED=false"),
-      ),
-    ).toBe(true);
-  });
-
-  it("returns a noop when ENABLED=true but Redis is unavailable", async () => {
-    envOverrides = { META_COMMENT_POLLING_ENABLED: true };
+  it("returns a noop when Redis is unavailable (flag irrelevant)", async () => {
     redisAvailable = false;
     const mod = await import("../workers/facebookCommentPollerWorker.js");
     const handle = mod.startFacebookCommentPollerWorker();
@@ -111,15 +103,36 @@ describe("facebookCommentPollerWorker — gating", () => {
     ).toBe(true);
   });
 
-  it("boots the queue + worker when ENABLED=true and Redis is available", async () => {
+  it("ENABLED=false + Redis → Worker DOES start (for manual jobs) but recurring tick is NOT scheduled", async () => {
+    // Regression guard for the 2026-06-02 bug: prior to the fix the
+    // Worker was skipped when the flag was false, so manual-enqueued
+    // jobs sat in Redis with no consumer and the /sync-comments route
+    // returned a misleading 202.
+    envOverrides = { META_COMMENT_POLLING_ENABLED: false };
+    const mod = await import("../workers/facebookCommentPollerWorker.js");
+    const handle = mod.startFacebookCommentPollerWorker();
+    await handle.close();
+    expect(queueInstances).toHaveLength(1);
+    expect(workerInstances).toHaveLength(1);
+    // No recurring job added because the scheduler is gated.
+    expect(
+      queueAddCalls.find((c) => c.jobName === "poll-facebook-comments"),
+    ).toBeUndefined();
+  });
+
+  it("ENABLED=true + Redis → Worker starts AND the recurring tick is scheduled", async () => {
     envOverrides = { META_COMMENT_POLLING_ENABLED: true };
-    redisAvailable = true;
     const mod = await import("../workers/facebookCommentPollerWorker.js");
     const handle = mod.startFacebookCommentPollerWorker();
     await handle.close();
     expect(queueInstances).toHaveLength(1);
     expect(queueInstances[0].name).toBe("sp-facebook-comments-poll");
     expect(workerInstances).toHaveLength(1);
+    const recurring = queueAddCalls.find(
+      (c) => c.jobName === "poll-facebook-comments",
+    );
+    expect(recurring).toBeDefined();
+    expect(recurring.opts?.repeat?.every).toBe(15 * 60_000);
   });
 
   it("enqueueFacebookCommentPollForConnection throws QUEUE_UNAVAILABLE when Redis is down", async () => {
@@ -138,23 +151,7 @@ describe("facebookCommentPollerWorker — gating", () => {
 });
 
 describe("instagramCommentPollerWorker — gating", () => {
-  it("returns a noop and skips queue/worker construction when META_COMMENT_POLLING_ENABLED=false", async () => {
-    envOverrides = { META_COMMENT_POLLING_ENABLED: false };
-    const mod = await import("../workers/instagramCommentPollerWorker.js");
-    const handle = mod.startInstagramCommentPollerWorker();
-    expect(typeof handle.close).toBe("function");
-    await handle.close();
-    expect(queueInstances).toHaveLength(0);
-    expect(workerInstances).toHaveLength(0);
-    expect(
-      warnSpy.mock.calls.some((args) =>
-        String(args[0] ?? "").includes("META_COMMENT_POLLING_ENABLED=false"),
-      ),
-    ).toBe(true);
-  });
-
-  it("returns a noop when ENABLED=true but Redis is unavailable", async () => {
-    envOverrides = { META_COMMENT_POLLING_ENABLED: true };
+  it("returns a noop when Redis is unavailable (flag irrelevant)", async () => {
     redisAvailable = false;
     const mod = await import("../workers/instagramCommentPollerWorker.js");
     const handle = mod.startInstagramCommentPollerWorker();
@@ -164,15 +161,31 @@ describe("instagramCommentPollerWorker — gating", () => {
     expect(workerInstances).toHaveLength(0);
   });
 
-  it("boots the queue + worker when ENABLED=true and Redis is available", async () => {
+  it("ENABLED=false + Redis → Worker DOES start (for manual jobs) but recurring tick is NOT scheduled", async () => {
+    envOverrides = { META_COMMENT_POLLING_ENABLED: false };
+    const mod = await import("../workers/instagramCommentPollerWorker.js");
+    const handle = mod.startInstagramCommentPollerWorker();
+    await handle.close();
+    expect(queueInstances).toHaveLength(1);
+    expect(workerInstances).toHaveLength(1);
+    expect(
+      queueAddCalls.find((c) => c.jobName === "poll-instagram-comments"),
+    ).toBeUndefined();
+  });
+
+  it("ENABLED=true + Redis → Worker starts AND the recurring tick is scheduled", async () => {
     envOverrides = { META_COMMENT_POLLING_ENABLED: true };
-    redisAvailable = true;
     const mod = await import("../workers/instagramCommentPollerWorker.js");
     const handle = mod.startInstagramCommentPollerWorker();
     await handle.close();
     expect(queueInstances).toHaveLength(1);
     expect(queueInstances[0].name).toBe("sp-instagram-comments-poll");
     expect(workerInstances).toHaveLength(1);
+    const recurring = queueAddCalls.find(
+      (c) => c.jobName === "poll-instagram-comments",
+    );
+    expect(recurring).toBeDefined();
+    expect(recurring.opts?.repeat?.every).toBe(15 * 60_000);
   });
 
   it("enqueueInstagramCommentPollForConnection throws QUEUE_UNAVAILABLE when Redis is down", async () => {

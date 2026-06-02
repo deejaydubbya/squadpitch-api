@@ -13,9 +13,12 @@
 // process. Spreading across workers wouldn't buy anything; the poll
 // interval is the right knob.
 //
-// Gating: the SCHEDULED tick honors META_COMMENT_POLLING_ENABLED
-// (default false). The manual sync route ignores that flag and
-// always enqueues — ops + demo + dev need a working sync regardless.
+// Gating: the SCHEDULED recurring tick honors META_COMMENT_POLLING_ENABLED
+// (default false). The Worker itself ALWAYS starts when Redis is
+// available — otherwise manual `poll-connection` jobs enqueued by
+// the /sync-comments route would sit in Redis with no consumer
+// (originally broken 2026-06-02: route returned 202 but nothing ran).
+// Only the recurring `poll-facebook-comments-repeat` job is gated.
 
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
@@ -25,12 +28,6 @@ const QUEUE_NAME = "sp-facebook-comments-poll";
 const POLL_INTERVAL_MS = env.META_COMMENT_POLLING_INTERVAL_MINUTES * 60_000;
 
 export function startFacebookCommentPollerWorker() {
-  if (!env.META_COMMENT_POLLING_ENABLED) {
-    console.warn(
-      "[FB_COMMENT_POLLER] disabled — META_COMMENT_POLLING_ENABLED=false",
-    );
-    return { close: async () => {} };
-  }
   const connection = getRedisConnection();
   if (!connection) {
     console.warn("[FB_COMMENT_POLLER] No Redis — worker disabled");
@@ -39,15 +36,24 @@ export function startFacebookCommentPollerWorker() {
 
   const queue = new Queue(QUEUE_NAME, { connection });
 
-  queue
-    .add(
-      "poll-facebook-comments",
-      {},
-      { repeat: { every: POLL_INTERVAL_MS }, jobId: "poll-facebook-comments-repeat" },
-    )
-    .catch((err) =>
-      console.error("[FB_COMMENT_POLLER] Failed to add repeating job:", err.message),
+  if (env.META_COMMENT_POLLING_ENABLED) {
+    queue
+      .add(
+        "poll-facebook-comments",
+        {},
+        { repeat: { every: POLL_INTERVAL_MS }, jobId: "poll-facebook-comments-repeat" },
+      )
+      .catch((err) =>
+        console.error("[FB_COMMENT_POLLER] Failed to add repeating job:", err.message),
+      );
+    console.log(
+      `[FB_COMMENT_POLLER] Scheduled polling enabled (interval=${env.META_COMMENT_POLLING_INTERVAL_MINUTES}m)`,
     );
+  } else {
+    console.warn(
+      "[FB_COMMENT_POLLER] Scheduled polling disabled — META_COMMENT_POLLING_ENABLED=false. Manual /sync-comments still works.",
+    );
+  }
 
   const worker = new Worker(
     QUEUE_NAME,
@@ -77,9 +83,7 @@ export function startFacebookCommentPollerWorker() {
     console.error("[FB_COMMENT_POLLER] Worker error:", err.message);
   });
 
-  console.log(
-    `[FB_COMMENT_POLLER] Worker started (interval=${env.META_COMMENT_POLLING_INTERVAL_MINUTES}m)`,
-  );
+  console.log("[FB_COMMENT_POLLER] Worker started (processing manual + scheduled jobs)");
 
   return {
     close: async () => {
