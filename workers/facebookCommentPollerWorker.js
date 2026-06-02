@@ -71,9 +71,28 @@ export function startFacebookCommentPollerWorker() {
         const conn = await prisma.channelConnection.findUnique({
           where: { id: job.data.connectionId },
         });
-        if (conn) {
-          await pollFacebookCommentsForConnection(conn);
+        if (!conn) {
+          console.warn("[FB_COMMENT_POLLER] poll-connection job: connection not found", {
+            connectionId: job.data.connectionId,
+          });
+          return;
         }
+        console.log("[FB_COMMENT_POLLER] poll-connection job start", {
+          connectionId: conn.id,
+          clientId: conn.clientId,
+          externalAccountId: conn.externalAccountId,
+        });
+        const summary = await pollFacebookCommentsForConnection(conn);
+        console.log("[FB_COMMENT_POLLER] poll-connection job done", {
+          connectionId: conn.id,
+          postsChecked: summary.postsChecked,
+          commentsFetched: summary.commentsFetched,
+          messagesCreated: summary.messagesCreated,
+          conversationsCreated: summary.conversationsCreated,
+          duplicatesSkipped: summary.duplicatesSkipped,
+          errorsCount: summary.errors.length,
+          errors: summary.errors,
+        });
       }
     },
     { connection, concurrency: 1 },

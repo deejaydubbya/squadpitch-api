@@ -71,9 +71,32 @@ export function startInstagramCommentPollerWorker() {
         const conn = await prisma.channelConnection.findUnique({
           where: { id: job.data.connectionId },
         });
-        if (conn) {
-          await pollInstagramCommentsForConnection(conn);
+        if (!conn) {
+          console.warn("[IG_COMMENT_POLLER] poll-connection job: connection not found", {
+            connectionId: job.data.connectionId,
+          });
+          return;
         }
+        // Single-connection manual sync from /sync-comments. Surface
+        // the result inline so an "I clicked Sync and nothing
+        // happened" debugging session can see exactly what ran
+        // (or what skipped, and why).
+        console.log("[IG_COMMENT_POLLER] poll-connection job start", {
+          connectionId: conn.id,
+          clientId: conn.clientId,
+          externalAccountId: conn.externalAccountId,
+        });
+        const summary = await pollInstagramCommentsForConnection(conn);
+        console.log("[IG_COMMENT_POLLER] poll-connection job done", {
+          connectionId: conn.id,
+          mediaChecked: summary.mediaChecked,
+          commentsFetched: summary.commentsFetched,
+          messagesCreated: summary.messagesCreated,
+          conversationsCreated: summary.conversationsCreated,
+          duplicatesSkipped: summary.duplicatesSkipped,
+          errorsCount: summary.errors.length,
+          errors: summary.errors,
+        });
       }
     },
     { connection, concurrency: 1 },
