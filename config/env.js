@@ -61,6 +61,23 @@ export const env = {
   // META_INBOX_INGESTION_ENABLED) was removed June 2026 because
   // Meta requires apps to be Live before delivering real production
   // webhook events; polling sidesteps that gate entirely.
+  //
+  // META_COMMENT_POLLING_* gate the BACKGROUND scheduler only.
+  // Manual sync routes (POST .../sync-comments) always work for
+  // ops + demo + dev, regardless of these flags. The scheduler is
+  // OFF by default so a fresh deploy doesn't start hitting Graph
+  // for every connected workspace on day one — flip it on after
+  // confirming credentials and quotas are in place.
+  META_COMMENT_POLLING_ENABLED:
+    String(process.env.META_COMMENT_POLLING_ENABLED ?? "false").toLowerCase() === "true",
+  META_COMMENT_POLLING_INTERVAL_MINUTES: (() => {
+    const n = Number.parseInt(process.env.META_COMMENT_POLLING_INTERVAL_MINUTES, 10);
+    return Number.isFinite(n) && n > 0 ? n : 15;
+  })(),
+  META_COMMENT_POLLING_LOOKBACK_DAYS: (() => {
+    const n = Number.parseInt(process.env.META_COMMENT_POLLING_LOOKBACK_DAYS, 10);
+    return Number.isFinite(n) && n > 0 ? n : 30;
+  })(),
 
   // OAuth state signing (HMAC secret, random 32+ bytes)
   OAUTH_STATE_SECRET: process.env.OAUTH_STATE_SECRET,

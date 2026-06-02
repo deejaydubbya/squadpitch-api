@@ -4436,6 +4436,172 @@ studioRouter.post(
   },
 );
 
+// ── Facebook comment sync ─────────────────────────────────────────────
+//
+// Trigger the Facebook Page comment poller for a single workspace
+// right now (rather than waiting for the next scheduled tick).
+// Mirrors the Threads + YouTube sync endpoints. Enqueues a one-shot
+// poll-connection BullMQ job; the work happens asynchronously.
+//
+// Note: this route is NOT gated on META_COMMENT_POLLING_ENABLED.
+// That flag only gates the recurring background tick; manual sync
+// always works so ops / demo / dev can fix Inbox gaps on demand.
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/FACEBOOK/sync-comments`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "FACEBOOK",
+          },
+        },
+        select: { id: true, status: true, externalAccountId: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No Facebook connection on this workspace.",
+        );
+      }
+      if (conn.status !== "CONNECTED") {
+        return sendError(
+          res,
+          400,
+          "CONNECTION_NOT_ACTIVE",
+          "Facebook connection is not active. Reconnect to sync comments.",
+        );
+      }
+      if (!conn.externalAccountId) {
+        return sendError(
+          res,
+          400,
+          "NO_PAGE_ID",
+          "Facebook connection is missing a Page id; reconnect to refresh it.",
+        );
+      }
+      const { enqueueFacebookCommentPollForConnection } = await import(
+        "../../workers/facebookCommentPollerWorker.js"
+      );
+      try {
+        await enqueueFacebookCommentPollForConnection(conn.id);
+      } catch (err) {
+        // Redis unavailable in some dev environments — fall back to
+        // running the tick inline so the dev / test experience still
+        // works without a queue. In prod (Fly), Redis is configured
+        // so this branch is rarely hit.
+        if (err?.code === "QUEUE_UNAVAILABLE") {
+          const { pollFacebookCommentsForConnection } = await import(
+            "../inbox/inbox.facebookCommentPoller.service.js"
+          );
+          const full = await prisma.channelConnection.findUnique({
+            where: { id: conn.id },
+          });
+          if (full) await pollFacebookCommentsForConnection(full);
+        } else {
+          throw err;
+        }
+      }
+      return res.status(202).json({
+        status: "queued",
+        connectionId: conn.id,
+        message:
+          "Facebook comment sync queued. Comments will appear in the Inbox shortly.",
+      });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
+// ── Instagram comment sync ────────────────────────────────────────────
+//
+// Trigger the Instagram comment poller for a single workspace right
+// now (rather than waiting for the next scheduled tick). Mirrors the
+// Facebook + Threads + YouTube sync endpoints. Enqueues a one-shot
+// poll-connection BullMQ job; the work happens asynchronously.
+//
+// Note: this route is NOT gated on META_COMMENT_POLLING_ENABLED.
+// That flag only gates the recurring background tick; manual sync
+// always works so ops / demo / dev can fix Inbox gaps on demand.
+studioRouter.post(
+  `${BASE}/workspaces/:id/connections/INSTAGRAM/sync-comments`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const conn = await prisma.channelConnection.findUnique({
+        where: {
+          clientId_channel: {
+            clientId: req.params.id,
+            channel: "INSTAGRAM",
+          },
+        },
+        select: { id: true, status: true, externalAccountId: true },
+      });
+      if (!conn) {
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No Instagram connection on this workspace.",
+        );
+      }
+      if (conn.status !== "CONNECTED") {
+        return sendError(
+          res,
+          400,
+          "CONNECTION_NOT_ACTIVE",
+          "Instagram connection is not active. Reconnect to sync comments.",
+        );
+      }
+      if (!conn.externalAccountId) {
+        return sendError(
+          res,
+          400,
+          "NO_USER_ID",
+          "Instagram connection is missing a user id; reconnect to refresh it.",
+        );
+      }
+      const { enqueueInstagramCommentPollForConnection } = await import(
+        "../../workers/instagramCommentPollerWorker.js"
+      );
+      try {
+        await enqueueInstagramCommentPollForConnection(conn.id);
+      } catch (err) {
+        if (err?.code === "QUEUE_UNAVAILABLE") {
+          const { pollInstagramCommentsForConnection } = await import(
+            "../inbox/inbox.instagramCommentPoller.service.js"
+          );
+          const full = await prisma.channelConnection.findUnique({
+            where: { id: conn.id },
+          });
+          if (full) await pollInstagramCommentsForConnection(full);
+        } else {
+          throw err;
+        }
+      }
+      return res.status(202).json({
+        status: "queued",
+        connectionId: conn.id,
+        message:
+          "Instagram comment sync queued. Comments will appear in the Inbox shortly.",
+      });
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message);
+      }
+      next(err);
+    }
+  },
+);
+
 // ── Tech Stack ────────────────────────────────────────────────────────
 
 /**

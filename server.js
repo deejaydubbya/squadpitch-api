@@ -257,6 +257,8 @@ let personaTrainingWorker;
 let gbpReviewPollerWorker;
 let youtubeCommentPollerWorker;
 let threadsReplyPollerWorker;
+let facebookCommentPollerWorker;
+let instagramCommentPollerWorker;
 let autopilotEvaluatorWorker;
 
 let server;
@@ -345,6 +347,16 @@ let server;
       );
       threadsReplyPollerWorker = startThreadsReplyPollerWorker();
 
+      const { startFacebookCommentPollerWorker } = await import(
+        "./workers/facebookCommentPollerWorker.js"
+      );
+      facebookCommentPollerWorker = startFacebookCommentPollerWorker();
+
+      const { startInstagramCommentPollerWorker } = await import(
+        "./workers/instagramCommentPollerWorker.js"
+      );
+      instagramCommentPollerWorker = startInstagramCommentPollerWorker();
+
       const { startAutopilotEvaluatorWorker } = await import(
         "./workers/autopilotEvaluatorWorker.js"
       );
@@ -370,6 +382,8 @@ const shutdown = (sig) => async () => {
   try { if (gbpReviewPollerWorker) await gbpReviewPollerWorker.close(); } catch {}
   try { if (youtubeCommentPollerWorker) await youtubeCommentPollerWorker.close(); } catch {}
   try { if (threadsReplyPollerWorker) await threadsReplyPollerWorker.close(); } catch {}
+  try { if (facebookCommentPollerWorker) await facebookCommentPollerWorker.close(); } catch {}
+  try { if (instagramCommentPollerWorker) await instagramCommentPollerWorker.close(); } catch {}
   try { if (autopilotEvaluatorWorker) await autopilotEvaluatorWorker.close(); } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
