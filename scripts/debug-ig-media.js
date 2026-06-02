@@ -1,10 +1,13 @@
-// One-shot diagnostic — list the IG account's recent media + comment counts.
+// One-shot diagnostic — probe IG comment-read via three different
+// Graph API surfaces to definitively prove whether the Live-mode
+// gate applies to all paths or only /{media-id}/comments.
 // Delete after the App Review polling investigation closes.
 
 import { prisma } from "../prisma.js";
 import { decryptToken } from "../lib/tokenCrypto.js";
 
 const CONN_ID = process.argv[2] ?? "cmpv09qpw000vsohp155nud62";
+const TARGET_MEDIA = "17942011083039275"; // the post with comments_count=7
 
 const c = await prisma.channelConnection.findUnique({
   where: { id: CONN_ID },
@@ -16,30 +19,31 @@ if (!c) {
 }
 
 const tok = decryptToken(c.accessToken);
-const url =
-  `https://graph.instagram.com/${c.externalAccountId}/media` +
-  `?fields=id,caption,timestamp,media_type,comments_count,like_count` +
-  `&limit=10&access_token=${encodeURIComponent(tok)}`;
 
-const res = await fetch(url);
-const body = await res.json();
-console.log("status:", res.status);
-console.log("count:", body?.data?.length ?? null);
-console.log(
-  "items:",
-  JSON.stringify(
-    (body?.data ?? []).map((m) => ({
-      id: m.id,
-      type: m.media_type,
-      ts: m.timestamp,
-      caption: (m.caption || "").slice(0, 60),
-      comments_count: m.comments_count,
-      like_count: m.like_count,
-    })),
-    null,
-    2,
-  ),
+async function probe(label, url) {
+  const res = await fetch(url);
+  const body = await res.json();
+  console.log(`\n--- ${label} ---`);
+  console.log("status:", res.status);
+  console.log("body:", JSON.stringify(body, null, 2).slice(0, 2000));
+}
+
+// Path 1: dedicated /comments endpoint (what the poller uses today)
+await probe(
+  "PATH 1: /{media-id}/comments",
+  `https://graph.instagram.com/${TARGET_MEDIA}/comments?fields=id,text,username,timestamp,from&limit=100&access_token=${encodeURIComponent(tok)}`,
 );
-if (body?.error) console.log("error:", JSON.stringify(body.error, null, 2));
+
+// Path 2: nested field expansion on the media itself
+await probe(
+  "PATH 2: /{media-id}?fields=comments{...}",
+  `https://graph.instagram.com/${TARGET_MEDIA}?fields=id,comments_count,comments{id,text,username,timestamp,from}&access_token=${encodeURIComponent(tok)}`,
+);
+
+// Path 3: nested via /me/media with comments field
+await probe(
+  "PATH 3: /me/media?fields=...,comments{...}",
+  `https://graph.instagram.com/${c.externalAccountId}/media?fields=id,comments_count,comments{id,text,username,timestamp,from}&limit=5&access_token=${encodeURIComponent(tok)}`,
+);
 
 await prisma.$disconnect();
