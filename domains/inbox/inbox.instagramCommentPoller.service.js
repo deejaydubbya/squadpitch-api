@@ -157,8 +157,25 @@ async function fetchCommentsPage({ accessToken, mediaId, after }) {
   });
   if (after) params.set("after", after);
   const url = `${INSTAGRAM_GRAPH_BASE}/${encodeURIComponent(mediaId)}/comments?${params.toString()}`;
+  // Forensic logging — surface what Meta returned per media. The URL
+  // is logged with the access_token redacted so we never leak tokens
+  // even in shared log searches. Body keys + counts only; no comment
+  // content.
   const res = await fetch(url);
   const body = await res.json().catch(() => ({}));
+  const redactedUrl = url.replace(/access_token=[^&]+/, "access_token=REDACTED");
+  console.log("[ig.poller] fetchCommentsPage", {
+    mediaId,
+    url: redactedUrl,
+    status: res.status,
+    ok: res.ok,
+    dataCount: Array.isArray(body?.data) ? body.data.length : null,
+    hasError: Boolean(body?.error),
+    errorMessage: body?.error?.message ?? null,
+    errorCode: body?.error?.code ?? null,
+    errorSubcode: body?.error?.error_subcode ?? null,
+    pagingKeys: body?.paging ? Object.keys(body.paging) : [],
+  });
   if (!res.ok) {
     const err = new Error(
       body?.error?.message ?? `Instagram /comments failed with ${res.status}`,
