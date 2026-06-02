@@ -4125,51 +4125,14 @@ studioRouter.post(
   }
 );
 
-// ── Instagram webhook subscription ───────────────────────────────────
+// ── Instagram comment ingestion ─────────────────────────────────────
 //
-// Subscribes the workspace's IG Business account to the Meta App's
-// `comments` webhook field. Required AFTER an Instagram OAuth
-// connect for Meta to actually fire comment-event deliveries — the
-// App Dashboard subscription only covers the field-level config;
-// each IG account has to opt in itself. Idempotent.
-//
-// See `instagramWebhookSubscribe.service.js` for the Meta call shape
-// and error classification.
-studioRouter.post(
-  `${BASE}/workspaces/:id/connections/INSTAGRAM/subscribe-webhooks`,
-  requireClientOwner,
-  async (req, res, next) => {
-    try {
-      const conn = await prisma.channelConnection.findUnique({
-        where: {
-          clientId_channel: {
-            clientId: req.params.id,
-            channel: "INSTAGRAM",
-          },
-        },
-        select: { id: true },
-      });
-      if (!conn) {
-        return sendError(
-          res,
-          404,
-          "NO_CONNECTION",
-          "Connect Instagram first, then subscribe to comment webhooks.",
-        );
-      }
-      const { subscribeInstagramComments } = await import(
-        "./instagramWebhookSubscribe.service.js"
-      );
-      const result = await subscribeInstagramComments({ connectionId: conn.id });
-      res.json(result);
-    } catch (err) {
-      if (err?.code && err?.status) {
-        return sendError(res, err.status, err.code, err.message);
-      }
-      next(err);
-    }
-  },
-);
+// Instagram comments arrive in the inbox via the polling service
+// (domains/inbox/), NOT via webhooks. The previous
+// `POST/GET /workspaces/:id/connections/INSTAGRAM/subscribe-webhooks`
+// routes were removed June 2026 along with the rest of the Meta
+// webhook implementation — Meta requires Live status before real
+// production webhook events deliver, so polling sidesteps the gate.
 
 // ── Google Business Profile location picker ──────────────────────────
 //

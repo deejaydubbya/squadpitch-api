@@ -1,7 +1,7 @@
 // SquadInbox — Google Business Profile review ingestion.
 //
-// Counterpart to inbox.meta.ingestion.service.js for the Google
-// Business Profile "Reviews" surface. This file ONLY handles the
+// Counterpart to inbox.metaCommentIngestion.service.js for the
+// Google Business Profile "Reviews" surface. This file ONLY handles the
 // persistence layer — turning a normalized review payload into a
 // Conversation + Message + Contact in the Inbox graph.
 //
@@ -171,7 +171,7 @@ export async function ingestGbpReview(review) {
 async function findGbpConnection(locationName) {
   if (!locationName) return null;
   // Mirrors the multi-workspace tie-breaker in
-  // inbox.meta.ingestion.service.js — prefer the most recently
+  // inbox.metaCommentIngestion.service.js — prefer the most recently
   // active connection if two workspaces somehow point at the
   // same Google location.
   const candidates = await prisma.channelConnection.findMany({

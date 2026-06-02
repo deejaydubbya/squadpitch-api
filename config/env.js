@@ -53,19 +53,14 @@ export const env = {
   INSTAGRAM_APP_SECRET: process.env.INSTAGRAM_APP_SECRET,
   INSTAGRAM_OAUTH_REDIRECT_URI: process.env.INSTAGRAM_OAUTH_REDIRECT_URI,
 
-  // Meta Inbox ingestion (Facebook Page comments + Instagram comments).
-  // Verify token is the value entered in the Meta App Dashboard's
-  // webhook subscription form — Meta sends it back on every GET
-  // verification handshake so we can confirm it's really them.
-  // The feature flag stays false until the Meta App Review grants
-  // pages_read_user_content / instagram_business_manage_comments.
-  // When false, the webhook still 200-OKs every POST but writes
-  // nothing — so we can deploy the receiver, prove it's reachable,
-  // and have ops visibility into payload shapes without persisting
-  // anything.
-  META_WEBHOOK_VERIFY_TOKEN: process.env.META_WEBHOOK_VERIFY_TOKEN,
-  META_INBOX_INGESTION_ENABLED:
-    String(process.env.META_INBOX_INGESTION_ENABLED ?? "false").toLowerCase() === "true",
+  // Meta Inbox ingestion (FB Page comments + IG comments) is
+  // polling-based — no webhook env vars required. The polling
+  // service in domains/inbox/ runs on a cron tick and calls Graph
+  // directly using the per-connection access token. The previous
+  // webhook receiver (META_WEBHOOK_VERIFY_TOKEN /
+  // META_INBOX_INGESTION_ENABLED) was removed June 2026 because
+  // Meta requires apps to be Live before delivering real production
+  // webhook events; polling sidesteps that gate entirely.
 
   // OAuth state signing (HMAC secret, random 32+ bytes)
   OAUTH_STATE_SECRET: process.env.OAUTH_STATE_SECRET,

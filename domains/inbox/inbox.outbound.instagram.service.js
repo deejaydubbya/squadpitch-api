@@ -265,9 +265,9 @@ export async function sendInstagramCommentReply(
   }
 
   // Step 4: mark SENT. externalMessageId = the new IG reply id so
-  // the webhook echo guard in inbox.meta.ingestion.service.js's
-  // ECHO_FROM_ACCOUNT branch (and the explicit-id dedupe) won't
-  // re-ingest our own outbound when IG re-emits the change.
+  // the polling ingester's idempotency check in
+  // inbox.metaCommentIngestion.service.js filters out our own
+  // outbound when Graph returns the reply on the next poll tick.
   const sent = await prisma.message.update({
     where: { id: messageRow.id },
     data: {

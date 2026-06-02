@@ -240,9 +240,9 @@ export async function sendFacebookCommentReply(
   }
 
   // Step 3: mark SENT. externalMessageId = FB's returned reply id
-  // so the webhook echo guard in inbox.meta.ingestion.service.js's
-  // ECHO_FROM_PAGE branch (and our own dedupe) won't ingest our
-  // own outbound when FB re-emits the change.
+  // so the polling ingester's idempotency check in
+  // inbox.metaCommentIngestion.service.js filters out our own
+  // outbound when Graph returns the reply on the next poll tick.
   const sent = await prisma.message.update({
     where: { id: messageRow.id },
     data: {

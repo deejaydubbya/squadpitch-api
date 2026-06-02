@@ -84,13 +84,13 @@ export const providerCapabilities = {
 
   FACEBOOK: {
     label: "Facebook Page",
-    // Comments ingestion is blocked on (a) Meta App Review approval
+    // Comments ingestion is blocked on Meta App Review approval
     // for the comment scopes — pages_read_user_content +
     // pages_manage_engagement are now requested at OAuth time
-    // (IG-05) — and (b) the FB Page comments webhook subscription
-    // being added on the Meta App Dashboard. The Inbox webhook
-    // receiver (inbox.meta.webhook.routes.js) already accepts
-    // these payloads; ingestion + send flip on once Meta approves.
+    // (IG-05). Ingestion is polling-based (see the inbox polling
+    // service); the webhook receiver was removed June 2026 because
+    // Meta requires Live status before real production webhook
+    // events deliver, so polling sidesteps the gate.
     ingestComments: false,
     // Facebook private DMs are intentionally OUT of scope in this
     // App Review pass. We are not requesting pages_messaging /
@@ -103,8 +103,8 @@ export const providerCapabilities = {
     sendPublicReply: false,
     sendDM: false,
     sendReview: false,
-    webhooks: true,          // Meta Webhooks (Page subscriptions)
-    polling: true,           // fallback
+    webhooks: false,         // Meta webhooks removed June 2026; ingestion is poll-driven
+    polling: true,
     // Keep in sync with FACEBOOK_SCOPES in
     // domains/studio/oauth/facebook.oauth.js. The seven-scope shape
     // is the full target set for App Review (public_profile +
@@ -124,18 +124,17 @@ export const providerCapabilities = {
     missingScopes: [],
     appReviewStatus: "submitted",
     notes:
-      "Publishing + insights work. Comments scopes (pages_read_user_content + pages_manage_engagement) are requested at OAuth time and pending Meta App Review; ingestion + send flip on once approval lands and the FB Page comments webhook subscription is added on the Meta App Dashboard. Private DMs explicitly out of scope.",
+      "Publishing + insights work. Comments scopes (pages_read_user_content + pages_manage_engagement) are requested at OAuth time and pending Meta App Review; ingestion + send flip on once approval lands. Ingestion is polling-based; private DMs explicitly out of scope.",
   },
 
   INSTAGRAM: {
     label: "Instagram (Business)",
-    // Comments ingestion is blocked on (a) Meta App Review for the
-    // new `instagram_business_manage_comments` scope landing, and
-    // (b) the Instagram comments webhook subscription being added
-    // to the Meta App Dashboard. Once both flip, the existing
-    // Meta webhook receiver in inbox.meta.webhook.routes.js can
-    // dispatch IG comment payloads through the same ingestion
-    // service used for FB Page comments.
+    // Comments ingestion is blocked on Meta App Review approval for
+    // `instagram_business_manage_comments`. Once that lands, the
+    // polling service in domains/inbox/ can call Graph's
+    // /{ig-user-id}/media + /{media-id}/comments endpoints and
+    // route results through the shared
+    // inbox.metaCommentIngestion.service.js helper.
     ingestComments: false,
     // PRIVATE Instagram DMs are intentionally out of scope for the
     // current App Review submission — we are not requesting any
@@ -151,7 +150,7 @@ export const providerCapabilities = {
     sendPublicReply: false,
     sendDM: false,
     sendReview: false,
-    webhooks: true,                   // via Meta — same webhook system
+    webhooks: false,                  // Meta webhooks removed June 2026; ingestion is poll-driven
     polling: true,
     // Post-IG-OAuth-migration (Prompts 01-02) the Instagram channel
     // requests the new Instagram Login / Business Login scope
@@ -173,7 +172,7 @@ export const providerCapabilities = {
     missingScopes: [],
     appReviewStatus: "submitted",
     notes:
-      "OAuth now requests instagram_business_manage_comments alongside basic + content_publish + manage_insights. Comments ingestion adapter not yet wired (Meta webhook receiver currently dispatches FB Page comments only). Public comment reply send path also not yet wired; resolver surfaces an honest 'requires implementation and approval' message. Private DMs explicitly out of scope.",
+      "OAuth now requests instagram_business_manage_comments alongside basic + content_publish + manage_insights. Comments ingestion adapter not yet wired (the polling worker that calls Graph for IG comments lands in a follow-up prompt). Public comment reply send path is wired (inbox.outbound.instagram.service.js). Private DMs explicitly out of scope.",
   },
 
   GOOGLE_BUSINESS: {
@@ -404,7 +403,7 @@ export const RECOMMENDED_ORDER = [
   // 1. Reviews-only surface; high value, no DM complexity. Sensitive
   //    scope but Google verification is straightforward.
   "GOOGLE_BUSINESS",
-  // 2. Same Meta webhook plumbing as Instagram; add the scopes to
+  // 2. Same Graph polling plumbing as Instagram; add the scopes to
   //    the in-flight Meta App Review submission.
   "FACEBOOK",
   // 3. Mirrors FACEBOOK once the Meta App Review submission lands.
