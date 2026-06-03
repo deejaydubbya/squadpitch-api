@@ -1,20 +1,37 @@
-// One-shot diagnostic — for each of the IG media items we polled,
+// One-shot diagnostic — find the active INSTAGRAM connection for
+// the user's workspace, then for each of its recent media items
 // show what Meta reports as comments_count vs what /comments returns.
 // Delete after.
 
 import { prisma } from "../prisma.js";
 import { decryptToken } from "../lib/tokenCrypto.js";
 
-const CONN_ID = process.argv[2] ?? "cmpv09qpw000vsohp155nud62";
+const CLIENT_ID = process.argv[2] ?? "cmpheg00n0005rchptxt132kb";
 
 const c = await prisma.channelConnection.findUnique({
-  where: { id: CONN_ID },
-  select: { accessToken: true, externalAccountId: true },
+  where: { clientId_channel: { clientId: CLIENT_ID, channel: "INSTAGRAM" } },
+  select: {
+    id: true,
+    status: true,
+    externalAccountId: true,
+    scopes: true,
+    accessToken: true,
+    tokenExpiresAt: true,
+    updatedAt: true,
+  },
 });
 if (!c) {
-  console.error("connection not found:", CONN_ID);
+  console.error("no INSTAGRAM connection for clientId:", CLIENT_ID);
   process.exit(1);
 }
+console.log("connection:", {
+  id: c.id,
+  status: c.status,
+  externalAccountId: c.externalAccountId,
+  scopes: c.scopes,
+  tokenExpiresAt: c.tokenExpiresAt,
+  updatedAt: c.updatedAt,
+});
 
 const tok = decryptToken(c.accessToken);
 
@@ -23,12 +40,11 @@ const mediaRes = await fetch(
   `https://graph.instagram.com/${c.externalAccountId}/media?fields=id,timestamp,caption,comments_count,media_type&limit=10&access_token=${encodeURIComponent(tok)}`,
 );
 const mediaBody = await mediaRes.json();
-console.log("=== /me/media (with comments_count) ===");
-console.log(JSON.stringify(mediaBody, null, 2).slice(0, 2500));
+console.log("\n=== /me/media (with comments_count) ===");
+console.log(JSON.stringify(mediaBody, null, 2).slice(0, 3000));
 
-// For each media with comments_count > 0, also fetch /{id}/comments
-console.log("\n=== Per-media /comments fetches for posts with comments_count > 0 ===");
-for (const m of (mediaBody?.data ?? []).filter((x) => x.comments_count > 0)) {
+console.log("\n=== Per-media /comments fetches ===");
+for (const m of (mediaBody?.data ?? []).slice(0, 5)) {
   const cRes = await fetch(
     `https://graph.instagram.com/${m.id}/comments?fields=id,text,username,timestamp,from&access_token=${encodeURIComponent(tok)}`,
   );
