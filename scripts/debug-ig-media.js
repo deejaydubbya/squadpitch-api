@@ -1,51 +1,33 @@
-// Verify the user's new IG connection + probe Meta for comments.
+// Show all IG connections updated in the last hour.
 
 import { prisma } from "../prisma.js";
-import { decryptToken } from "../lib/tokenCrypto.js";
 
-const CLIENT_ID = "cmpheg00n0005rchptxt132kb";
-
-const c = await prisma.channelConnection.findUnique({
-  where: { clientId_channel: { clientId: CLIENT_ID, channel: "INSTAGRAM" } },
+const oneHourAgo = new Date(Date.now() - 60 * 60_000);
+const conns = await prisma.channelConnection.findMany({
+  where: { channel: "INSTAGRAM", updatedAt: { gte: oneHourAgo } },
   select: {
     id: true,
+    clientId: true,
     status: true,
     externalAccountId: true,
     scopes: true,
-    tokenExpiresAt: true,
     updatedAt: true,
-    accessToken: true,
   },
+  orderBy: { updatedAt: "desc" },
 });
-if (!c) {
-  console.error("no INSTAGRAM connection for", CLIENT_ID);
-  process.exit(1);
-}
-console.log("connection:", {
-  id: c.id,
-  status: c.status,
-  externalAccountId: c.externalAccountId,
-  scopes: c.scopes,
-  tokenExpiresAt: c.tokenExpiresAt,
-  updatedAt: c.updatedAt,
-});
+console.log("=== INSTAGRAM connections updated in last hour ===");
+console.log("count:", conns.length);
+console.log(JSON.stringify(conns, null, 2));
 
-const tok = decryptToken(c.accessToken);
-const mediaRes = await fetch(
-  `https://graph.instagram.com/${c.externalAccountId}/media?fields=id,timestamp,caption,comments_count,media_type&limit=5&access_token=${encodeURIComponent(tok)}`,
-);
-const mediaBody = await mediaRes.json();
-console.log("\n=== /me/media ===");
-console.log(JSON.stringify(mediaBody, null, 2).slice(0, 2000));
-
-console.log("\n=== Per-media /comments ===");
-for (const m of (mediaBody?.data ?? []).slice(0, 5)) {
-  const cRes = await fetch(
-    `https://graph.instagram.com/${m.id}/comments?fields=id,text,username,timestamp,from&access_token=${encodeURIComponent(tok)}`,
-  );
-  const cBody = await cRes.json();
-  console.log(`--- media ${m.id} (count=${m.comments_count}) ---`);
-  console.log("status:", cRes.status, "body:", JSON.stringify(cBody).slice(0, 800));
+// Also fetch all clients to map IDs to names
+const clientIds = [...new Set(conns.map((c) => c.clientId))];
+if (clientIds.length > 0) {
+  const clients = await prisma.client.findMany({
+    where: { id: { in: clientIds } },
+    select: { id: true, name: true },
+  });
+  console.log("\n=== Clients ===");
+  console.log(JSON.stringify(clients, null, 2));
 }
 
 await prisma.$disconnect();
