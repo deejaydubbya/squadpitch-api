@@ -27,12 +27,11 @@ console.log(`\n=== Connections on ${USER_CLIENT} (the primary workspace) ===`);
 const ours = conns.filter((c) => c.clientId === USER_CLIENT);
 console.log(JSON.stringify(ours, null, 2));
 
-console.log("\n=== All clients owned by user cmnth9od40000ojhm8lgb2xzj ===");
-const clients = await prisma.client.findMany({
-  where: { ownerUserId: "cmnth9od40000ojhm8lgb2xzj" },
-  select: { id: true, name: true, updatedAt: true },
-  orderBy: { updatedAt: "desc" },
+// Look up the user's primary client
+const client = await prisma.client.findUnique({
+  where: { id: USER_CLIENT },
+  select: { id: true, name: true, updatedAt: true, createdBy: true },
 });
-console.log(JSON.stringify(clients, null, 2));
+console.log("\n=== Primary client ===", JSON.stringify(client, null, 2));
 
 await prisma.$disconnect();
