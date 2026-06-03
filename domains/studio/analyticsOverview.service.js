@@ -127,8 +127,8 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
     }));
 
   const sortScore = (d) => d.observedScore ?? d.compositeScore;
-  const topPosts = [...scoredDrafts].sort((a, b) => sortScore(b) - sortScore(a)).slice(0, 5);
-  const worstPosts = [...scoredDrafts].sort((a, b) => sortScore(a) - sortScore(b)).slice(0, 5).map((post) => ({
+  const topPosts = [...scoredDrafts].sort((a, b) => sortScore(b) - sortScore(a)).slice(0, 10);
+  const worstPosts = [...scoredDrafts].sort((a, b) => sortScore(a) - sortScore(b)).slice(0, 10).map((post) => ({
     ...post,
     worstReason: computeWorstReason(post, summary),
   }));
