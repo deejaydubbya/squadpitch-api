@@ -1,12 +1,16 @@
-// Admin one-shot — triggers a real Instagram insights API call
-// against the connected Instagram Business Login account so that
-// Meta's App Review "instagram_business_manage_insights — 0 of 1
-// API call(s) required" counter ticks up.
+// Admin one-shot — triggers real Instagram insights API calls
+// against the connected Instagram Business Login account so Meta's
+// App Review "instagram_business_manage_insights — N of 1 API
+// call(s) required" counter ticks up. Run as often as needed; the
+// scope is the same every time.
 //
-// Safe to re-run. Token never logged. Tries account-level insights
-// first; if Meta rejects the chosen metric for the account, falls
-// back to media-level insights on the most recent SquadPitch-
-// published media.
+// Makes BOTH calls each run (account-level + media-level) so we
+// exercise both shapes the App Review reviewer might require:
+//   1. Account: GET /{ig-user-id}/insights?metric=views&period=day
+//   2. Media:   GET /{ig-media-id}/insights?metric=<existing set>
+//
+// Safe to re-run. Token never logged. No legacy or DM scopes
+// requested.
 //
 // Usage:
 //   node scripts/run-instagram-insights-app-review-test.js [clientId]
@@ -27,6 +31,7 @@ const conn = await prisma.channelConnection.findUnique({
     externalAccountId: true,
     scopes: true,
     accessToken: true,
+    displayName: true,
   },
 });
 if (!conn) {
@@ -46,10 +51,10 @@ if (!Array.isArray(conn.scopes) || !conn.scopes.includes(REQUIRED_SCOPE)) {
 const token = decryptToken(conn.accessToken);
 const igUserId = conn.externalAccountId;
 console.log(`Connected IG user id: ${igUserId}`);
+if (conn.displayName) console.log(`Connected IG display name: ${conn.displayName}`);
 console.log(`Scope ${REQUIRED_SCOPE} granted: yes`);
 
 async function probe(label, url) {
-  // Redact the token in any log line
   const safeUrl = url.replace(/access_token=[^&]+/, "access_token=REDACTED");
   console.log(`\n--- ${label} ---`);
   console.log(`endpoint: ${safeUrl.split("?")[0]}`);
@@ -61,6 +66,8 @@ async function probe(label, url) {
     const metrics = body.data.map((d) => d.name).filter(Boolean);
     console.log(`metrics returned: ${JSON.stringify(metrics)}`);
     console.log(`raw data items: ${body.data.length}`);
+  } else if (body && typeof body === "object" && !body.error) {
+    console.log(`response keys: ${JSON.stringify(Object.keys(body))}`);
   }
   if (body?.error) {
     console.log(
@@ -79,52 +86,45 @@ async function probe(label, url) {
   return { ok: res.ok, status: res.status, body };
 }
 
-// Try account-level insights first. Meta's current default supported
-// metric for IG Business is `reach`; some accounts also accept `views`
-// (newer naming, post-2024 changes).
-const accountMetrics = "reach";
+// ── 1. Account-level insights ───────────────────────────────────────
+// Newer IG Business Login API uses `views` as the canonical account-
+// level reach metric (post-2024 Meta naming changes). Period=day per
+// Meta's App Review docs.
 const accountUrl =
   `${INSTAGRAM_GRAPH_BASE}/${encodeURIComponent(igUserId)}/insights` +
-  `?metric=${encodeURIComponent(accountMetrics)}` +
+  `?metric=views` +
   `&period=day` +
   `&metric_type=total_value` +
   `&access_token=${encodeURIComponent(token)}`;
+const accountResult = await probe("Account insights (views, day)", accountUrl);
 
-const accountResult = await probe("Account insights (reach, day)", accountUrl);
-
+// ── 2. Media-level insights ────────────────────────────────────────
+// Mirror the production poller's metric set so we exercise the exact
+// same Graph shape as instagram.metrics.js.
 let mediaResult = null;
-if (!accountResult.ok || accountResult.body?.error) {
-  // Account-level rejected — fall back to media-level on the most
-  // recent SquadPitch-published media. Uses the same metric set the
-  // production poller (instagram.metrics.js) uses.
+const recentDraft = await prisma.draft.findFirst({
+  where: {
+    clientId: CLIENT_ID,
+    channel: "INSTAGRAM",
+    externalPostId: { not: null },
+  },
+  orderBy: { publishedAt: "desc" },
+  select: { externalPostId: true, publishedAt: true },
+});
+if (recentDraft) {
   console.log(
-    "\nAccount-level call did not succeed; trying media-level fallback on most recent published media…",
+    `\nmost recent SquadPitch-published IG media: ${recentDraft.externalPostId} (publishedAt ${recentDraft.publishedAt?.toISOString()})`,
   );
-  const recentDraft = await prisma.draft.findFirst({
-    where: {
-      clientId: CLIENT_ID,
-      channel: "INSTAGRAM",
-      externalPostId: { not: null },
-    },
-    orderBy: { publishedAt: "desc" },
-    select: { externalPostId: true, publishedAt: true },
-  });
-  if (!recentDraft) {
-    console.error("no SquadPitch-published IG media found to fall back to");
-    await prisma.$disconnect();
-    process.exit(1);
-  }
-  console.log(
-    `using mediaId ${recentDraft.externalPostId} (publishedAt ${recentDraft.publishedAt?.toISOString()})`,
-  );
-  // Mirror what the existing instagram.metrics.js adapter requests so
-  // we're guaranteed at least one supported metric.
   const mediaMetrics = "impressions,reach,saved,shares";
   const mediaUrl =
     `${INSTAGRAM_GRAPH_BASE}/${encodeURIComponent(recentDraft.externalPostId)}/insights` +
     `?metric=${encodeURIComponent(mediaMetrics)}` +
     `&access_token=${encodeURIComponent(token)}`;
   mediaResult = await probe("Media insights (impressions/reach/saved/shares)", mediaUrl);
+} else {
+  console.log(
+    "\nNo SquadPitch-published IG media found — skipping media-level call.",
+  );
 }
 
 console.log("\n=== Summary ===");
@@ -133,7 +133,7 @@ console.log(
 );
 if (mediaResult) {
   console.log(
-    `media-level call: ${mediaResult.ok ? "OK" : "FAILED"} (status ${mediaResult.status})`,
+    `media-level call:   ${mediaResult.ok ? "OK" : "FAILED"} (status ${mediaResult.status})`,
   );
 }
 console.log(
