@@ -115,7 +115,9 @@ if (recentDraft) {
   console.log(
     `\nmost recent SquadPitch-published IG media: ${recentDraft.externalPostId} (publishedAt ${recentDraft.publishedAt?.toISOString()})`,
   );
-  const mediaMetrics = "impressions,reach,saved,shares";
+  // Meta deprecated `impressions` for IG Media Insights — replaced
+  // with `views`. Using current Meta-supported metrics.
+  const mediaMetrics = "views,reach,saved,shares,total_interactions";
   const mediaUrl =
     `${INSTAGRAM_GRAPH_BASE}/${encodeURIComponent(recentDraft.externalPostId)}/insights` +
     `?metric=${encodeURIComponent(mediaMetrics)}` +
