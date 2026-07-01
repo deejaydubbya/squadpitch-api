@@ -7,7 +7,7 @@ import { rateLimit } from "express-rate-limit";
 import { env, bootEnvWarnings } from "./config/env.js";
 import { buildRequestLogger } from "./lib/requestLogger.js";
 import { initSentry, sentryRequestHandler, setupSentryErrorHandler } from "./lib/sentry.js";
-import { prisma, isConnected } from "./prisma.js";
+import { prisma, isConnected, reconnectPrisma } from "./prisma.js";
 import { getRedis } from "./redis.js";
 
 // Domain routers
@@ -136,7 +136,22 @@ app.use(
 
 // Health check — no auth
 app.get("/health", async (_req, res) => {
-  const dbOk = await isConnected();
+  let dbOk = await isConnected();
+  // Self-heal: when the Prisma engine loses its DB connection, this failing
+  // health check is the ONLY thing that keeps firing — Fly pulls the machine
+  // out of rotation, so no user requests reach requireUser's reconnect path
+  // and the engine sits at db:false until a manual restart (see the ~1.5h
+  // outage on 2026-07-01). Trigger a reconnect here so the machine recovers
+  // on its own. reconnectPrisma() is mutex-guarded, so concurrent probes
+  // share one in-flight reconnect cycle.
+  if (!dbOk) {
+    try {
+      await reconnectPrisma();
+      dbOk = await isConnected();
+    } catch (err) {
+      console.error("[health] reconnect attempt failed:", err.message);
+    }
+  }
   const status = dbOk ? "ok" : "degraded";
   res.status(dbOk ? 200 : 503).json({ status, service: "squadpitch-api", db: dbOk });
 });
