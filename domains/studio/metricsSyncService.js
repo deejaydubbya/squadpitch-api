@@ -236,6 +236,17 @@ export async function syncMetricsForDraft(draftId, { force = false } = {}) {
     update: metricsData,
   });
 
+  // Observability: one line per stored metrics row so ops can confirm a
+  // sync actually landed data (per-channel — added while auditing why
+  // Instagram rows never appeared). No tokens or PII; safe to log.
+  console.log(
+    `[METRICS_STORED] channel=${draft.channel} draftId=${draftId} ` +
+      `externalPostId=${draft.externalPostId} impressions=${metricsData.impressions} ` +
+      `reach=${metricsData.reach} engagement=${metricsData.engagement} likes=${metricsData.likes} ` +
+      `comments=${metricsData.comments} saves=${metricsData.saves} shares=${metricsData.shares}` +
+      (raw._partial ? ` partial=${(raw._partialReasons ?? []).join("|")}` : "")
+  );
+
   // Append time-series snapshot (deduped by draftId + snapshotAt)
   const snapshotFields = {
     impressions: metricsData.impressions,

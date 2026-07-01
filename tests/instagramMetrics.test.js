@@ -6,7 +6,9 @@
 //   - 401/403 → AUTH_FAILED
 //   - Meta permission codes 10/200/230/250 → AUTH_FAILED (was provider_transient)
 //   - 429 / 5xx → transient
-//   - other 4xx → transient
+//   - code 100 (invalid/unsupported metric) → steps DOWN the metric
+//     ladder instead of throwing (previously threw transient, which
+//     silently dropped every Instagram post from Analytics)
 //   - Token never appears in error messages.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -57,7 +59,7 @@ describe("fetchInstagramMetrics — happy path", () => {
       externalPostId: MEDIA_ID,
     });
 
-    expect(r.raw).toEqual({
+    expect(r.raw).toMatchObject({
       impressions: 1000,
       reach: 800,
       likes: 50,
@@ -174,16 +176,22 @@ describe("fetchInstagramMetrics — error classification", () => {
     ).rejects.toMatchObject({ transient: true, status: 500 });
   });
 
-  it("non-permission 4xx (e.g. code 100 invalid metric) still throws transient", async () => {
-    fetchMock.mockReturnValueOnce(
-      err(400, { error: { code: 100, message: "invalid metric" } })
-    );
-    await expect(
-      fetchInstagramMetrics({
-        connection: { accessToken: SECRET },
-        externalPostId: MEDIA_ID,
-      })
-    ).rejects.toMatchObject({ transient: true });
+  it("code 100 (invalid metric) steps down the ladder instead of throwing", async () => {
+    // Regression guard: the deprecated-`impressions`/unsupported-metric
+    // case must NOT throw. The adapter drops to the next metric tier and,
+    // as long as any tier + the fields call succeed, still returns a row.
+    fetchMock
+      .mockReturnValueOnce(err(400, { error: { code: 100, message: "invalid metric" } })) // tier 0
+      .mockReturnValueOnce(ok({ data: [{ name: "reach", values: [{ value: 640 }] }] })) // tier 1
+      .mockReturnValueOnce(ok({ like_count: 12, comments_count: 2 })); // fields
+
+    const r = await fetchInstagramMetrics({
+      connection: { accessToken: SECRET },
+      externalPostId: MEDIA_ID,
+    });
+
+    expect(r).not.toBeNull();
+    expect(r.raw).toMatchObject({ reach: 640, likes: 12, comments: 2 });
   });
 
   it("Token never appears in thrown error messages (even when Meta echoes user_id etc.)", async () => {

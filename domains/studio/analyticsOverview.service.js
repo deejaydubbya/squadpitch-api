@@ -38,10 +38,19 @@ export async function getAnalyticsOverview({ clientId, range = '30d' }) {
   const dateFilter = getDateFilter(range);
   const timezone = await getClientTimezone(clientId);
 
-  // Lazy backfill: create insights if none exist
-  const insightCount = await prisma.postInsight.count({ where: { clientId } });
-  if (insightCount === 0) {
-    await backfillClientInsights(clientId);
+  // Ensure every PUBLISHED post has at least an internal-signal insight
+  // so it appears in Analytics even before (or without) a provider
+  // metrics sync — e.g. a freshly published Instagram post, or one whose
+  // provider insights are zero/unavailable. backfillClientInsights only
+  // touches drafts with postInsight == null, so this is a cheap no-op
+  // once every post is scored. (Previously this only ran when the client
+  // had ZERO insights, so an unsynced Instagram post on a workspace that
+  // already had Facebook insights stayed invisible in Top/Worst lists.)
+  const backfilled = await backfillClientInsights(clientId);
+  if (backfilled > 0) {
+    console.log(
+      `[ANALYTICS_OVERVIEW] client=${clientId} backfilled ${backfilled} post(s) with internal-signal insights`
+    );
   }
 
   // Get published drafts in range
