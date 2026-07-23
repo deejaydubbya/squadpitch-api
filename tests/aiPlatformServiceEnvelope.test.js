@@ -78,7 +78,6 @@ describe("AI service envelope contract", () => {
   it("keeps the checked-in JSON Schema aligned with Node constants", () => {
     const schemaPath = path.resolve(
       process.cwd(),
-      "..",
       "docs",
       "ai-platform",
       "contracts",

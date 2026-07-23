@@ -48,14 +48,16 @@ const prismaMock = {
 
 const stripeRetrieveMock = vi.fn();
 vi.mock("stripe", () => ({
-  default: vi.fn().mockImplementation(() => ({
+  default: vi.fn(function Stripe() {
+    return {
     subscriptions: { retrieve: stripeRetrieveMock, update: vi.fn() },
     customers: { create: vi.fn() },
     checkout: { sessions: { create: vi.fn() } },
     billingPortal: { sessions: { create: vi.fn() } },
     webhooks: { constructEvent: vi.fn() },
     prices: { retrieve: vi.fn() },
-  })),
+    };
+  }),
 }));
 vi.mock("../config/env.js", () => ({
   env: {

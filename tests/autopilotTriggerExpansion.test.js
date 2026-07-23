@@ -14,6 +14,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // far heavier than the value of these tests.
 
 // Test the seasonal window math by date-injection.
+const { __TEST_currentSeasonalWindow, __TEST_formatPrice } = await import(
+  "../domains/studio/autopilot.service.js"
+);
 
 describe("seasonal calendar", () => {
   beforeEach(() => {
@@ -33,9 +36,6 @@ describe("seasonal calendar", () => {
     ["2026-12-15T12:00:00Z", "year_end_market_recap"],
   ])("returns %s on %s", async (iso, expectedKey) => {
     vi.setSystemTime(new Date(iso));
-    const { __TEST_currentSeasonalWindow } = await import(
-      "../domains/studio/autopilot.service.js"
-    );
     const out = __TEST_currentSeasonalWindow(new Date());
     expect(out?.key).toBe(expectedKey);
     expect(out?.year).toBe(2026);
@@ -49,17 +49,11 @@ describe("seasonal calendar", () => {
     "2026-11-15T12:00:00Z",
   ])("returns null in a quiet month (%s)", async (iso) => {
     vi.setSystemTime(new Date(iso));
-    const { __TEST_currentSeasonalWindow } = await import(
-      "../domains/studio/autopilot.service.js"
-    );
     expect(__TEST_currentSeasonalWindow(new Date())).toBeNull();
   });
 
   it("expires the window at the end of the latest active month", async () => {
     vi.setSystemTime(new Date("2026-03-15T12:00:00Z"));
-    const { __TEST_currentSeasonalWindow } = await import(
-      "../domains/studio/autopilot.service.js"
-    );
     const out = __TEST_currentSeasonalWindow(new Date());
     // Spring covers months [1,2] (Feb, Mar) → expires Apr 1.
     expect(out?.expiresAt.toISOString()).toBe("2026-04-01T00:00:00.000Z");
@@ -68,25 +62,16 @@ describe("seasonal calendar", () => {
 
 describe("formatPrice", () => {
   it("formats numbers with $ + commas", async () => {
-    const { __TEST_formatPrice } = await import(
-      "../domains/studio/autopilot.service.js"
-    );
     expect(__TEST_formatPrice(425000)).toBe("$425,000");
     expect(__TEST_formatPrice(1234567)).toBe("$1,234,567");
   });
 
   it("passes already-formatted strings through, adds $ if missing", async () => {
-    const { __TEST_formatPrice } = await import(
-      "../domains/studio/autopilot.service.js"
-    );
     expect(__TEST_formatPrice("$425,000")).toBe("$425,000");
     expect(__TEST_formatPrice("425k")).toBe("$425k");
   });
 
   it("returns a safe placeholder for empty / non-finite input", async () => {
-    const { __TEST_formatPrice } = await import(
-      "../domains/studio/autopilot.service.js"
-    );
     expect(__TEST_formatPrice(null)).toBe("the previous price");
     expect(__TEST_formatPrice(undefined)).toBe("the previous price");
     expect(__TEST_formatPrice("")).toBe("the previous price");

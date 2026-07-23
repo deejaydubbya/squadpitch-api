@@ -19,14 +19,16 @@ const stripeCheckoutCreate = vi.fn();
 const stripeSubscriptionsRetrieve = vi.fn();
 
 vi.mock("stripe", () => {
-  const Stripe = vi.fn().mockImplementation(() => ({
+  const Stripe = vi.fn(function Stripe() {
+    return {
     customers: { create: stripeCustomersCreate },
     checkout: { sessions: { create: stripeCheckoutCreate } },
     subscriptions: { retrieve: stripeSubscriptionsRetrieve, update: vi.fn() },
     billingPortal: { sessions: { create: vi.fn() } },
     webhooks: { constructEvent: vi.fn() },
     prices: { retrieve: vi.fn() },
-  }));
+    };
+  });
   return { default: Stripe };
 });
 

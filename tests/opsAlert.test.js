@@ -12,6 +12,7 @@ vi.mock("../config/env.js", () => ({
 const { sendOpsAlert, _resetOpsAlertDedup } = await import("../lib/opsAlert.js");
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   _resetOpsAlertDedup();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
