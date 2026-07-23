@@ -124,6 +124,35 @@ enum DataItemType {
   CUSTOM
 }
 
+enum AiActionProposalStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  EXPIRED
+  SUPERSEDED
+  FAILED
+}
+
+enum AiActionProposalType {
+  DRAFT_CONTENT
+  CAMPAIGN_DRAFT_SET
+}
+
+enum AiRunStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+  BLOCKED
+  REJECTED
+}
+
+enum AiReleaseGateStage {
+  OFFLINE
+  SHADOW
+  BETA
+  GENERAL_RELEASE
+}
+
 enum BlueprintCategory {
   SOCIAL_PROOF
   EDUCATION
@@ -233,6 +262,8 @@ model Client {
   adPackages                       AdPackage[]
   autopilotCampaignRecommendations AutopilotCampaignRecommendation[]
   autopilotRuns                    AutopilotRun[]
+  aiActionProposals                AiActionProposal[]
+  aiRunTraces                      AiRunTrace[]
 
   @@index([status])
   @@map("clients")
@@ -1464,7 +1495,11 @@ enum PlanTier {
 enum AiActionType {
   GENERATE_POST
   REGENERATE
+  REMIX_CONTENT
+  GENERATE_CAMPAIGN
+  REGENERATE_POST
   PARSE
+  EXTRACT_IMAGE
   IMAGE
   VIDEO
   IDEAS
@@ -1519,6 +1554,41 @@ model UsageRecord {
   @@map("usage_records")
 }
 
+model AiActionProposal {
+  id                   String                 @id @default(cuid())
+  clientId             String
+  actorUserId          String
+  proposalType         AiActionProposalType
+  proposalVersion      String                 @default("draft-proposal.v1")
+  schemaVersion        String
+  status               AiActionProposalStatus @default(PROPOSED)
+  idempotencyKey       String
+  contentHash          String
+  sourceTraceId        String?
+  sourceEvalVersion    String?
+  sourceModelVersion   String?
+  sourcePromptVersion  String?
+  proposalPayload      Json
+  validationResults    Json
+  auditMetadata        Json?
+  resultingCampaignIds String[]               @default([])
+  resultingDraftIds    String[]               @default([])
+  expiresAt            DateTime
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  approvedAt           DateTime?
+  rejectedAt           DateTime?
+  approverUserId       String?
+  rejectionReason      String?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, idempotencyKey])
+  @@index([clientId, status])
+  @@index([expiresAt])
+  @@map("ai_action_proposals")
+}
+
 model AiUsageLog {
   id                 String       @id @default(cuid())
   userId             String
@@ -1534,6 +1604,54 @@ model AiUsageLog {
   @@index([userId, createdAt])
   @@index([clientId, createdAt])
   @@map("ai_usage_logs")
+}
+
+model AiRunTrace {
+  id                    String             @id @default(cuid())
+  requestId             String
+  traceId               String
+  clientId              String?
+  actorUserId           String?
+  taskType              String
+  featureFlags          Json?
+  provider              String?
+  model                 String?
+  promptVersion         String?
+  schemaVersion         String?
+  retrievalRunId        String?
+  retrievedSources      Json?
+  steps                 Json?
+  validationResults     Json?
+  retryCount            Int                @default(0)
+  promptTokens          Int                @default(0)
+  completionTokens      Int                @default(0)
+  estimatedCostCents    Float              @default(0)
+  latencyMs             Int?
+  status                AiRunStatus
+  errorCode             String?
+  errorSeverity         String?
+  humanOutcome          String?
+  downstreamCampaignIds String[]           @default([])
+  downstreamDraftIds    String[]           @default([])
+  outcomePointers       Json?
+  releaseGateStage      AiReleaseGateStage @default(OFFLINE)
+  retentionUntil        DateTime
+  debugAccessLevel      String             @default("admin_only")
+  rawContentCaptured    Boolean            @default(false)
+  redactionVersion      String             @default("ai-trace-redaction.v1")
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  client Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([traceId])
+  @@index([requestId])
+  @@index([clientId, createdAt])
+  @@index([taskType, status])
+  @@index([provider, model])
+  @@index([errorCode])
+  @@index([retentionUntil])
+  @@map("ai_run_traces")
 }
 
 // ── Post Metrics ───────────────────────────────────────────────────────

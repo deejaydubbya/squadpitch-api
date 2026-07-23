@@ -229,6 +229,7 @@ export async function generatePageFromSource({
   const userPrompt = buildUserPrompt({ ctx, source, pageGoal, customPrompt, template });
 
   // 4. Call OpenAI with the JSON-schema-strict response format.
+  const startedAt = Date.now();
   const result = await generateStructuredContent({
     systemPrompt,
     userPrompt,
@@ -251,7 +252,12 @@ export async function generatePageFromSource({
     model: result.model,
     promptTokens: result.usage?.prompt_tokens ?? 0,
     completionTokens: result.usage?.completion_tokens ?? 0,
-    metadata: { source: "site_page", sourceType, pageGoal, template: template ?? null },
+    taskName: "sites_generation",
+    schemaName: "PAGE_OUTPUT_SCHEMA",
+    provider: "openai",
+    latencyMs: Date.now() - startedAt,
+    source: "site_page",
+    metadata: { sourceType, pageGoal, template: template ?? null },
   });
 
   // 6. Normalize the LLM output. The strict response_format makes
@@ -1136,6 +1142,7 @@ export async function translatePage({ clientId, pageId, targetLanguage, userId }
     },
   };
 
+  const startedAt = Date.now();
   const result = await generateStructuredContent({
     systemPrompt,
     userPrompt,
@@ -1152,7 +1159,12 @@ export async function translatePage({ clientId, pageId, targetLanguage, userId }
     model: result.model,
     promptTokens: result.usage?.prompt_tokens ?? 0,
     completionTokens: result.usage?.completion_tokens ?? 0,
-    metadata: { source: "site_page_translate", targetLanguage: target, sourcePageId: source.id },
+    taskName: "sites_translation",
+    schemaName: "translated_page",
+    provider: "openai",
+    latencyMs: Date.now() - startedAt,
+    source: "site_page_translate",
+    metadata: { targetLanguage: target, sourcePageId: source.id },
   });
 
   // Stitch the translated text back onto the source blocks. The

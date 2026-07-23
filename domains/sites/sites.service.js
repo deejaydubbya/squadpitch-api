@@ -336,7 +336,7 @@ export async function createFormSubmission({
       clientId: submission.clientId,
       formId: submission.formId,
       pageId: submission.pageId,
-      contactEmail: submission.contactEmail,
+      contactEmailDomain: submission.contactEmail?.match(/@([^>\s]+)/)?.[1]?.toLowerCase() ?? null,
       contactPhone: submission.contactPhone ? "<set>" : null, // don't log phone
       errorName: err?.name,
       errorMessage: err?.message,

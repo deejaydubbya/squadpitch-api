@@ -95,16 +95,15 @@ async function refreshAccessToken(integrationId, config) {
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
     const isPermanent = res.status === 400 || res.status === 401;
     if (isPermanent) {
       await prisma.integration.update({
         where: { id: integrationId },
         data: { isActive: false },
       }).catch(() => {});
-      console.error(`[SHEETS_REFRESH] Permanent failure (${res.status}) integrationId=${integrationId}: ${body.slice(0, 300)}`);
+      console.error(`[SHEETS_REFRESH] Permanent failure (${res.status}) integrationId=${integrationId}`);
     }
-    throw new Error(`Google Sheets token refresh failed (${res.status}): ${body.slice(0, 300)}`);
+    throw new Error(`Google Sheets token refresh failed (${res.status})`);
   }
 
   const data = await res.json();

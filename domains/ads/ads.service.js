@@ -727,6 +727,7 @@ export async function generatePackage(clientId, packageId, userId, { tone = "pro
   const systemPrompt = buildSystemPrompt({ ctx, pkg, tone });
   const userPrompt = buildUserPrompt({ pkg, sourceCtx });
 
+  const startedAt = Date.now();
   const result = await generateStructuredContent({
     systemPrompt,
     userPrompt,
@@ -827,7 +828,12 @@ export async function generatePackage(clientId, packageId, userId, { tone = "pro
     model: result.model,
     promptTokens: result.usage?.prompt_tokens ?? 0,
     completionTokens: result.usage?.completion_tokens ?? 0,
-    metadata: { source: "ad_package_generate", adPackageId: packageId, regenerate },
+    taskName: "ads_generation",
+    schemaName: "ADS_GENERATION_SCHEMA",
+    provider: "openai",
+    latencyMs: Date.now() - startedAt,
+    source: "ad_package_generate",
+    metadata: { adPackageId: packageId, regenerate },
   });
 
   return getPackage(clientId, packageId);

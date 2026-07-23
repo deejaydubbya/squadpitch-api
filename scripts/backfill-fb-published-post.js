@@ -160,11 +160,10 @@ async function main() {
     const posts = await listRecentPosts({ pageId: conn.externalAccountId, token });
     console.log(`\nMost recent ${posts.length} post(s) on this Page:\n`);
     for (const p of posts) {
-      const msg = (p.message ?? "").replace(/\s+/g, " ").slice(0, 100);
       console.log(`  id=${p.id}`);
       console.log(`    created=${p.created_time}`);
       console.log(`    permalink=${p.permalink_url}`);
-      console.log(`    body=${msg || "(no body)"}`);
+      console.log(`    body=${typeof p.message === "string" && p.message.length > 0 ? "<set>" : "(no body)"}`);
       console.log();
     }
     console.log(

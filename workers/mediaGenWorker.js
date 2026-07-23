@@ -1353,7 +1353,6 @@ async function processJob(assetId, overrides) {
       let cutoutBuffer = rawCutoutBuffer;
       const cutoutMeta = await sharp(rawCutoutBuffer).metadata();
       console.log(`[BLEND] Cutout: ${cutoutMeta.width}x${cutoutMeta.height}, channels=${cutoutMeta.channels}, hasAlpha=${cutoutMeta.hasAlpha}, format=${cutoutMeta.format}`);
-      console.log(`[BLEND] Cutout URL: ${cutoutImageUrl}`);
 
       let validation = await validateCutoutTransparency(rawCutoutBuffer);
 
@@ -1362,7 +1361,7 @@ async function processJob(assetId, overrides) {
         await setStage(assetId, "Removing background");
         try {
           const fallbackUrl = await removeBackground(cutoutImageUrl);
-          console.log(`[BLEND] Background removal fallback URL: ${fallbackUrl}`);
+          console.log("[BLEND] Background removal fallback returned an asset URL");
           cutoutBuffer = await loadImageBuffer(fallbackUrl, "persona cutout (bg-removed)");
 
           const fixedValidation = await validateCutoutTransparency(cutoutBuffer);
@@ -1466,9 +1465,9 @@ async function processJob(assetId, overrides) {
     if (isCutoutMode) {
       // ── Cutout mode: generate + remove background → transparent PNG ──
       await setStage(assetId, "Removing background");
-      console.log(`[CUTOUT] Sending to birefnet: ${firstImage.url}`);
+      console.log("[CUTOUT] Sending generated image to birefnet");
       const cutoutUrl = await removeBackground(firstImage.url);
-      console.log(`[CUTOUT] Birefnet returned: ${cutoutUrl}`);
+      console.log("[CUTOUT] Birefnet returned an asset URL");
 
       await setStage(assetId, "Processing cutout");
       finalBuffer = await loadImageBuffer(cutoutUrl, "persona cutout");

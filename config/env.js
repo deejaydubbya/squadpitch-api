@@ -69,13 +69,21 @@ export const env = {
   // for every connected workspace on day one — flip it on after
   // confirming credentials and quotas are in place.
   META_COMMENT_POLLING_ENABLED:
-    String(process.env.META_COMMENT_POLLING_ENABLED ?? "false").toLowerCase() === "true",
+    String(
+      process.env.META_COMMENT_POLLING_ENABLED ?? "false",
+    ).toLowerCase() === "true",
   META_COMMENT_POLLING_INTERVAL_MINUTES: (() => {
-    const n = Number.parseInt(process.env.META_COMMENT_POLLING_INTERVAL_MINUTES, 10);
+    const n = Number.parseInt(
+      process.env.META_COMMENT_POLLING_INTERVAL_MINUTES,
+      10,
+    );
     return Number.isFinite(n) && n > 0 ? n : 15;
   })(),
   META_COMMENT_POLLING_LOOKBACK_DAYS: (() => {
-    const n = Number.parseInt(process.env.META_COMMENT_POLLING_LOOKBACK_DAYS, 10);
+    const n = Number.parseInt(
+      process.env.META_COMMENT_POLLING_LOOKBACK_DAYS,
+      10,
+    );
     return Number.isFinite(n) && n > 0 ? n : 30;
   })(),
 
@@ -89,7 +97,8 @@ export const env = {
   // PUBLIC_SITES_BASE_DOMAIN is the hostname suffix the resolve
   // endpoint accepts. Must match the value set on the
   // squadpitch-sites runtime (default "squadpitchsites.com").
-  PUBLIC_SITES_BASE_DOMAIN: process.env.PUBLIC_SITES_BASE_DOMAIN || "squadpitchsites.com",
+  PUBLIC_SITES_BASE_DOMAIN:
+    process.env.PUBLIC_SITES_BASE_DOMAIN || "squadpitchsites.com",
   // RUNTIME_REVALIDATE_URL points at the squadpitch-sites
   // /api/revalidate endpoint so the API can drop cached pages
   // immediately on publish. Token must match the value the
@@ -153,9 +162,12 @@ export const env = {
   // client from YouTube because the scope (business.manage) requires
   // Google sensitive-scope verification independent of the YouTube
   // scope set. Same Google Cloud project is fine; different client.
-  GOOGLE_BUSINESS_PROFILE_CLIENT_ID: process.env.GOOGLE_BUSINESS_PROFILE_CLIENT_ID,
-  GOOGLE_BUSINESS_PROFILE_CLIENT_SECRET: process.env.GOOGLE_BUSINESS_PROFILE_CLIENT_SECRET,
-  GOOGLE_BUSINESS_PROFILE_REDIRECT_URI: process.env.GOOGLE_BUSINESS_PROFILE_REDIRECT_URI,
+  GOOGLE_BUSINESS_PROFILE_CLIENT_ID:
+    process.env.GOOGLE_BUSINESS_PROFILE_CLIENT_ID,
+  GOOGLE_BUSINESS_PROFILE_CLIENT_SECRET:
+    process.env.GOOGLE_BUSINESS_PROFILE_CLIENT_SECRET,
+  GOOGLE_BUSINESS_PROFILE_REDIRECT_URI:
+    process.env.GOOGLE_BUSINESS_PROFILE_REDIRECT_URI,
 
   // Threads (Meta — separate Threads-only app, NOT the existing
   // Facebook/Instagram app). Threads has its own developer app on
@@ -180,7 +192,9 @@ export const env = {
   // rename migration.
   THREADS_ENABLED:
     String(
-      process.env.THREADS_ENABLED ?? process.env.THREADS_INTEGRATION_ENABLED ?? "true",
+      process.env.THREADS_ENABLED ??
+        process.env.THREADS_INTEGRATION_ENABLED ??
+        "true",
     ).toLowerCase() === "true",
   // Autopilot scheduler — default OFF so a deploy doesn't start
   // a fleet-wide eval loop on day one. When ENABLED is true, the
@@ -189,7 +203,8 @@ export const env = {
   // The internal evaluate-all endpoint stays available either
   // way for external cron + manual triggers.
   AUTOPILOT_SCHEDULER_ENABLED:
-    String(process.env.AUTOPILOT_SCHEDULER_ENABLED ?? "false").toLowerCase() === "true",
+    String(process.env.AUTOPILOT_SCHEDULER_ENABLED ?? "false").toLowerCase() ===
+    "true",
   AUTOPILOT_SCHEDULER_INTERVAL_MIN:
     Number(process.env.AUTOPILOT_SCHEDULER_INTERVAL_MIN) > 0
       ? Number(process.env.AUTOPILOT_SCHEDULER_INTERVAL_MIN)
@@ -200,23 +215,27 @@ export const env = {
   // replies on Threads. The resolver + outbound service both
   // check this flag before any Threads write.
   THREADS_REPLY_ENABLED:
-    String(process.env.THREADS_REPLY_ENABLED ?? "false").toLowerCase() === "true",
+    String(process.env.THREADS_REPLY_ENABLED ?? "false").toLowerCase() ===
+    "true",
   // Per-feature gate for the Threads publish adapter (organic
   // content publishing from Squadpitch Studio). Default OFF
   // until the workspace has explicitly opted in — flipping this
   // false halts publishPost at the channel-dispatch level so
   // even a scheduled Draft won't fire on the wrong workspace.
   THREADS_PUBLISHING_ENABLED:
-    String(process.env.THREADS_PUBLISHING_ENABLED ?? "false").toLowerCase() === "true",
+    String(process.env.THREADS_PUBLISHING_ENABLED ?? "false").toLowerCase() ===
+    "true",
   // Per-feature gate for any Threads insights fetcher. Default
   // OFF. Reserved for the analytics sync worker once it's wired
   // for Threads — Inbox functionality must NOT depend on this.
   THREADS_INSIGHTS_ENABLED:
-    String(process.env.THREADS_INSIGHTS_ENABLED ?? "false").toLowerCase() === "true",
+    String(process.env.THREADS_INSIGHTS_ENABLED ?? "false").toLowerCase() ===
+    "true",
 
   // Notifications
   POSTMARK_SERVER_TOKEN: process.env.POSTMARK_SERVER_TOKEN,
-  NOTIFICATION_FROM_EMAIL: process.env.NOTIFICATION_FROM_EMAIL ?? "notifications@squadpitch.com",
+  NOTIFICATION_FROM_EMAIL:
+    process.env.NOTIFICATION_FROM_EMAIL ?? "notifications@squadpitch.com",
 
   // Inbox outbound email — deliberately namespaced separately from
   // NOTIFICATION_FROM_EMAIL so the system-notification path and the
@@ -232,7 +251,9 @@ export const env = {
   POSTMARK_INBOUND_WEBHOOK_SECRET: process.env.POSTMARK_INBOUND_WEBHOOK_SECRET,
   // Per-workspace daily send cap. Conservative default so a runaway
   // workspace (or a bug) can't blast a Postmark account dry.
-  INBOX_EMAIL_DAILY_CAP: Number.isFinite(parseInt(process.env.INBOX_EMAIL_DAILY_CAP, 10))
+  INBOX_EMAIL_DAILY_CAP: Number.isFinite(
+    parseInt(process.env.INBOX_EMAIL_DAILY_CAP, 10),
+  )
     ? parseInt(process.env.INBOX_EMAIL_DAILY_CAP, 10)
     : 50,
 
@@ -298,25 +319,68 @@ export const env = {
   ADMIN_USER_IDS: process.env.ADMIN_USER_IDS ?? "",
 
   // Global AI budget caps (cents per month)
-  OPENAI_MONTHLY_BUDGET_CENTS: parseInt(process.env.OPENAI_MONTHLY_BUDGET_CENTS, 10) || 2000,
-  FAL_MONTHLY_BUDGET_CENTS: parseInt(process.env.FAL_MONTHLY_BUDGET_CENTS, 10) || 1000,
-  BUDGET_WARNING_THRESHOLD: parseFloat(process.env.BUDGET_WARNING_THRESHOLD) || 0.8,
+  OPENAI_MONTHLY_BUDGET_CENTS:
+    parseInt(process.env.OPENAI_MONTHLY_BUDGET_CENTS, 10) || 2000,
+  FAL_MONTHLY_BUDGET_CENTS:
+    parseInt(process.env.FAL_MONTHLY_BUDGET_CENTS, 10) || 1000,
+  BUDGET_WARNING_THRESHOLD:
+    parseFloat(process.env.BUDGET_WARNING_THRESHOLD) || 0.8,
 
   // Property data providers — set PROPERTY_DATA_PROVIDER to "rentcast" or "attom"
   PROPERTY_DATA_PROVIDER: process.env.PROPERTY_DATA_PROVIDER ?? "rentcast",
 
   // RentCast
   RENTCAST_API_KEY: process.env.RENTCAST_API_KEY,
-  RENTCAST_API_BASE: process.env.RENTCAST_API_BASE ?? "https://api.rentcast.io/v1",
+  RENTCAST_API_BASE:
+    process.env.RENTCAST_API_BASE ?? "https://api.rentcast.io/v1",
 
   // ATTOM (future — set key to enable as fallback or primary)
   ATTOM_API_KEY: process.env.ATTOM_API_KEY,
-  ATTOM_API_BASE: process.env.ATTOM_API_BASE ?? "https://api.gateway.attomdata.com",
+  ATTOM_API_BASE:
+    process.env.ATTOM_API_BASE ?? "https://api.gateway.attomdata.com",
 
   // Observability (all optional — code degrades gracefully if unset)
   SENTRY_DSN: process.env.SENTRY_DSN,
   SENTRY_ENVIRONMENT: process.env.SENTRY_ENVIRONMENT,
   SENTRY_TRACES_SAMPLE_RATE: process.env.SENTRY_TRACES_SAMPLE_RATE,
+  AI_BASELINE_METADATA_ENABLED:
+    String(
+      process.env.AI_BASELINE_METADATA_ENABLED ?? "false",
+    ).toLowerCase() === "true",
+  AI_PLATFORM_INTERNAL_BASE_URL: process.env.AI_PLATFORM_INTERNAL_BASE_URL,
+  AI_PLATFORM_HEALTH_TIMEOUT_MS: Number.isFinite(
+    parseInt(process.env.AI_PLATFORM_HEALTH_TIMEOUT_MS, 10),
+  )
+    ? parseInt(process.env.AI_PLATFORM_HEALTH_TIMEOUT_MS, 10)
+    : 1500,
+  AI_PLATFORM_SERVICE_AUTH_KEY_ID:
+    process.env.AI_PLATFORM_SERVICE_AUTH_KEY_ID ?? "primary",
+  AI_PLATFORM_SERVICE_AUTH_SECRET: process.env.AI_PLATFORM_SERVICE_AUTH_SECRET,
+  AI_RETRIEVAL_ENABLED:
+    String(process.env.AI_RETRIEVAL_ENABLED ?? "false").toLowerCase() ===
+    "true",
+  AI_CAMPAIGN_OPS_AGENT_ENABLED:
+    String(
+      process.env.AI_CAMPAIGN_OPS_AGENT_ENABLED ?? "false",
+    ).toLowerCase() === "true",
+  AI_ACTION_PROPOSALS_ENABLED:
+    String(process.env.AI_ACTION_PROPOSALS_ENABLED ?? "false").toLowerCase() ===
+    "true",
+  AI_OPERATIONS_CENTER_ENABLED:
+    String(
+      process.env.AI_OPERATIONS_CENTER_ENABLED ?? "false",
+    ).toLowerCase() === "true",
+  AI_AUTOPILOT_ML_RANKING_ENABLED:
+    String(
+      process.env.AI_AUTOPILOT_ML_RANKING_ENABLED ?? "false",
+    ).toLowerCase() === "true",
+  AI_BRAND_QUALITY_MODEL_ENABLED:
+    String(
+      process.env.AI_BRAND_QUALITY_MODEL_ENABLED ?? "false",
+    ).toLowerCase() === "true",
+  AI_EXPERIMENTATION_ENABLED:
+    String(process.env.AI_EXPERIMENTATION_ENABLED ?? "false").toLowerCase() ===
+    "true",
 
   // Publishing reliability
   // - PUBLISH_ADAPTER_TIMEOUT_MS: hard cap on per-channel adapter calls
@@ -343,58 +407,102 @@ export function bootEnvWarnings() {
     console.error("[BOOT] Missing DATABASE_URL");
   }
   if (!env.OPENAI_API_KEY) {
-    console.warn("[BOOT] OPENAI_API_KEY missing; generation will fail until configured");
+    console.warn(
+      "[BOOT] OPENAI_API_KEY missing; generation will fail until configured",
+    );
   }
-  if (!env.META_APP_ID || !env.META_APP_SECRET || !env.META_OAUTH_REDIRECT_URI) {
-    console.warn("[BOOT] META_APP_ID / META_APP_SECRET / META_OAUTH_REDIRECT_URI missing; Facebook OAuth disabled");
+  if (
+    !env.META_APP_ID ||
+    !env.META_APP_SECRET ||
+    !env.META_OAUTH_REDIRECT_URI
+  ) {
+    console.warn(
+      "[BOOT] META_APP_ID / META_APP_SECRET / META_OAUTH_REDIRECT_URI missing; Facebook OAuth disabled",
+    );
   }
   // Instagram now uses its own Business Login app. Falls back to
   // META_* if INSTAGRAM_* isn't set (intentional migration path),
   // so this warning fires only when BOTH are missing.
   if (
-    !(env.INSTAGRAM_APP_ID || env.META_APP_ID)
-    || !(env.INSTAGRAM_APP_SECRET || env.META_APP_SECRET)
-    || !(env.INSTAGRAM_OAUTH_REDIRECT_URI || env.META_OAUTH_REDIRECT_URI)
+    !(env.INSTAGRAM_APP_ID || env.META_APP_ID) ||
+    !(env.INSTAGRAM_APP_SECRET || env.META_APP_SECRET) ||
+    !(env.INSTAGRAM_OAUTH_REDIRECT_URI || env.META_OAUTH_REDIRECT_URI)
   ) {
-    console.warn("[BOOT] INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET / INSTAGRAM_OAUTH_REDIRECT_URI (or META_* fallback) missing; Instagram OAuth disabled");
-  }
-  if (!env.OAUTH_STATE_SECRET) {
-    console.warn("[BOOT] OAUTH_STATE_SECRET missing; OAuth state signing disabled");
-  }
-  if (!env.TOKEN_ENCRYPTION_KEY) {
-    console.warn("[BOOT] TOKEN_ENCRYPTION_KEY missing; channel connection writes will fail until configured");
-  }
-  if (!env.TIKTOK_CLIENT_KEY || !env.TIKTOK_CLIENT_SECRET || !env.TIKTOK_REDIRECT_URI) {
-    console.warn("[BOOT] TikTok OAuth credentials missing");
-  }
-  if (!env.LINKEDIN_CLIENT_ID || !env.LINKEDIN_CLIENT_SECRET || !env.LINKEDIN_REDIRECT_URI) {
-    console.warn("[BOOT] LinkedIn (Personal Profile) OAuth credentials missing");
-  }
-  if (!env.LINKEDIN_ORG_CLIENT_ID || !env.LINKEDIN_ORG_CLIENT_SECRET || !env.LINKEDIN_ORG_REDIRECT_URI) {
     console.warn(
-      "[BOOT] LinkedIn (Organization Page) OAuth credentials missing — " +
-        "Organization Page connect flow will be unavailable until configured"
+      "[BOOT] INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET / INSTAGRAM_OAUTH_REDIRECT_URI (or META_* fallback) missing; Instagram OAuth disabled",
     );
   }
-  if (!env.PINTEREST_CLIENT_ID || !env.PINTEREST_CLIENT_SECRET || !env.PINTEREST_REDIRECT_URI) {
+  if (!env.OAUTH_STATE_SECRET) {
     console.warn(
-      "[BOOT] Pinterest OAuth credentials missing — Pinterest connect flow will be unavailable until configured"
+      "[BOOT] OAUTH_STATE_SECRET missing; OAuth state signing disabled",
+    );
+  }
+  if (!env.TOKEN_ENCRYPTION_KEY) {
+    console.warn(
+      "[BOOT] TOKEN_ENCRYPTION_KEY missing; channel connection writes will fail until configured",
+    );
+  }
+  if (
+    !env.TIKTOK_CLIENT_KEY ||
+    !env.TIKTOK_CLIENT_SECRET ||
+    !env.TIKTOK_REDIRECT_URI
+  ) {
+    console.warn("[BOOT] TikTok OAuth credentials missing");
+  }
+  if (
+    !env.LINKEDIN_CLIENT_ID ||
+    !env.LINKEDIN_CLIENT_SECRET ||
+    !env.LINKEDIN_REDIRECT_URI
+  ) {
+    console.warn(
+      "[BOOT] LinkedIn (Personal Profile) OAuth credentials missing",
+    );
+  }
+  if (
+    !env.LINKEDIN_ORG_CLIENT_ID ||
+    !env.LINKEDIN_ORG_CLIENT_SECRET ||
+    !env.LINKEDIN_ORG_REDIRECT_URI
+  ) {
+    console.warn(
+      "[BOOT] LinkedIn (Organization Page) OAuth credentials missing — " +
+        "Organization Page connect flow will be unavailable until configured",
+    );
+  }
+  if (
+    !env.PINTEREST_CLIENT_ID ||
+    !env.PINTEREST_CLIENT_SECRET ||
+    !env.PINTEREST_REDIRECT_URI
+  ) {
+    console.warn(
+      "[BOOT] Pinterest OAuth credentials missing — Pinterest connect flow will be unavailable until configured",
     );
   }
   if (!env.X_CLIENT_ID || !env.X_CLIENT_SECRET || !env.X_REDIRECT_URI) {
     console.warn("[BOOT] X OAuth credentials missing");
   }
-  if (!env.YOUTUBE_CLIENT_ID || !env.YOUTUBE_CLIENT_SECRET || !env.YOUTUBE_REDIRECT_URI) {
+  if (
+    !env.YOUTUBE_CLIENT_ID ||
+    !env.YOUTUBE_CLIENT_SECRET ||
+    !env.YOUTUBE_REDIRECT_URI
+  ) {
     console.warn("[BOOT] YouTube OAuth credentials missing");
   }
-  if (env.THREADS_ENABLED && (!env.THREADS_APP_ID || !env.THREADS_APP_SECRET || !env.THREADS_REDIRECT_URI)) {
+  if (
+    env.THREADS_ENABLED &&
+    (!env.THREADS_APP_ID ||
+      !env.THREADS_APP_SECRET ||
+      !env.THREADS_REDIRECT_URI)
+  ) {
     console.warn(
-      "[BOOT] Threads OAuth credentials missing — Threads connect flow will fail until configured (THREADS_APP_ID / THREADS_APP_SECRET / THREADS_REDIRECT_URI)"
+      "[BOOT] Threads OAuth credentials missing — Threads connect flow will fail until configured (THREADS_APP_ID / THREADS_APP_SECRET / THREADS_REDIRECT_URI)",
     );
   }
-  if (env.THREADS_ENABLED && (!env.THREADS_UNINSTALL_CALLBACK_URL || !env.THREADS_DELETE_CALLBACK_URL)) {
+  if (
+    env.THREADS_ENABLED &&
+    (!env.THREADS_UNINSTALL_CALLBACK_URL || !env.THREADS_DELETE_CALLBACK_URL)
+  ) {
     console.warn(
-      "[BOOT] Threads webhook callback URLs missing (THREADS_UNINSTALL_CALLBACK_URL / THREADS_DELETE_CALLBACK_URL); Meta requires both"
+      "[BOOT] Threads webhook callback URLs missing (THREADS_UNINSTALL_CALLBACK_URL / THREADS_DELETE_CALLBACK_URL); Meta requires both",
     );
   }
   if (!env.STRIPE_SECRET_KEY) {
@@ -405,7 +513,9 @@ export function bootEnvWarnings() {
     assertStripeEnvConfigured(env);
   }
   if (!env.RENTCAST_API_KEY) {
-    console.warn("[BOOT] RENTCAST_API_KEY missing; property data lookups will fail");
+    console.warn(
+      "[BOOT] RENTCAST_API_KEY missing; property data lookups will fail",
+    );
   }
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
     console.warn("[BOOT] VAPID keys missing; web push notifications disabled");

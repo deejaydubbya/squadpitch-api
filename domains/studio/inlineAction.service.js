@@ -7,6 +7,7 @@ import { prisma } from "../../prisma.js";
 import { loadClientGenerationContext } from "./generation/clientOrchestrator.js";
 import { buildSystemPrompt, buildResponseFormat } from "./generation/promptBuilder.js";
 import { generateStructuredContent } from "./generation/openai.provider.js";
+import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import {
   getBestTimeForChannel,
   CHANNEL_BEST_DAYS,
@@ -107,11 +108,35 @@ export async function executeInlineAction({ draftId, actionType, params, userId 
   const userPrompt = guidanceFn(draft, params);
   const responseFormat = buildResponseFormat();
 
-  const { parsed, model } = await generateStructuredContent({
+  const startedAt = Date.now();
+  const { parsed, model, usage } = await generateStructuredContent({
     systemPrompt,
     userPrompt,
     responseFormat,
     taskType: "inline_action",
+  });
+
+  const inlineTaskName = {
+    rewrite_post: "inline_rewrite",
+    generate_variations: "inline_variations",
+    improve_caption: "inline_improve",
+    adjust_tone: "inline_tone",
+    expand_post: "inline_expand",
+  }[actionType] ?? "inline_action";
+
+  trackAiUsage({
+    userId,
+    clientId: draft.clientId,
+    actionType: "REGENERATE",
+    model,
+    promptTokens: usage?.prompt_tokens ?? 0,
+    completionTokens: usage?.completion_tokens ?? 0,
+    taskName: inlineTaskName,
+    schemaName: "CONTENT_OUTPUT_SCHEMA",
+    provider: "openai",
+    latencyMs: Date.now() - startedAt,
+    source: "inline_action",
+    artifactIds: { draftId, actionType },
   });
 
   // ── Generate Variations — create new draft rows ──

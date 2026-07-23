@@ -79,6 +79,7 @@ Respond with JSON matching the content_ideas schema.`);
 
   const responseFormat = { type: "json_schema", json_schema: IDEAS_OUTPUT_SCHEMA };
 
+  const startedAt = Date.now();
   const result = await generateStructuredContent({
     systemPrompt,
     userPrompt,
@@ -96,6 +97,11 @@ Respond with JSON matching the content_ideas schema.`);
       model: result.model,
       promptTokens: result.usage?.prompt_tokens ?? 0,
       completionTokens: result.usage?.completion_tokens ?? 0,
+      taskName: "content_ideas",
+      schemaName: "IDEAS_OUTPUT_SCHEMA",
+      provider: "openai",
+      latencyMs: Date.now() - startedAt,
+      source: "content_ideas",
     });
   }
 

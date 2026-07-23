@@ -463,6 +463,7 @@ export async function generateAiReply(
     channel,
   });
 
+  const startedAt = Date.now();
   const result = await generateStructuredContent({
     systemPrompt,
     userPrompt,
@@ -504,7 +505,12 @@ export async function generateAiReply(
     model: result.model,
     promptTokens: result.usage?.prompt_tokens ?? 0,
     completionTokens: result.usage?.completion_tokens ?? 0,
-    metadata: { source: "inbox_reply", conversationId, tone, channel },
+    taskName: "inbox_reply_suggestion",
+    schemaName: "AI_REPLY_SCHEMA",
+    provider: "openai",
+    latencyMs: Date.now() - startedAt,
+    source: "inbox_reply",
+    metadata: { conversationId, tone, channel, suggestionId: suggestion.id },
   });
 
   return suggestion;

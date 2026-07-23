@@ -3,6 +3,7 @@
 // getDashboardActions remains local — it's a different concern (queue-based).
 
 import { prisma } from "../../prisma.js";
+import { evaluateFlag } from "../internal/config.service.js";
 import { getRecommendations } from "./recommendationEngine.service.js";
 
 // ── Recommendations ─────────────────────────────────────────────────────
@@ -172,6 +173,23 @@ export async function getDashboardActions(clientId) {
 
   const enabledChannels = channelSettings.filter((c) => c.isEnabled);
   const actions = [];
+  const campaignOpsAgentEnabled = await evaluateFlag("ai_campaign_ops_agent_enabled", {
+    workspaceId: clientId,
+  });
+
+  if (campaignOpsAgentEnabled) {
+    actions.push({
+      id: "campaign_ops_agent_preview",
+      type: "ai_preview",
+      title: "Preview a campaign operations plan",
+      description: "Create a read-only seven-day proposal for review.",
+      actionLabel: "Preview plan",
+      actionRoute: "dashboard?preview=campaign_ops_agent",
+      priority: 75,
+      count: 0,
+      items: [],
+    });
+  }
 
   // Drafts needing approval
   if (pendingDrafts.length > 0) {

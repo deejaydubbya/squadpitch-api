@@ -63,7 +63,8 @@ export async function updateFlag(id, data, adminId) {
   if (data.scope !== undefined) update.scope = data.scope;
   if (data.targetType !== undefined) update.targetType = data.targetType;
   if (data.targetIds !== undefined) update.targetIds = data.targetIds;
-  if (data.rolloutPercentage !== undefined) update.rolloutPercentage = data.rolloutPercentage;
+  if (data.rolloutPercentage !== undefined)
+    update.rolloutPercentage = data.rolloutPercentage;
   if (data.notes !== undefined) update.notes = data.notes;
 
   return prisma.featureFlag.update({
@@ -99,10 +100,16 @@ export async function evaluateFlag(key, ctx = {}) {
   if (flag.scope === "global") return true;
 
   // Targeted scope
-  if (flag.scope === "targeted" && flag.targetType && flag.targetIds.length > 0) {
+  if (
+    flag.scope === "targeted" &&
+    flag.targetType &&
+    flag.targetIds.length > 0
+  ) {
     switch (flag.targetType) {
       case "workspace":
-        return ctx.workspaceId ? flag.targetIds.includes(ctx.workspaceId) : false;
+        return ctx.workspaceId
+          ? flag.targetIds.includes(ctx.workspaceId)
+          : false;
       case "user":
         return ctx.userId ? flag.targetIds.includes(ctx.userId) : false;
       case "cohort":
@@ -117,7 +124,7 @@ export async function evaluateFlag(key, ctx = {}) {
     // Deterministic hash based on flag key + user/workspace
     const seed = ctx.userId || ctx.workspaceId || "global";
     const hash = simpleHash(`${flag.key}:${seed}`);
-    return (hash % 100) < flag.rolloutPercentage;
+    return hash % 100 < flag.rolloutPercentage;
   }
 
   return true;
@@ -127,7 +134,7 @@ function simpleHash(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash |= 0;
   }
   return Math.abs(hash);
@@ -155,7 +162,8 @@ const SEED_FLAGS = [
   {
     key: "autopilot_v2",
     name: "Autopilot V2 Logic",
-    description: "New autopilot scheduling engine with smarter content selection",
+    description:
+      "New autopilot scheduling engine with smarter content selection",
     category: "feature",
     scope: "targeted",
     targetType: "workspace",
@@ -171,7 +179,8 @@ const SEED_FLAGS = [
   {
     key: "content_library_v2",
     name: "Content Library V2",
-    description: "New planner and content library UX with drag-and-drop calendar",
+    description:
+      "New planner and content library UX with drag-and-drop calendar",
     category: "feature",
     scope: "targeted",
     targetType: "cohort",
@@ -180,7 +189,8 @@ const SEED_FLAGS = [
   {
     key: "industry_experiments",
     name: "Industry-Specific Experiments",
-    description: "Enable experimental industry-specific features (automotive, hospitality)",
+    description:
+      "Enable experimental industry-specific features (automotive, hospitality)",
     category: "experiment",
     scope: "targeted",
     targetType: "workspace",
@@ -203,9 +213,74 @@ const SEED_FLAGS = [
     scope: "global",
   },
   {
+    key: "ai_platform_enabled",
+    name: "AI Platform Enabled",
+    description:
+      "Enable the internal Node-to-Python AI platform health probe in staging only. Does not route production AI generation.",
+    category: "ops",
+    scope: "global",
+  },
+  {
+    key: "ai_retrieval_enabled",
+    name: "AI Retrieval Enabled",
+    description:
+      "Enable tenant-safe Python retrieval for shadow or gated campaign context tests. clientOrchestrator.js remains the fallback until retrieval evals pass.",
+    category: "ops",
+    scope: "global",
+  },
+  {
+    key: "ai_campaign_ops_agent_enabled",
+    name: "AI Campaign Ops Agent Enabled",
+    description:
+      "Enable read-only campaign operations proposal previews. Does not create drafts, campaigns, schedules, publishes, messages, or external actions.",
+    category: "ops",
+    scope: "global",
+  },
+  {
+    key: "ai_action_proposals_enabled",
+    name: "AI Action Proposals Enabled",
+    description:
+      "Enable Node-owned validated draft proposal persistence and human approval. Default off until offline and shadow gates pass.",
+    category: "ops",
+    scope: "global",
+  },
+  {
+    key: "ai_operations_center_enabled",
+    name: "AI Operations Center Enabled",
+    description:
+      "Enable admin-only AI observability panels backed by redacted trace summaries and release-gate rollups.",
+    category: "ops",
+    scope: "global",
+  },
+  {
+    key: "ai_autopilot_ml_ranking_enabled",
+    name: "AI Autopilot ML Ranking Enabled",
+    description:
+      "Enable shadow/default-off ML scoring for Autopilot opportunity ranking. Node detectors, dedupe, proposals, and writes remain authoritative.",
+    category: "ops",
+    scope: "global",
+  },
+  {
+    key: "ai_brand_quality_model_enabled",
+    name: "AI Brand Quality Model Enabled",
+    description:
+      "Enable default-off shadow scoring for brand content quality. Deterministic validators and human approval remain authoritative.",
+    category: "ops",
+    scope: "global",
+  },
+  {
+    key: "ai_experimentation_enabled",
+    name: "AI Experimentation Enabled",
+    description:
+      "Enable admin-only experiment report analysis. Node owns exposure and outcome records; Python returns statistical reports only.",
+    category: "ops",
+    scope: "global",
+  },
+  {
     key: "disable_video_generation",
     name: "Disable Video Generation",
-    description: "Toggle to disable video generation (budget or provider issues)",
+    description:
+      "Toggle to disable video generation (budget or provider issues)",
     category: "ops",
     scope: "global",
   },
@@ -257,7 +332,9 @@ const SEED_FLAGS = [
 export async function seedFlags() {
   let created = 0;
   for (const flag of SEED_FLAGS) {
-    const exists = await prisma.featureFlag.findUnique({ where: { key: flag.key } });
+    const exists = await prisma.featureFlag.findUnique({
+      where: { key: flag.key },
+    });
     if (!exists) {
       await prisma.featureFlag.create({
         data: {

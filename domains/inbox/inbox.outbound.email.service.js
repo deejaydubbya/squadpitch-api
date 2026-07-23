@@ -118,6 +118,11 @@ export function buildMessageId(env_, conversationId, messageId) {
   return `<conv-${conversationId}-msg-${messageId}@${domain}>`;
 }
 
+function emailDomainForLog(value) {
+  const match = String(value ?? "").match(/@([^>\s]+)/);
+  return match ? match[1].toLowerCase() : null;
+}
+
 // References-header size cap. RFC 5322 has no hard maximum, but
 // most providers (Postmark included) reject headers >~8 KB total.
 // Each Message-ID we emit is around 60 bytes including the angle
@@ -658,14 +663,13 @@ export async function sendInboxEmail(
       messageId: messageRow.id,
       conversationId,
       clientId,
-      from: postmarkPayload.From,
-      to: postmarkPayload.To,
+      fromDomain: emailDomainForLog(postmarkPayload.From),
+      toDomain: emailDomainForLog(postmarkPayload.To),
       stream: postmarkPayload.MessageStream,
       errorName,
       errorMessage: rawMessage,
       errorCode: postmarkErrorCode,
       statusCode: httpStatus,
-      postmarkBody: rawErr?.body ?? rawErr?.response?.body ?? null,
       stack: rawErr?.stack?.split("\n").slice(0, 5).join("\n"),
     });
     await prisma.message.update({
@@ -714,8 +718,8 @@ export async function sendInboxEmail(
       messageId: messageRow.id,
       conversationId,
       clientId,
-      from: postmarkPayload.From,
-      to: postmarkPayload.To,
+      fromDomain: emailDomainForLog(postmarkPayload.From),
+      toDomain: emailDomainForLog(postmarkPayload.To),
       stream: postmarkPayload.MessageStream,
       errorCode: providerResponse.ErrorCode,
       message: providerResponse.Message,

@@ -4,6 +4,7 @@
 // guard in server.js covers /api/*, so this router doesn't add its own.
 
 import express from "express";
+import { z } from "zod";
 import { prisma } from "../../prisma.js";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
@@ -164,11 +165,17 @@ import { generateSampleListings, simulateListingEvent } from "./listingSimulator
 import * as propertyDataService from "../industry/propertyData.service.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
+import { generateCampaignOpsAgentPreview } from "../aiPlatform/campaignOpsAgent.service.js";
 
 export const studioRouter = express.Router();
 
 const BASE = "/api/v1";
 const DEDUP_TTL = 30; // seconds — prevents double-click duplicate AI calls (auto-expires as safety net)
+
+const CampaignOpsAgentPreviewSchema = z.object({
+  objective: z.string().min(1).max(1000),
+  sourceId: z.string().min(1).max(128).optional(),
+});
 
 /**
  * Acquire a short-lived Redis lock to prevent duplicate AI calls.
@@ -585,6 +592,10 @@ studioRouter.post(`${BASE}/persona/compose`, async (req, res, next) => {
       model: "fal-ai/flux-lora/image-to-image",
       promptTokens: 0,
       completionTokens: 0,
+      taskName: "image_generation",
+      provider: "fal",
+      source: "persona_image_compose",
+      artifactIds: { assetId: asset.id, draftId: draftId ?? null, sourceAssetId: sourceAssetId ?? null },
     });
 
     recordActivity({
@@ -643,6 +654,10 @@ studioRouter.post(`${BASE}/persona/cutout`, async (req, res, next) => {
     trackAiUsage({
       userId: req.user.id, clientId, actionType: "IMAGE",
       model: "fal-ai/flux-lora", promptTokens: 0, completionTokens: 0,
+      taskName: "image_generation",
+      provider: "fal",
+      source: "persona_cutout",
+      artifactIds: { assetId: asset.id },
     });
 
     res.status(201).json({ asset: service.formatAsset(asset), metadata: { pose, outfit, vibe, sceneType, lightingStyle, framingPreset } });
@@ -3137,8 +3152,23 @@ studioRouter.post(
       const { extractFromImage } = await import("./generation/openai.provider.js");
       const prompt = `Classify this image. Return a JSON object with "tags" (array of strings) from ONLY these options: [${tagList}]. Pick 1-3 tags that best describe what's shown. If unsure, use "other".`;
 
+      const startedAt = Date.now();
       const result = await extractFromImage({ base64: asset.url, prompt });
       const suggestedTags = Array.isArray(result?.parsed?.tags) ? result.parsed.tags : [];
+      trackAiUsage({
+        userId: req.user.id,
+        clientId: req.params.id,
+        actionType: "EXTRACT_IMAGE",
+        model: result.model,
+        promptTokens: result.usage?.prompt_tokens ?? 0,
+        completionTokens: result.usage?.completion_tokens ?? 0,
+        taskName: "vision_auto_tag",
+        schemaName: "asset_auto_tag",
+        provider: "openai",
+        latencyMs: Date.now() - startedAt,
+        source: "asset_auto_tag",
+        artifactIds: { assetId: req.params.assetId },
+      });
 
       // Merge with existing tags and save directly so callers don't need a
       // second round-trip.  This fixes the multi-upload race where only the
@@ -3191,8 +3221,23 @@ studioRouter.post(
               return { assetId, tags: [], error: "not_found" };
             }
             try {
+              const startedAt = Date.now();
               const result = await extractFromImage({ base64: asset.url, prompt });
               const suggestedTags = Array.isArray(result?.parsed?.tags) ? result.parsed.tags : [];
+              trackAiUsage({
+                userId: req.user.id,
+                clientId: req.params.id,
+                actionType: "EXTRACT_IMAGE",
+                model: result.model,
+                promptTokens: result.usage?.prompt_tokens ?? 0,
+                completionTokens: result.usage?.completion_tokens ?? 0,
+                taskName: "vision_auto_tag",
+                schemaName: "asset_auto_tag",
+                provider: "openai",
+                latencyMs: Date.now() - startedAt,
+                source: "asset_batch_auto_tag",
+                artifactIds: { assetId },
+              });
               const merged = Array.from(new Set([...(asset.tags ?? []), ...suggestedTags]));
               if (merged.length > 0) {
                 await service.updateAssetTags(assetId, merged);
@@ -3290,6 +3335,10 @@ studioRouter.post(
         model: parsed.data.model ?? "fal-ai/flux/dev",
         promptTokens: 0,
         completionTokens: 0,
+        taskName: "image_generation",
+        provider: "fal",
+        source: "image_generation",
+        artifactIds: { assetId: asset.id, draftId: parsed.data.draftId ?? null },
       });
 
       checkUsageNearing(req.user.id, "imageGenerations").then((info) => {
@@ -3412,6 +3461,10 @@ studioRouter.post(
         model: parsed.data.model ?? "fal-ai/minimax/video-01-live",
         promptTokens: 0,
         completionTokens: 0,
+        taskName: "video_generation",
+        provider: "fal",
+        source: "video_generation",
+        artifactIds: { assetId: asset.id, draftId: parsed.data.draftId ?? null },
       });
 
       checkUsageNearing(req.user.id, "videoGenerations").then((info) => {
@@ -5390,6 +5443,33 @@ studioRouter.post(
 );
 
 studioRouter.post(
+  `${BASE}/workspaces/:id/ai/campaign-ops-agent/preview`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = CampaignOpsAgentPreviewSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      const result = await generateCampaignOpsAgentPreview({
+        actor: req.user,
+        workspaceId: req.params.id,
+        objective: parsed.data.objective,
+        sourceId: parsed.data.sourceId,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err?.code && err?.status) {
+        return sendError(res, err.status, err.code, err.message, {
+          providerStatus: err.providerStatus,
+          tier: err.tier,
+        });
+      }
+      next(err);
+    }
+  }
+);
+
+studioRouter.post(
   `${BASE}/workspaces/:id/planner/plan-week`,
   requireClientOwner,
   async (req, res, next) => {
@@ -5816,6 +5896,7 @@ studioRouter.post(
         );
         const responseFormat = buildCampaignResponseFormat();
 
+        const startedAt = Date.now();
         const result = await generateStructuredContent({
           systemPrompt,
           userPrompt,
@@ -5833,6 +5914,12 @@ studioRouter.post(
             model: result.model,
             promptTokens: result.usage?.prompt_tokens ?? 0,
             completionTokens: result.usage?.completion_tokens ?? 0,
+            taskName: "campaign_generation",
+            schemaName: "CAMPAIGN_OUTPUT_SCHEMA",
+            provider: "openai",
+            latencyMs: Date.now() - startedAt,
+            source: "listing_campaign",
+            metadata: { sourceType, campaignType: campaignType ?? null },
           });
         }
         await incrementUsage(req.user.id, "posts");
@@ -6002,6 +6089,7 @@ studioRouter.post(
         );
         const responseFormat = buildRegeneratePostResponseFormat();
 
+        const startedAt = Date.now();
         const result = await generateStructuredContent({
           systemPrompt,
           userPrompt,
@@ -6019,6 +6107,12 @@ studioRouter.post(
             model: result.model,
             promptTokens: result.usage?.prompt_tokens ?? 0,
             completionTokens: result.usage?.completion_tokens ?? 0,
+            taskName: "campaign_post_regeneration",
+            schemaName: "SINGLE_POST_SCHEMA",
+            provider: "openai",
+            latencyMs: Date.now() - startedAt,
+            source: "listing_campaign_regenerate_post",
+            metadata: { sourceType, campaignType: campaignType ?? null },
           });
         }
         await incrementUsage(req.user.id, "posts");
@@ -6108,9 +6202,13 @@ Return this JSON exactly:
 
 If a field is not clearly visible on the page, return null for that field. Never fabricate.`;
 
+      const textStartedAt = Date.now();
       const runTextExtract = openaiDown
         ? Promise.resolve({ parsed: {}, model: null, usage: null, skipped: true })
-        : extractFromImage({ base64: image, prompt: textPrompt }).catch((err) => {
+        : extractFromImage({ base64: image, prompt: textPrompt }).then((result) => ({
+            ...result,
+            latencyMs: Date.now() - textStartedAt,
+          })).catch((err) => {
             req.log?.warn?.({ err }, "openai text extraction failed");
             return { parsed: {}, model: null, usage: null, error: err?.message ?? String(err) };
           });
@@ -6154,6 +6252,11 @@ If a field is not clearly visible on the page, return null for that field. Never
           model: textResult.model,
           promptTokens: textResult.usage?.prompt_tokens ?? 0,
           completionTokens: textResult.usage?.completion_tokens ?? 0,
+          taskName: "image_extraction",
+          schemaName: "listing_screenshot_text_fields",
+          provider: "openai",
+          latencyMs: textResult.latencyMs,
+          source: "listing_campaign_extract_image",
         });
       }
 

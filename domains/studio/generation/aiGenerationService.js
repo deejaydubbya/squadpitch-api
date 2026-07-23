@@ -261,6 +261,9 @@ export async function generateDraft({
   const responseFormat = buildResponseFormat();
 
   let result;
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  const startedAt = Date.now();
   try {
     result = await generateStructuredContent({
       systemPrompt,
@@ -269,6 +272,8 @@ export async function generateDraft({
       taskType: "generation",
       temperature: 0.7,
     });
+    totalPromptTokens += result.usage?.prompt_tokens ?? 0;
+    totalCompletionTokens += result.usage?.completion_tokens ?? 0;
   } catch (err) {
     const failed = await persistFailedDraft({
       clientId,
@@ -280,18 +285,6 @@ export async function generateDraft({
       error: err,
     });
     return formatDraft(failed);
-  }
-
-  // Fire-and-forget: track AI usage
-  if (userId) {
-    trackAiUsage({
-      userId,
-      clientId,
-      actionType: "GENERATE_POST",
-      model: result.model,
-      promptTokens: result.usage?.prompt_tokens ?? 0,
-      completionTokens: result.usage?.completion_tokens ?? 0,
-    });
   }
 
   let content = normalizeGeneratedContent(result.parsed);
@@ -317,6 +310,8 @@ export async function generateDraft({
           systemPrompt, userPrompt: retryPrompt,
           responseFormat, taskType: "generation", temperature: 0.5,
         });
+        totalPromptTokens += retry.usage?.prompt_tokens ?? 0;
+        totalCompletionTokens += retry.usage?.completion_tokens ?? 0;
         const retryContent = normalizeGeneratedContent(retry.parsed);
         if (!listingTerms.test(retryContent.body)) {
           content = retryContent;
@@ -390,6 +385,30 @@ export async function generateDraft({
   }
 
   const formatted = formatDraft(draft);
+  const usageUserId =
+    userId ?? (typeof createdBy === "string" && createdBy.startsWith("system:") ? createdBy : null);
+  if (usageUserId) {
+    trackAiUsage({
+      userId: usageUserId,
+      clientId,
+      actionType: "GENERATE_POST",
+      model: result.model,
+      promptTokens: totalPromptTokens,
+      completionTokens: totalCompletionTokens,
+      taskName: createdBy === "system:autopilot" || createdBy === "system:auto_generate"
+        ? "autopilot_draft_generation"
+        : "content_draft_generation",
+      schemaName: "CONTENT_OUTPUT_SCHEMA",
+      promptVersion,
+      provider: "openai",
+      latencyMs: Date.now() - startedAt,
+      systemInitiated: typeof createdBy === "string" && createdBy.startsWith("system:"),
+      source: createdBy === "system:autopilot" || createdBy === "system:auto_generate"
+        ? "autopilot_draft"
+        : "content_draft",
+      artifactIds: { draftId: draft.id, dataItemId: dataItem?.id ?? null, blueprintId: blueprint?.id ?? null },
+    });
+  }
   const personaRecommendation = evaluatePersonaRecommendation({
     brandPersona: ctx.brandPersona,
     templateType,
@@ -447,6 +466,7 @@ export async function remixDraft({ clientId, draftId, createdBy, userId, languag
   const userPrompt = buildRemixUserPrompt(sourceDraft.body, sourceDraft.channel, ctx.language);
   const responseFormat = buildRemixResponseFormat();
 
+  const startedAt = Date.now();
   const result = await generateStructuredContent({
     systemPrompt,
     userPrompt,
@@ -464,6 +484,12 @@ export async function remixDraft({ clientId, draftId, createdBy, userId, languag
       model: result.model,
       promptTokens: result.usage?.prompt_tokens ?? 0,
       completionTokens: result.usage?.completion_tokens ?? 0,
+      taskName: "content_remix",
+      schemaName: "REMIX_OUTPUT_SCHEMA",
+      provider: "openai",
+      latencyMs: Date.now() - startedAt,
+      source: "content_remix",
+      artifactIds: { sourceDraftId: draftId },
     });
   }
 
