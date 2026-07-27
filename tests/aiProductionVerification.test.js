@@ -281,4 +281,30 @@ describe("AI production verification orchestration", () => {
     expect(JSON.stringify(report)).not.toContain("private-token");
     expect(report.exitCode).toBe(0);
   });
+
+  it("can authenticate through the production web proxy with a session cookie", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        environment: "production",
+        results: [result()],
+        skipped: [],
+      }),
+    }));
+    const report = await verifyAiProduction({
+      baseUrl: "https://app.example.test",
+      cookie: "appSession=private-cookie",
+      workspaceId: "workspace-a",
+      fetchImpl,
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://app.example.test/api/proxy/internal/ai/production-verification",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          cookie: "appSession=private-cookie",
+        }),
+      }),
+    );
+    expect(JSON.stringify(report)).not.toContain("private-cookie");
+  });
 });

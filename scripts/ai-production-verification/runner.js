@@ -3,25 +3,32 @@ import { classifyAiVerification, summarizeVerification } from "./classifier.js";
 export async function verifyAiProduction({
   baseUrl,
   token,
+  cookie,
   workspaceId,
   strict = false,
   fetchImpl = globalThis.fetch,
 }) {
   requireConfig("SQUADPITCH_VERIFY_BASE_URL", baseUrl);
-  requireConfig("SQUADPITCH_VERIFY_TOKEN", token);
+  if (!token && !cookie) {
+    throw new Error(
+      "Missing authentication: set SQUADPITCH_VERIFY_TOKEN or SQUADPITCH_VERIFY_COOKIE",
+    );
+  }
   requireConfig("SQUADPITCH_VERIFY_WORKSPACE_ID", workspaceId);
 
-  const response = await fetchImpl(
-    `${baseUrl.replace(/\/$/, "")}/api/v1/internal/ai/production-verification`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ workspaceId }),
-    },
-  );
+  const usingCookie = typeof cookie === "string" && cookie.trim() !== "";
+  const endpoint = usingCookie
+    ? `${baseUrl.replace(/\/$/, "")}/api/proxy/internal/ai/production-verification`
+    : `${baseUrl.replace(/\/$/, "")}/api/v1/internal/ai/production-verification`;
+  const headers = { "content-type": "application/json" };
+  if (usingCookie) headers.cookie = cookie;
+  else headers.authorization = `Bearer ${token}`;
+
+  const response = await fetchImpl(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ workspaceId }),
+  });
   if (!response.ok) {
     throw new Error(
       `Production verification endpoint returned HTTP ${response.status}`,

@@ -36,8 +36,16 @@ SQUADPITCH_VERIFY_TOKEN=<Auth0 access token with admin or developer role>
 SQUADPITCH_VERIFY_WORKSPACE_ID=<dedicated verification workspace id>
 ```
 
-The token is sent only as the API Authorization header and is never included in
-results or reports.
+Alternatively, use the complete `app.squadpitch.com` Cookie request header:
+
+```bash
+SQUADPITCH_VERIFY_BASE_URL=https://app.squadpitch.com
+SQUADPITCH_VERIFY_COOKIE=<local session Cookie header>
+SQUADPITCH_VERIFY_WORKSPACE_ID=<dedicated verification workspace id>
+```
+
+The token or cookie is sent only as authentication metadata and is never
+included in results or reports.
 
 Human-readable output:
 

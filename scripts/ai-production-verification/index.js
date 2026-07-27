@@ -7,12 +7,16 @@ const json = args.has("--json");
 const strict = args.has("--strict");
 const startedAt = new Date().toISOString();
 const baseUrl =
-  process.env.SQUADPITCH_VERIFY_BASE_URL ?? "https://squadpitch-api.fly.dev";
+  process.env.SQUADPITCH_VERIFY_BASE_URL ??
+  (process.env.SQUADPITCH_VERIFY_COOKIE
+    ? "https://app.squadpitch.com"
+    : "https://squadpitch-api.fly.dev");
 
 try {
   const report = await verifyAiProduction({
     baseUrl,
     token: process.env.SQUADPITCH_VERIFY_TOKEN,
+    cookie: process.env.SQUADPITCH_VERIFY_COOKIE,
     workspaceId: process.env.SQUADPITCH_VERIFY_WORKSPACE_ID,
     strict,
   });
