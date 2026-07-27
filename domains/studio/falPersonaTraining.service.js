@@ -5,7 +5,7 @@
 // is the only place that knows about LoRA internals.
 
 import { fal } from "@fal-ai/client";
-import archiver from "archiver";
+import { ZipArchive } from "archiver";
 import { PassThrough } from "stream";
 import { env } from "../../config/env.js";
 
@@ -43,7 +43,7 @@ async function createTrainingZip(imageUrls) {
     passthrough.on("end", () => resolve(Buffer.concat(chunks)));
     passthrough.on("error", reject);
 
-    const archive = archiver("zip", { zlib: { level: 1 } }); // fast compression
+    const archive = new ZipArchive({ zlib: { level: 1 } }); // fast compression
     archive.on("error", reject);
     archive.pipe(passthrough);
 
