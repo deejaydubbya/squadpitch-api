@@ -381,8 +381,6 @@ export async function generateCampaignOpsAgentPreview({
           contentHash: item.citation.contentHash,
           trust: item.citation.trustClassification,
           language: item.citation.language,
-          citationId: item.citation.chunkId,
-          retrieved: true,
         })),
       ],
     };

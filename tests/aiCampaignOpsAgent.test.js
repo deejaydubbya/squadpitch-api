@@ -289,8 +289,8 @@ describe("read-only campaign ops agent", () => {
     expect(plannerSnapshot.items).toContainEqual(
       expect.objectContaining({
         sourceId: "brand-1",
-        citationId: "brand-1:0",
-        retrieved: true,
+        text: "Use the approved professional local-market voice.",
+        contentHash: `sha256:${"a".repeat(64)}`,
       }),
     );
     expect(result.retrievalProvenance).toMatchObject({
