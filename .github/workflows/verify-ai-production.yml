@@ -31,9 +31,11 @@ jobs:
         shell: bash
         run: |
           set +e
-          STRICT_ARG=""
-          if [ "${{ inputs.strict }}" = "true" ]; then STRICT_ARG="--strict"; fi
-          npm run --silent verify:ai-production -- --json $STRICT_ARG | tee ai-production-verification.json
+          if [ "${{ inputs.strict }}" = "true" ]; then
+            node scripts/ai-production-verification/index.js --json --strict | tee ai-production-verification.json
+          else
+            npm run --silent verify:ai-production:json | tee ai-production-verification.json
+          fi
           VERIFY_EXIT=${PIPESTATUS[0]}
           echo "VERIFY_EXIT=$VERIFY_EXIT" >> "$GITHUB_ENV"
           exit 0

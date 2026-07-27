@@ -9,6 +9,8 @@
     "test:watch": "vitest",
     "test:ai-provenance": "vitest run tests/aiExecutionProvenance.test.js tests/aiProductionVerification.test.js",
     "verify:ai-production": "node scripts/ai-production-verification/index.js",
+    "verify:ai-production:json": "node scripts/ai-production-verification/index.js --json",
+    "verify:ai-production:strict": "node scripts/ai-production-verification/index.js --strict",
     "db:push": "npx prisma db push",
     "db:generate": "npx prisma generate",
     "db:migrate": "npx prisma migrate deploy",

@@ -48,13 +48,13 @@ npm run verify:ai-production
 Machine-readable output:
 
 ```bash
-npm run --silent verify:ai-production -- --json
+npm run --silent verify:ai-production:json
 ```
 
 Strict mode:
 
 ```bash
-npm run verify:ai-production -- --strict
+npm run verify:ai-production:strict
 ```
 
 Run the deterministic provenance suite:
