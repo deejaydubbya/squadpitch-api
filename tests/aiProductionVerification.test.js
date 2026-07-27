@@ -6,7 +6,10 @@ import {
 } from "../scripts/ai-production-verification/classifier.js";
 import { parseAiProvenanceHeaders } from "../scripts/ai-production-verification/provenance.js";
 import { verifyAiProduction } from "../scripts/ai-production-verification/runner.js";
-import { runProductionAiVerification } from "../domains/aiPlatform/productionVerification.service.js";
+import {
+  productionVerificationOperations,
+  runProductionAiVerification,
+} from "../domains/aiPlatform/productionVerification.service.js";
 
 function result(overrides = {}) {
   return {
@@ -200,6 +203,40 @@ describe("AI production verification classification", () => {
 });
 
 describe("AI production verification orchestration", () => {
+  it("classifies the real retrieval verification operation as hosted even when empty", async () => {
+    const retrieval = vi.fn(async ({ workspaceId }) => ({
+      workspaceId,
+      results: [],
+      provenance: {
+        source: "squadpitch-ai",
+        fallbackUsed: false,
+        implementation: "hybrid_retrieval_v1",
+      },
+    }));
+    const operation = productionVerificationOperations({
+      retrieval,
+    }).find((item) => item.key === "retrieval");
+    const raw = await operation.execute("workspace-a", "trace-retrieval");
+    const classified = classifyAiVerification({
+      operation: operation.key,
+      name: operation.name,
+      ...raw,
+    });
+
+    expect(retrieval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-a",
+        platformEnabled: true,
+        retrievalEnabled: true,
+      }),
+    );
+    expect(classified).toMatchObject({
+      status: "PASS",
+      source: "squadpitch-ai",
+      implementation: "hybrid_retrieval_v1",
+    });
+  });
+
   it("isolates operation failures and preserves successful provenance", async () => {
     const output = await runProductionAiVerification({
       workspaceId: "workspace-a",

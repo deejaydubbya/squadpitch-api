@@ -245,4 +245,58 @@ describe("read-only campaign ops agent", () => {
     expect(envelope.payload.proposalOnly).toBe(true);
     expect(envelope.payload.snapshot.workspaceId).toBe("workspace-a");
   });
+
+  it("feeds retrieved context into the real campaign planner consumer", async () => {
+    const pythonClient = vi.fn(async () => ({
+      ok: true,
+      body: validPythonPlan(),
+    }));
+    const retrievalService = vi.fn(async () => ({
+      results: [
+        {
+          text: "Use the approved professional local-market voice.",
+          citation: {
+            workspaceId: "workspace-a",
+            sourceType: "brand_profile",
+            sourceId: "brand-1",
+            contentHash: `sha256:${"a".repeat(64)}`,
+            chunkId: "brand-1:0",
+            trustClassification: "approved",
+            language: "en",
+          },
+          metadata: { sourceTitle: "Brand voice" },
+        },
+      ],
+      provenance: {
+        source: "squadpitch-ai",
+        operation: "retrieval_query",
+        fallbackUsed: false,
+      },
+    }));
+
+    const result = await generateCampaignOpsAgentPreview(
+      baseDeps({ pythonClient, retrievalService }),
+    );
+    const plannerSnapshot =
+      pythonClient.mock.calls[0][0].envelope.payload.snapshot;
+
+    expect(retrievalService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-a",
+        purpose: "campaign_context",
+      }),
+    );
+    expect(plannerSnapshot.items).toContainEqual(
+      expect.objectContaining({
+        sourceId: "brand-1",
+        citationId: "brand-1:0",
+        retrieved: true,
+      }),
+    );
+    expect(result.retrievalProvenance).toMatchObject({
+      source: "squadpitch-ai",
+      fallbackUsed: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("retrievalProvenance");
+  });
 });

@@ -233,6 +233,87 @@ export async function callPythonCampaignOpsPlan({
   }
 }
 
+export async function callPythonRetrievalQuery({
+  enabled = false,
+  baseUrl = env.AI_PLATFORM_INTERNAL_BASE_URL,
+  timeoutMs = env.AI_PLATFORM_HEALTH_TIMEOUT_MS,
+  envelope,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  if (!enabled) {
+    return {
+      ok: false,
+      status: "disabled",
+      errorCode: AI_PLATFORM_ERROR_CODES.DISABLED,
+    };
+  }
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  if (!normalizedBaseUrl) {
+    return {
+      ok: false,
+      status: "not_configured",
+      errorCode: AI_PLATFORM_ERROR_CODES.NOT_CONFIGURED,
+    };
+  }
+  if (!envelope) {
+    return {
+      ok: false,
+      status: "invalid_request",
+      errorCode: AI_PLATFORM_ERROR_CODES.SCHEMA_INVALID,
+    };
+  }
+  try {
+    const res = await fetchImpl(`${normalizedBaseUrl}/v1/retrieval/query`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "x-request-id": envelope.requestId,
+        "x-trace-id": envelope.traceId,
+      },
+      body: JSON.stringify(envelope),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    let body;
+    try {
+      body = await res.json();
+    } catch {
+      return {
+        ok: false,
+        status: "invalid_response",
+        statusCode: res.status,
+        errorCode: AI_PLATFORM_ERROR_CODES.INVALID_JSON,
+      };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: "unavailable",
+        statusCode: res.status,
+        errorCode: body?.code ?? AI_PLATFORM_ERROR_CODES.UNAVAILABLE,
+        requestId: body?.requestId ?? envelope.requestId,
+        traceId: body?.traceId ?? envelope.traceId,
+      };
+    }
+    return {
+      ok: true,
+      status: "ok",
+      statusCode: res.status,
+      body,
+      requestId: envelope.requestId,
+      traceId: envelope.traceId,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: isTimeoutError(err) ? "timeout" : "unavailable",
+      errorCode: isTimeoutError(err)
+        ? AI_PLATFORM_ERROR_CODES.TIMEOUT
+        : AI_PLATFORM_ERROR_CODES.UNAVAILABLE,
+    };
+  }
+}
+
 export async function callPythonDraftContentProposal({
   enabled = false,
   baseUrl = env.AI_PLATFORM_INTERNAL_BASE_URL,

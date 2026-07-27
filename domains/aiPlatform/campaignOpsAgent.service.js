@@ -19,6 +19,7 @@ import {
   pythonDomainPayload,
 } from "./executionProvenance.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
+import { queryWorkspaceRetrieval } from "./retrievalQuery.service.js";
 
 export const CAMPAIGN_OPS_AGENT_ALLOWED_SCOPES = Object.freeze([
   "campaign-plan:read",
@@ -295,6 +296,9 @@ export async function generateCampaignOpsAgentPreview({
   effectiveTierResolver = getEffectiveTier,
   snapshotBuilder = buildCampaignOpsSnapshot,
   pythonClient = callPythonCampaignOpsPlan,
+  retrievalService = queryWorkspaceRetrieval,
+  retrievalPlatformEnabled,
+  retrievalFeatureEnabled,
 } = {}) {
   const startedAt = Date.now();
   const actorUserId = actorId(actor);
@@ -339,12 +343,53 @@ export async function generateCampaignOpsAgentPreview({
     );
   }
 
-  const snapshot = await snapshotBuilder({
+  let snapshot = await snapshotBuilder({
     workspaceId,
     objective,
     sourceId,
     prismaClient,
   });
+  let retrievalProvenance = null;
+  try {
+    const retrieval = await retrievalService({
+      actor,
+      workspaceId,
+      query: objective,
+      purpose: "campaign_context",
+      topK: 5,
+      snapshotItems: snapshot.items,
+      traceId: traceId ? `${traceId}:retrieval` : undefined,
+      platformEnabled: retrievalPlatformEnabled,
+      retrievalEnabled: retrievalFeatureEnabled,
+      pythonBaseUrl,
+      timeoutMs,
+      serviceAuthKeyId,
+      serviceAuthSecret,
+      authorizationService,
+      featureFlagEvaluator,
+    });
+    retrievalProvenance = retrieval.provenance;
+    snapshot = {
+      ...snapshot,
+      items: [
+        ...snapshot.items,
+        ...retrieval.results.map((item) => ({
+          sourceType: item.citation.sourceType,
+          sourceId: item.citation.sourceId,
+          title: item.metadata?.sourceTitle ?? item.citation.sourceId,
+          text: item.text,
+          contentHash: item.citation.contentHash,
+          trust: item.citation.trustClassification,
+          language: item.citation.language,
+          citationId: item.citation.chunkId,
+          retrieved: true,
+        })),
+      ],
+    };
+  } catch {
+    // Retrieval is optional context augmentation. Existing campaign planning
+    // remains usable when disabled, empty, or unavailable.
+  }
   const envelope = await createAuthorizedAiServiceEnvelope({
     actor,
     workspaceId,
@@ -401,11 +446,16 @@ export async function generateCampaignOpsAgentPreview({
     featureFlag: true,
   });
   emitAiExecution(provenance, { workspaceId, actorUserId });
-  return {
+  const response = {
     status: "proposal_only",
     benchmarkAgainst: "node_campaign_generation",
     oldNodePathUnaffected: true,
     proposal: parsed,
     provenance,
   };
+  Object.defineProperty(response, "retrievalProvenance", {
+    value: retrievalProvenance,
+    enumerable: false,
+  });
+  return response;
 }

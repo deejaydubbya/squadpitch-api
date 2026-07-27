@@ -1,6 +1,7 @@
 import { generateCampaignOpsAgentPreview } from "./campaignOpsAgent.service.js";
 import { rankAutopilotOpportunities } from "./autopilotMlRanking.service.js";
 import { scoreBrandContentQuality } from "./brandQualityModel.service.js";
+import { queryWorkspaceRetrieval } from "./retrievalQuery.service.js";
 
 const VERIFY_ACTOR = Object.freeze({
   auth0Sub: "system:ai-production-verification",
@@ -35,6 +36,7 @@ export function productionVerificationOperations({
   campaignOps = generateCampaignOpsAgentPreview,
   autopilot = rankAutopilotOpportunities,
   brandQuality = scoreBrandContentQuality,
+  retrieval = queryWorkspaceRetrieval,
 } = {}) {
   return [
     {
@@ -52,10 +54,23 @@ export function productionVerificationOperations({
           featureFlagEvaluator: async () => true,
           subscriptionFetcher: async () => ({ status: "ACTIVE", tier: "PRO" }),
           effectiveTierResolver: () => "PRO",
+          retrievalPlatformEnabled: true,
+          retrievalFeatureEnabled: true,
           snapshotBuilder: async () => ({
             workspaceId,
             objective,
-            items: [],
+            items: [
+              {
+                sourceType: "brand_profile",
+                sourceId: "production-verification-brand",
+                title: "Verification brand context",
+                text: "Professional, accurate, locally informed market guidance.",
+                contentHash:
+                  "sha256:912a117e4b58614b578a1f83b5e119ac80fe16a8402e3897af17223e346e32a1",
+                trust: "approved",
+                language: "en",
+              },
+            ],
             media: [],
             calendar: [],
             approvalPolicy: { requiresHumanApproval: true },
@@ -67,6 +82,45 @@ export function productionVerificationOperations({
             result?.status === "proposal_only" &&
             result?.proposal?.proposalOnly === true &&
             Array.isArray(result?.proposal?.proposedPosts),
+          provenance: result?.provenance,
+        };
+      },
+    },
+    {
+      key: "retrieval",
+      name: "Retrieval",
+      execute: async (workspaceId, traceId) => {
+        const result = await retrieval({
+          actor: VERIFY_ACTOR,
+          workspaceId,
+          query: "professional local market guidance",
+          purpose: "verification",
+          topK: 3,
+          traceId,
+          platformEnabled: true,
+          retrievalEnabled: true,
+          authorizationService: allowReadOnlyVerification,
+          featureFlagEvaluator: async () => true,
+          snapshotItems: [
+            {
+              sourceType: "brand_profile",
+              sourceId: "production-verification-brand",
+              title: "Verification brand context",
+              text: "Professional, accurate, locally informed market guidance.",
+              contentHash:
+                "sha256:912a117e4b58614b578a1f83b5e119ac80fe16a8402e3897af17223e346e32a1",
+              trust: "approved",
+              language: "en",
+            },
+          ],
+        });
+        return {
+          usableResult:
+            result?.workspaceId === workspaceId &&
+            Array.isArray(result?.results) &&
+            result.results.every(
+              (item) => item?.citation?.workspaceId === workspaceId,
+            ),
           provenance: result?.provenance,
         };
       },
@@ -165,11 +219,6 @@ export async function runProductionAiVerification({
     generatedAt: new Date().toISOString(),
     results,
     skipped: [
-      {
-        operation: "retrieval",
-        name: "Retrieval",
-        reason: "No deployed Node-to-Python retrieval query path exists",
-      },
       {
         operation: "action_proposal",
         name: "Action Proposal",
