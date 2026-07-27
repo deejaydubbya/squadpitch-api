@@ -3,12 +3,22 @@ import { z } from "zod";
 
 import { env } from "../../config/env.js";
 import { prisma } from "../../prisma.js";
-import { getEffectiveTier, getSubscription } from "../billing/billing.service.js";
+import {
+  getEffectiveTier,
+  getSubscription,
+} from "../billing/billing.service.js";
 import { evaluateFlag } from "../internal/config.service.js";
 import { assertCanActorPerformWorkspaceScope } from "../authorization/workspaceAuthorization.service.js";
 import { buildCampaignOpsSnapshot } from "./campaignOpsAgent.service.js";
-import { callPythonDraftContentProposal, AI_PLATFORM_ERROR_CODES } from "./pythonAiPlatform.client.js";
-import { emitAiExecution, hostedProvenance } from "./executionProvenance.js";
+import {
+  callPythonDraftContentProposal,
+  AI_PLATFORM_ERROR_CODES,
+} from "./pythonAiPlatform.client.js";
+import {
+  emitAiExecution,
+  hostedProvenance,
+  pythonDomainPayload,
+} from "./executionProvenance.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
 
 export const AI_ACTION_PROPOSAL_ERROR_CODES = Object.freeze({
@@ -172,7 +182,10 @@ async function assertFeatureAndTier({
 }) {
   const flagEnabled =
     featureEnabled === true ||
-    (await featureFlagEvaluator("ai_action_proposals_enabled", { workspaceId, userId: actorUserId }));
+    (await featureFlagEvaluator("ai_action_proposals_enabled", {
+      workspaceId,
+      userId: actorUserId,
+    }));
   if (!flagEnabled) {
     throw typedError(
       AI_ACTION_PROPOSAL_ERROR_CODES.FEATURE_DISABLED,
@@ -184,7 +197,12 @@ async function assertFeatureAndTier({
   const subscription = await subscriptionFetcher(actorUserId);
   const tier = effectiveTierResolver(subscription);
   if (!MIN_TIERS.has(tier)) {
-    throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.TIER_LIMIT, "AI action proposals require a paid plan", 402, { tier });
+    throw typedError(
+      AI_ACTION_PROPOSAL_ERROR_CODES.TIER_LIMIT,
+      "AI action proposals require a paid plan",
+      402,
+      { tier },
+    );
   }
 }
 
@@ -197,10 +215,18 @@ export async function validateDraftContentProposal({
 }) {
   const parsed = draftContentProposalResponseSchema.parse(proposal);
   if (parsed.workspaceId !== workspaceId) {
-    throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE, "Proposal workspace mismatch", 422);
+    throw typedError(
+      AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+      "Proposal workspace mismatch",
+      422,
+    );
   }
   if (new Date(parsed.expiresAt).getTime() <= now.getTime()) {
-    throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.EXPIRED_PROPOSAL, "Proposal is expired", 410);
+    throw typedError(
+      AI_ACTION_PROPOSAL_ERROR_CODES.EXPIRED_PROPOSAL,
+      "Proposal is expired",
+      410,
+    );
   }
 
   const validationErrors = [];
@@ -208,19 +234,36 @@ export async function validateDraftContentProposal({
   const dataItemIds = new Set();
   for (const draft of parsed.proposedDrafts) {
     if (!ALLOWED_CHANNELS.has(draft.channel)) {
-      throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.UNSUPPORTED_CHANNEL, "Unsupported proposal channel", 422, {
-        channel: draft.channel,
-      });
+      throw typedError(
+        AI_ACTION_PROPOSAL_ERROR_CODES.UNSUPPORTED_CHANNEL,
+        "Unsupported proposal channel",
+        422,
+        {
+          channel: draft.channel,
+        },
+      );
     }
     if (draft.requiredFacts.some((fact) => fact.status !== "available")) {
-      throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.INVALID_FACT, "Proposal includes unavailable or missing facts", 422);
+      throw typedError(
+        AI_ACTION_PROPOSAL_ERROR_CODES.INVALID_FACT,
+        "Proposal includes unavailable or missing facts",
+        422,
+      );
     }
     if (FAIR_HOUSING_PATTERNS.some((pattern) => pattern.test(draft.body))) {
-      throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.FAIR_HOUSING_POLICY, "Proposal violates advertising policy", 422);
+      throw typedError(
+        AI_ACTION_PROPOSAL_ERROR_CODES.FAIR_HOUSING_POLICY,
+        "Proposal violates advertising policy",
+        422,
+      );
     }
     for (const citation of draft.citations) {
       if (citation.workspaceId !== workspaceId) {
-        throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE, "Citation workspace mismatch", 422);
+        throw typedError(
+          AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+          "Citation workspace mismatch",
+          422,
+        );
       }
     }
     draft.mediaAssetIds.forEach((id) => mediaIds.add(id));
@@ -228,7 +271,11 @@ export async function validateDraftContentProposal({
   }
   for (const citation of parsed.citations) {
     if (citation.workspaceId !== workspaceId) {
-      throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE, "Citation workspace mismatch", 422);
+      throw typedError(
+        AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+        "Citation workspace mismatch",
+        422,
+      );
     }
   }
 
@@ -238,15 +285,27 @@ export async function validateDraftContentProposal({
         where: { id: { in: [...mediaIds] }, clientId: workspaceId },
       });
       if (mediaCount !== mediaIds.size) {
-        throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE, "Media reference workspace mismatch", 422);
+        throw typedError(
+          AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+          "Media reference workspace mismatch",
+          422,
+        );
       }
     }
     if (dataItemIds.size > 0) {
       const itemCount = await prismaClient.workspaceDataItem.count({
-        where: { id: { in: [...dataItemIds] }, clientId: workspaceId, status: "ACTIVE" },
+        where: {
+          id: { in: [...dataItemIds] },
+          clientId: workspaceId,
+          status: "ACTIVE",
+        },
       });
       if (itemCount !== dataItemIds.size) {
-        throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE, "Property/data reference workspace mismatch", 422);
+        throw typedError(
+          AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+          "Property/data reference workspace mismatch",
+          422,
+        );
       }
     }
     for (const draft of parsed.proposedDrafts) {
@@ -260,7 +319,11 @@ export async function validateDraftContentProposal({
         },
       });
       if (conflict) {
-        throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.SCHEDULE_CONFLICT, "Proposal conflicts with an existing draft", 409);
+        throw typedError(
+          AI_ACTION_PROPOSAL_ERROR_CODES.SCHEDULE_CONFLICT,
+          "Proposal conflicts with an existing draft",
+          409,
+        );
       }
     }
   }
@@ -296,9 +359,18 @@ export async function createDraftContentProposal({
   const startedAt = Date.now();
   const actorUserId = actorId(actor);
   if (!actorUserId) {
-    throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.AUTH_REQUIRED, "Authentication required", 401);
+    throw typedError(
+      AI_ACTION_PROPOSAL_ERROR_CODES.AUTH_REQUIRED,
+      "Authentication required",
+      401,
+    );
   }
-  await authorizationService({ actor, workspaceId, scope: "campaign-plan:read", allowAdmin: false });
+  await authorizationService({
+    actor,
+    workspaceId,
+    scope: "campaign-plan:read",
+    allowAdmin: false,
+  });
   await assertFeatureAndTier({
     actorUserId,
     workspaceId,
@@ -309,33 +381,67 @@ export async function createDraftContentProposal({
   });
 
   const existing = await prismaClient.aiActionProposal.findUnique({
-    where: { clientId_idempotencyKey: { clientId: workspaceId, idempotencyKey } },
+    where: {
+      clientId_idempotencyKey: { clientId: workspaceId, idempotencyKey },
+    },
   });
   if (existing) {
-    throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.DUPLICATE_IDEMPOTENCY_KEY, "Duplicate proposal idempotency key", 409, {
-      proposalId: existing.id,
-    });
+    throw typedError(
+      AI_ACTION_PROPOSAL_ERROR_CODES.DUPLICATE_IDEMPOTENCY_KEY,
+      "Duplicate proposal idempotency key",
+      409,
+      {
+        proposalId: existing.id,
+      },
+    );
   }
 
-  const snapshot = await snapshotBuilder({ workspaceId, objective, sourceId, prismaClient });
+  const snapshot = await snapshotBuilder({
+    workspaceId,
+    objective,
+    sourceId,
+    prismaClient,
+  });
   const envelope = await createAuthorizedAiServiceEnvelope({
     actor,
     workspaceId,
     scopes: ["campaign-plan:read"],
-    payload: { workspaceId, objective, requestedChannels, idempotencyKey, snapshot, proposalOnly: true },
+    payload: {
+      workspaceId,
+      objective,
+      requestedChannels,
+      idempotencyKey,
+      snapshot,
+      proposalOnly: true,
+    },
     keyId: serviceAuthKeyId,
     secret: serviceAuthSecret,
     authorizationService,
   });
   const serviceStartedAt = Date.now();
-  const result = await pythonClient({ enabled: true, baseUrl: pythonBaseUrl, timeoutMs, envelope });
+  const result = await pythonClient({
+    enabled: true,
+    baseUrl: pythonBaseUrl,
+    timeoutMs,
+    envelope,
+  });
   const serviceLatencyMs = Date.now() - serviceStartedAt;
   if (!result.ok) {
-    throw typedError(result.errorCode ?? AI_ACTION_PROPOSAL_ERROR_CODES.PROVIDER_UNAVAILABLE, "Draft proposal provider failed", 503);
+    throw typedError(
+      result.errorCode ?? AI_ACTION_PROPOSAL_ERROR_CODES.PROVIDER_UNAVAILABLE,
+      "Draft proposal provider failed",
+      503,
+    );
   }
 
-  const proposal = draftContentProposalResponseSchema.parse(result.body);
-  const validationResults = await validateDraftContentProposal({ proposal, workspaceId, prismaClient });
+  const proposal = draftContentProposalResponseSchema.parse(
+    pythonDomainPayload(result),
+  );
+  const validationResults = await validateDraftContentProposal({
+    proposal,
+    workspaceId,
+    prismaClient,
+  });
   const proposalPayload = normalizeProposalPayload(proposal);
   const contentHash = contentHashForProposalPayload(proposalPayload);
   const record = await prismaClient.aiActionProposal.create({
@@ -355,7 +461,14 @@ export async function createDraftContentProposal({
       validationResults,
       expiresAt: new Date(proposal.expiresAt),
       auditMetadata: {
-        events: [{ type: "created", actorUserId, at: new Date().toISOString(), traceId: proposal.traceId }],
+        events: [
+          {
+            type: "created",
+            actorUserId,
+            at: new Date().toISOString(),
+            traceId: proposal.traceId,
+          },
+        ],
         rawPromptStored: false,
         persistenceGate: "disabled_until_offline_and_shadow_pass",
       },
@@ -389,24 +502,54 @@ export async function approveAiActionProposal({
 } = {}) {
   const approverUserId = actorId(actor);
   if (!approverUserId) {
-    throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.AUTH_REQUIRED, "Authentication required", 401);
+    throw typedError(
+      AI_ACTION_PROPOSAL_ERROR_CODES.AUTH_REQUIRED,
+      "Authentication required",
+      401,
+    );
   }
-  await authorizationService({ actor, workspaceId, scope: "campaign-plan:read", allowAdmin: false });
+  await authorizationService({
+    actor,
+    workspaceId,
+    scope: "campaign-plan:read",
+    allowAdmin: false,
+  });
   return prismaClient.$transaction(async (tx) => {
-    const proposal = await tx.aiActionProposal.findFirst({ where: { id: proposalId, clientId: workspaceId } });
+    const proposal = await tx.aiActionProposal.findFirst({
+      where: { id: proposalId, clientId: workspaceId },
+    });
     if (!proposal) {
-      throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.SCHEMA_INVALID, "Proposal not found", 404);
+      throw typedError(
+        AI_ACTION_PROPOSAL_ERROR_CODES.SCHEMA_INVALID,
+        "Proposal not found",
+        404,
+      );
     }
     if (proposal.status !== "PROPOSED") {
-      throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.REPLAYED_APPROVAL, "Proposal has already been resolved", 409);
+      throw typedError(
+        AI_ACTION_PROPOSAL_ERROR_CODES.REPLAYED_APPROVAL,
+        "Proposal has already been resolved",
+        409,
+      );
     }
     if (new Date(proposal.expiresAt).getTime() <= now.getTime()) {
-      await tx.aiActionProposal.update({ where: { id: proposal.id }, data: { status: "EXPIRED" } });
-      throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.EXPIRED_PROPOSAL, "Proposal is expired", 410);
+      await tx.aiActionProposal.update({
+        where: { id: proposal.id },
+        data: { status: "EXPIRED" },
+      });
+      throw typedError(
+        AI_ACTION_PROPOSAL_ERROR_CODES.EXPIRED_PROPOSAL,
+        "Proposal is expired",
+        410,
+      );
     }
     const contentHash = contentHashForProposalPayload(proposal.proposalPayload);
     if (contentHash !== proposal.contentHash) {
-      throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.CONTENT_HASH_MISMATCH, "Proposal payload changed after validation", 409);
+      throw typedError(
+        AI_ACTION_PROPOSAL_ERROR_CODES.CONTENT_HASH_MISMATCH,
+        "Proposal payload changed after validation",
+        409,
+      );
     }
     const validationResults = await validateDraftContentProposal({
       proposal: proposal.proposalPayload,
@@ -416,7 +559,12 @@ export async function approveAiActionProposal({
     });
     const draftIds = [];
     for (const draft of proposal.proposalPayload.proposedDrafts) {
-      const created = await draftCreator({ tx, draft, proposal, approverUserId });
+      const created = await draftCreator({
+        tx,
+        draft,
+        proposal,
+        approverUserId,
+      });
       draftIds.push(created.id);
     }
     const auditMetadata = appendAuditEvent(proposal.auditMetadata, {
@@ -436,7 +584,12 @@ export async function approveAiActionProposal({
         auditMetadata,
       },
     });
-    return { status: "approved", proposal: updated, draftIds, published: false };
+    return {
+      status: "approved",
+      proposal: updated,
+      draftIds,
+      published: false,
+    };
   });
 }
 
@@ -451,12 +604,27 @@ export async function rejectAiActionProposal({
 } = {}) {
   const approverUserId = actorId(actor);
   if (!approverUserId) {
-    throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.AUTH_REQUIRED, "Authentication required", 401);
+    throw typedError(
+      AI_ACTION_PROPOSAL_ERROR_CODES.AUTH_REQUIRED,
+      "Authentication required",
+      401,
+    );
   }
-  await authorizationService({ actor, workspaceId, scope: "campaign-plan:read", allowAdmin: false });
-  const proposal = await prismaClient.aiActionProposal.findFirst({ where: { id: proposalId, clientId: workspaceId } });
+  await authorizationService({
+    actor,
+    workspaceId,
+    scope: "campaign-plan:read",
+    allowAdmin: false,
+  });
+  const proposal = await prismaClient.aiActionProposal.findFirst({
+    where: { id: proposalId, clientId: workspaceId },
+  });
   if (!proposal || proposal.status !== "PROPOSED") {
-    throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.REPLAYED_APPROVAL, "Proposal has already been resolved", 409);
+    throw typedError(
+      AI_ACTION_PROPOSAL_ERROR_CODES.REPLAYED_APPROVAL,
+      "Proposal has already been resolved",
+      409,
+    );
   }
   return prismaClient.aiActionProposal.update({
     where: { id: proposal.id },
@@ -502,7 +670,8 @@ async function defaultDraftCreator({ tx, draft, proposal, approverUserId }) {
 }
 
 function appendAuditEvent(auditMetadata, event) {
-  const existing = auditMetadata && typeof auditMetadata === "object" ? auditMetadata : {};
+  const existing =
+    auditMetadata && typeof auditMetadata === "object" ? auditMetadata : {};
   const events = Array.isArray(existing.events) ? existing.events : [];
   return { ...existing, events: [...events, event], rawPromptStored: false };
 }

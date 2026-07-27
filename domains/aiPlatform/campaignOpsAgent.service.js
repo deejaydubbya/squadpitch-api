@@ -3,15 +3,31 @@ import crypto from "node:crypto";
 
 import { env } from "../../config/env.js";
 import { prisma } from "../../prisma.js";
-import { getEffectiveTier, getSubscription } from "../billing/billing.service.js";
+import {
+  getEffectiveTier,
+  getSubscription,
+} from "../billing/billing.service.js";
 import { evaluateFlag } from "../internal/config.service.js";
 import { assertCanActorPerformWorkspaceScope } from "../authorization/workspaceAuthorization.service.js";
-import { callPythonCampaignOpsPlan, AI_PLATFORM_ERROR_CODES } from "./pythonAiPlatform.client.js";
-import { emitAiExecution, hostedProvenance } from "./executionProvenance.js";
+import {
+  callPythonCampaignOpsPlan,
+  AI_PLATFORM_ERROR_CODES,
+} from "./pythonAiPlatform.client.js";
+import {
+  emitAiExecution,
+  hostedProvenance,
+  pythonDomainPayload,
+} from "./executionProvenance.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
 
-export const CAMPAIGN_OPS_AGENT_ALLOWED_SCOPES = Object.freeze(["campaign-plan:read"]);
-export const CAMPAIGN_OPS_AGENT_MIN_TIERS = Object.freeze(["PRO", "GROWTH", "AGENCY"]);
+export const CAMPAIGN_OPS_AGENT_ALLOWED_SCOPES = Object.freeze([
+  "campaign-plan:read",
+]);
+export const CAMPAIGN_OPS_AGENT_MIN_TIERS = Object.freeze([
+  "PRO",
+  "GROWTH",
+  "AGENCY",
+]);
 
 export const CAMPAIGN_OPS_AGENT_ERROR_CODES = Object.freeze({
   AUTH_REQUIRED: "AUTH_REQUIRED",
@@ -105,7 +121,9 @@ function typedError(code, message, status = 400, details = {}) {
 
 function assertReadOnlyScopes(scopes) {
   const requested = scopes ?? CAMPAIGN_OPS_AGENT_ALLOWED_SCOPES;
-  const invalid = requested.filter((scope) => !CAMPAIGN_OPS_AGENT_ALLOWED_SCOPES.includes(scope));
+  const invalid = requested.filter(
+    (scope) => !CAMPAIGN_OPS_AGENT_ALLOWED_SCOPES.includes(scope),
+  );
   if (invalid.length > 0) {
     throw typedError(
       CAMPAIGN_OPS_AGENT_ERROR_CODES.WRITE_SCOPE_DENIED,
@@ -117,54 +135,92 @@ function assertReadOnlyScopes(scopes) {
   return requested;
 }
 
-export async function buildCampaignOpsSnapshot({ workspaceId, objective, sourceId, prismaClient = prisma }) {
-  const [client, brand, voice, contentPreferences, property, media, approvedDrafts, scheduledDrafts] =
-    await Promise.all([
-      prismaClient.client.findUnique({
-        where: { id: workspaceId },
-        select: { id: true, name: true, industryKey: true, defaultLanguage: true },
-      }),
-      prismaClient.brandProfile?.findUnique?.({
-        where: { clientId: workspaceId },
-      }) ?? null,
-      prismaClient.voiceProfile?.findUnique?.({
-        where: { clientId: workspaceId },
-      }) ?? null,
-      prismaClient.contentPreferences?.findUnique?.({
-        where: { clientId: workspaceId },
-      }) ?? null,
-      sourceId
-        ? prismaClient.workspaceDataItem.findFirst({
-            where: { id: sourceId, clientId: workspaceId, status: "ACTIVE" },
-          })
-        : prismaClient.workspaceDataItem.findFirst({
-            where: { clientId: workspaceId, status: "ACTIVE" },
-            orderBy: { updatedAt: "desc" },
-          }),
-      prismaClient.mediaAsset.findMany({
-        where: { clientId: workspaceId, status: { not: "FAILED" } },
-        take: 10,
-        orderBy: { createdAt: "desc" },
-      }),
-      prismaClient.draft.findMany({
-        where: { clientId: workspaceId, status: { in: ["APPROVED", "PUBLISHED"] } },
-        take: 10,
-        orderBy: { updatedAt: "desc" },
-      }),
-      prismaClient.draft.findMany({
-        where: { clientId: workspaceId, status: "SCHEDULED" },
-        take: 14,
-        orderBy: { scheduledAt: "asc" },
-      }),
-    ]);
+export async function buildCampaignOpsSnapshot({
+  workspaceId,
+  objective,
+  sourceId,
+  prismaClient = prisma,
+}) {
+  const [
+    client,
+    brand,
+    voice,
+    contentPreferences,
+    property,
+    media,
+    approvedDrafts,
+    scheduledDrafts,
+  ] = await Promise.all([
+    prismaClient.client.findUnique({
+      where: { id: workspaceId },
+      select: {
+        id: true,
+        name: true,
+        industryKey: true,
+        defaultLanguage: true,
+      },
+    }),
+    prismaClient.brandProfile?.findUnique?.({
+      where: { clientId: workspaceId },
+    }) ?? null,
+    prismaClient.voiceProfile?.findUnique?.({
+      where: { clientId: workspaceId },
+    }) ?? null,
+    prismaClient.contentPreferences?.findUnique?.({
+      where: { clientId: workspaceId },
+    }) ?? null,
+    sourceId
+      ? prismaClient.workspaceDataItem.findFirst({
+          where: { id: sourceId, clientId: workspaceId, status: "ACTIVE" },
+        })
+      : prismaClient.workspaceDataItem.findFirst({
+          where: { clientId: workspaceId, status: "ACTIVE" },
+          orderBy: { updatedAt: "desc" },
+        }),
+    prismaClient.mediaAsset.findMany({
+      where: { clientId: workspaceId, status: { not: "FAILED" } },
+      take: 10,
+      orderBy: { createdAt: "desc" },
+    }),
+    prismaClient.draft.findMany({
+      where: {
+        clientId: workspaceId,
+        status: { in: ["APPROVED", "PUBLISHED"] },
+      },
+      take: 10,
+      orderBy: { updatedAt: "desc" },
+    }),
+    prismaClient.draft.findMany({
+      where: { clientId: workspaceId, status: "SCHEDULED" },
+      take: 14,
+      orderBy: { scheduledAt: "asc" },
+    }),
+  ]);
 
   const items = [
-    client && snapshotItem("campaign", "workspace", `Workspace: ${client.name}`, client),
+    client &&
+      snapshotItem(
+        "campaign",
+        "workspace",
+        `Workspace: ${client.name}`,
+        client,
+      ),
     brand && snapshotItem("brand_profile", "brand", "Brand profile", brand),
     voice && snapshotItem("voice_profile", "voice", "Voice profile", voice),
     contentPreferences &&
-      snapshotItem("content_preferences", "content-preferences", "Content preferences", contentPreferences),
-    property && snapshotItem("property_listing", property.id, "Property/listing facts", property),
+      snapshotItem(
+        "content_preferences",
+        "content-preferences",
+        "Content preferences",
+        contentPreferences,
+      ),
+    property &&
+      snapshotItem(
+        "property_listing",
+        property.id,
+        "Property/listing facts",
+        property,
+      ),
     ...approvedDrafts.map((draft) =>
       snapshotItem("draft", draft.id, draft.title || "Approved example", draft),
     ),
@@ -182,14 +238,24 @@ export async function buildCampaignOpsSnapshot({ workspaceId, objective, sourceI
     })),
     calendar: scheduledDrafts.map((draft) => ({
       channel: draft.channel,
-      scheduledFor: (draft.scheduledAt || draft.createdAt || new Date()).toISOString(),
+      scheduledFor: (
+        draft.scheduledAt ||
+        draft.createdAt ||
+        new Date()
+      ).toISOString(),
       title: draft.title || draft.campaignName || "Scheduled draft",
     })),
     approvalPolicy: {
       requiresHumanApproval: true,
-      notes: "Proposal only. Human approval required before creating drafts or scheduling.",
+      notes:
+        "Proposal only. Human approval required before creating drafts or scheduling.",
     },
-    allowedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "GOOGLE_BUSINESS_PROFILE"],
+    allowedChannels: [
+      "INSTAGRAM",
+      "FACEBOOK",
+      "LINKEDIN",
+      "GOOGLE_BUSINESS_PROFILE",
+    ],
   };
 }
 
@@ -233,7 +299,11 @@ export async function generateCampaignOpsAgentPreview({
   const startedAt = Date.now();
   const actorUserId = actorId(actor);
   if (!actorUserId) {
-    throw typedError(CAMPAIGN_OPS_AGENT_ERROR_CODES.AUTH_REQUIRED, "Authentication required", 401);
+    throw typedError(
+      CAMPAIGN_OPS_AGENT_ERROR_CODES.AUTH_REQUIRED,
+      "Authentication required",
+      401,
+    );
   }
   const scopes = assertReadOnlyScopes(requestedScopes);
 
@@ -251,7 +321,11 @@ export async function generateCampaignOpsAgentPreview({
       userId: actorUserId,
     }));
   if (!flagEnabled) {
-    throw typedError(CAMPAIGN_OPS_AGENT_ERROR_CODES.FEATURE_DISABLED, "Feature disabled", 404);
+    throw typedError(
+      CAMPAIGN_OPS_AGENT_ERROR_CODES.FEATURE_DISABLED,
+      "Feature disabled",
+      404,
+    );
   }
 
   const subscription = await subscriptionFetcher(actorUserId);
@@ -265,7 +339,12 @@ export async function generateCampaignOpsAgentPreview({
     );
   }
 
-  const snapshot = await snapshotBuilder({ workspaceId, objective, sourceId, prismaClient });
+  const snapshot = await snapshotBuilder({
+    workspaceId,
+    objective,
+    sourceId,
+    prismaClient,
+  });
   const envelope = await createAuthorizedAiServiceEnvelope({
     actor,
     workspaceId,
@@ -299,7 +378,9 @@ export async function generateCampaignOpsAgentPreview({
     );
   }
 
-  const parsed = campaignOpsPlanResponseSchema.parse(result.body);
+  const parsed = campaignOpsPlanResponseSchema.parse(
+    pythonDomainPayload(result),
+  );
   const citations = [
     ...parsed.citations,
     ...parsed.proposedPosts.flatMap((post) => post.citations),

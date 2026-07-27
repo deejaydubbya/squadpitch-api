@@ -17,10 +17,14 @@ export const AI_FALLBACK_REASONS = Object.freeze({
 });
 
 export function normalizeFallbackReason(code, status) {
-  return AI_FALLBACK_REASONS[code] ??
-    (status === "timeout" ? "timeout" :
-      status === "invalid_response" ? "invalid_response" :
-        "internal_error");
+  return (
+    AI_FALLBACK_REASONS[code] ??
+    (status === "timeout"
+      ? "timeout"
+      : status === "invalid_response"
+        ? "invalid_response"
+        : "internal_error")
+  );
 }
 
 export function hostedProvenance({
@@ -79,7 +83,7 @@ export function localProvenance({
     traceId: envelope?.traceId ?? randomUUID(),
     pythonTraceId: null,
     totalLatencyMs: elapsed(startedAt),
-    serviceLatencyMs: attemptedHosted ? serviceLatencyMs ?? null : null,
+    serviceLatencyMs: attemptedHosted ? (serviceLatencyMs ?? null) : null,
     featureFlag: featureFlag ?? null,
     nodeServiceVersion: env.APP_BUILD_SHA ?? null,
   });
@@ -121,11 +125,10 @@ export function shadowProvenance({
   });
 }
 
-export function emitAiExecution(provenance, {
-  workspaceId,
-  actorUserId,
-  status = "SUCCEEDED",
-} = {}) {
+export function emitAiExecution(
+  provenance,
+  { workspaceId, actorUserId, status = "SUCCEEDED" } = {},
+) {
   logEvent("ai.execution.completed", {
     ...provenance,
     workspaceId,
@@ -140,9 +143,10 @@ export function emitAiExecution(provenance, {
       workspaceId,
       actorUserId,
       taskType: provenance.operation,
-      featureFlags: provenance.featureFlag == null
-        ? {}
-        : { [provenance.operation]: provenance.featureFlag },
+      featureFlags:
+        provenance.featureFlag == null
+          ? {}
+          : { [provenance.operation]: provenance.featureFlag },
       provider: provenance.source,
       model: provenance.model ?? null,
       schemaVersion: "ai-execution-provenance.v1",
@@ -162,7 +166,8 @@ export function emitAiExecution(provenance, {
 }
 
 export function setAiProvenanceHeaders(res, provenance) {
-  if (!env.AI_PROVENANCE_RESPONSE_HEADERS_ENABLED || !res || !provenance) return;
+  if (!env.AI_PROVENANCE_RESPONSE_HEADERS_ENABLED || !res || !provenance)
+    return;
   const headers = {
     "X-Squadpitch-AI-Source": provenance.source,
     "X-Squadpitch-AI-Operation": provenance.operation,
@@ -180,6 +185,13 @@ export function setAiProvenanceHeaders(res, provenance) {
       res.setHeader(name, String(value));
     }
   }
+}
+
+export function pythonDomainPayload(pythonResult) {
+  const body = pythonResult?.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const { provenance: _provenance, ...domainPayload } = body;
+  return domainPayload;
 }
 
 function elapsed(startedAt) {

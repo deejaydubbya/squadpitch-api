@@ -4,15 +4,20 @@ import { env } from "../../config/env.js";
 import { evaluateFlag } from "../internal/config.service.js";
 import { assertCanActorPerformWorkspaceScope } from "../authorization/workspaceAuthorization.service.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
-import { callPythonAutopilotRank, AI_PLATFORM_ERROR_CODES } from "./pythonAiPlatform.client.js";
+import {
+  callPythonAutopilotRank,
+  AI_PLATFORM_ERROR_CODES,
+} from "./pythonAiPlatform.client.js";
 import {
   emitAiExecution,
   hostedProvenance,
   localProvenance,
+  pythonDomainPayload,
   shadowProvenance,
 } from "./executionProvenance.js";
 
-export const AUTOPILOT_ML_RANKING_SCHEMA_VERSION = "autopilot-opportunity-ranking.v1";
+export const AUTOPILOT_ML_RANKING_SCHEMA_VERSION =
+  "autopilot-opportunity-ranking.v1";
 export const AUTOPILOT_ML_MODEL_VERSION = "autopilot-logistic-ranker.v1";
 
 export const AUTOPILOT_ML_RANKING_ERROR_CODES = Object.freeze({
@@ -85,7 +90,8 @@ function typedError(code, message, status = 400, details = {}) {
 
 export function heuristicRankCandidates(candidates) {
   return [...candidates].sort((left, right) => {
-    if (right.heuristicScore !== left.heuristicScore) return right.heuristicScore - left.heuristicScore;
+    if (right.heuristicScore !== left.heuristicScore)
+      return right.heuristicScore - left.heuristicScore;
     return Date.parse(left.detectedAt) - Date.parse(right.detectedAt);
   });
 }
@@ -108,7 +114,11 @@ export async function rankAutopilotOpportunities({
   const startedAt = Date.now();
   const actorUserId = actorId(actor);
   if (!actorUserId) {
-    throw typedError(AUTOPILOT_ML_RANKING_ERROR_CODES.AUTH_REQUIRED, "Authentication required", 401);
+    throw typedError(
+      AUTOPILOT_ML_RANKING_ERROR_CODES.AUTH_REQUIRED,
+      "Authentication required",
+      401,
+    );
   }
   if (modelVersion !== AUTOPILOT_ML_MODEL_VERSION) {
     throw typedError(
@@ -119,14 +129,21 @@ export async function rankAutopilotOpportunities({
     );
   }
   const parsedCandidates = z.array(candidateSchema).parse(candidates ?? []);
-  if (parsedCandidates.some((candidate) => candidate.workspaceId !== workspaceId)) {
+  if (
+    parsedCandidates.some((candidate) => candidate.workspaceId !== workspaceId)
+  ) {
     throw typedError(
       AUTOPILOT_ML_RANKING_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
       "Candidate workspace mismatch",
       403,
     );
   }
-  await authorizationService({ actor, workspaceId, scope: "autopilot-rank:read", allowAdmin: false });
+  await authorizationService({
+    actor,
+    workspaceId,
+    scope: "autopilot-rank:read",
+    allowAdmin: false,
+  });
 
   const heuristicOrder = heuristicRankCandidates(parsedCandidates);
   const flagEnabled =
@@ -169,7 +186,12 @@ export async function rankAutopilotOpportunities({
     authorizationService,
   });
   const serviceStartedAt = Date.now();
-  const result = await pythonClient({ enabled: true, baseUrl: pythonBaseUrl, timeoutMs, envelope });
+  const result = await pythonClient({
+    enabled: true,
+    baseUrl: pythonBaseUrl,
+    timeoutMs,
+    envelope,
+  });
   const serviceLatencyMs = Date.now() - serviceStartedAt;
   if (!result.ok) {
     const provenance = localProvenance({
@@ -188,11 +210,15 @@ export async function rankAutopilotOpportunities({
       rankedCandidates: heuristicOrder,
       mlRankings: null,
       oldNodePathUnaffected: true,
-      reason: result.errorCode ?? AUTOPILOT_ML_RANKING_ERROR_CODES.PROVIDER_UNAVAILABLE,
+      reason:
+        result.errorCode ??
+        AUTOPILOT_ML_RANKING_ERROR_CODES.PROVIDER_UNAVAILABLE,
       provenance,
     };
   }
-  const parsedResult = rankingResponseSchema.safeParse(result.body);
+  const parsedResult = rankingResponseSchema.safeParse(
+    pythonDomainPayload(result),
+  );
   if (!parsedResult.success) {
     const provenance = localProvenance({
       operation: "autopilot_rank",
@@ -223,7 +249,11 @@ export async function rankAutopilotOpportunities({
     );
   }
   const mlOrder = parsed.rankedCandidates
-    .map((ranked) => parsedCandidates.find((candidate) => candidate.candidateId === ranked.candidateId))
+    .map((ranked) =>
+      parsedCandidates.find(
+        (candidate) => candidate.candidateId === ranked.candidateId,
+      ),
+    )
     .filter(Boolean);
   const provenance = shadowMode
     ? shadowProvenance({

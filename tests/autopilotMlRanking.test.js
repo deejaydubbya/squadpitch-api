@@ -61,6 +61,12 @@ function pythonRanking(overrides = {}) {
     traceId: "trace-rank",
     shadowMode: true,
     proposalOnly: true,
+    provenance: {
+      operation: "autopilot_rank",
+      source: "squadpitch-ai",
+      fallbackUsed: false,
+      implementation: "autopilot_logistic_ranker_v1",
+    },
     ...overrides,
   };
 }
@@ -85,65 +91,112 @@ function baseDeps(overrides = {}) {
 describe("Autopilot ML ranking wrapper", () => {
   it("keeps heuristic baseline deterministic", () => {
     const ranked = heuristicRankCandidates([
-      candidate("old", { heuristicScore: 0.5, detectedAt: "2026-07-22T11:00:00.000Z" }),
+      candidate("old", {
+        heuristicScore: 0.5,
+        detectedAt: "2026-07-22T11:00:00.000Z",
+      }),
       candidate("high", { heuristicScore: 0.9 }),
-      candidate("new", { heuristicScore: 0.5, detectedAt: "2026-07-22T12:00:00.000Z" }),
+      candidate("new", {
+        heuristicScore: 0.5,
+        detectedAt: "2026-07-22T12:00:00.000Z",
+      }),
     ]);
 
-    expect(ranked.map((item) => item.candidateId)).toEqual(["high", "old", "new"]);
+    expect(ranked.map((item) => item.candidateId)).toEqual([
+      "high",
+      "old",
+      "new",
+    ]);
   });
 
   it("falls back to heuristic when disabled or provider fails", async () => {
     const disabled = await rankAutopilotOpportunities(
-      baseDeps({ featureEnabled: false, featureFlagEvaluator: vi.fn(async () => false) }),
+      baseDeps({
+        featureEnabled: false,
+        featureFlagEvaluator: vi.fn(async () => false),
+      }),
     );
     expect(disabled.mode).toBe("heuristic_fallback");
-    expect(disabled.rankedCandidates.map((item) => item.candidateId)).toEqual(["c1", "c2"]);
+    expect(disabled.rankedCandidates.map((item) => item.candidateId)).toEqual([
+      "c1",
+      "c2",
+    ]);
 
     const failed = await rankAutopilotOpportunities(
-      baseDeps({ pythonClient: vi.fn(async () => ({ ok: false, errorCode: "PROVIDER_TIMEOUT" })) }),
+      baseDeps({
+        pythonClient: vi.fn(async () => ({
+          ok: false,
+          errorCode: "PROVIDER_TIMEOUT",
+        })),
+      }),
     );
     expect(failed.mode).toBe("heuristic_fallback");
     expect(failed.reason).toBe("PROVIDER_TIMEOUT");
   });
 
   it("does not alter authoritative order in shadow mode", async () => {
-    const result = await rankAutopilotOpportunities(baseDeps({ shadowMode: true }));
+    const result = await rankAutopilotOpportunities(
+      baseDeps({ shadowMode: true }),
+    );
 
     expect(result.mode).toBe("shadow");
     expect(result.oldNodePathUnaffected).toBe(true);
-    expect(result.rankedCandidates.map((item) => item.candidateId)).toEqual(["c1", "c2"]);
+    expect(result.rankedCandidates.map((item) => item.candidateId)).toEqual([
+      "c1",
+      "c2",
+    ]);
     expect(result.mlRankings.rankedCandidates[0].candidateId).toBe("c2");
     expect(result.provenance.executionMode).toBe("shadow");
   });
 
   it("uses ML order only when explicitly not shadowing", async () => {
     const result = await rankAutopilotOpportunities(
-      baseDeps({ shadowMode: false, pythonClient: vi.fn(async () => ({ ok: true, body: pythonRanking({ shadowMode: false }) })) }),
+      baseDeps({
+        shadowMode: false,
+        pythonClient: vi.fn(async () => ({
+          ok: true,
+          body: pythonRanking({ shadowMode: false }),
+        })),
+      }),
     );
 
     expect(result.mode).toBe("ml_ranked");
-    expect(result.rankedCandidates.map((item) => item.candidateId)).toEqual(["c2", "c1"]);
+    expect(result.rankedCandidates.map((item) => item.candidateId)).toEqual([
+      "c2",
+      "c1",
+    ]);
     expect(result.provenance.source).toBe("squadpitch-ai");
   });
 
   it("rejects model version mismatch and cross-workspace candidates before Python call", async () => {
     const pythonClient = vi.fn();
     await expect(
-      rankAutopilotOpportunities(baseDeps({ modelVersion: "future-model", pythonClient })),
-    ).rejects.toMatchObject({ code: AUTOPILOT_ML_RANKING_ERROR_CODES.MODEL_VERSION_MISMATCH });
+      rankAutopilotOpportunities(
+        baseDeps({ modelVersion: "future-model", pythonClient }),
+      ),
+    ).rejects.toMatchObject({
+      code: AUTOPILOT_ML_RANKING_ERROR_CODES.MODEL_VERSION_MISMATCH,
+    });
     expect(pythonClient).not.toHaveBeenCalled();
 
     await expect(
       rankAutopilotOpportunities(
-        baseDeps({ candidates: [candidate("bad", { workspaceId: "workspace-b" })], pythonClient }),
+        baseDeps({
+          candidates: [candidate("bad", { workspaceId: "workspace-b" })],
+          pythonClient,
+        }),
       ),
-    ).rejects.toMatchObject({ code: AUTOPILOT_ML_RANKING_ERROR_CODES.CROSS_WORKSPACE_REFERENCE });
+    ).rejects.toMatchObject({
+      code: AUTOPILOT_ML_RANKING_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+    });
     expect(pythonClient).not.toHaveBeenCalled();
   });
 
   it("signs only the read-only autopilot rank scope", async () => {
-    const pythonClient = vi.fn(async () => ({ ok: true, body: pythonRanking() }));
+    const pythonClient = vi.fn(async () => ({
+      ok: true,
+      body: pythonRanking(),
+    }));
 
     await rankAutopilotOpportunities(baseDeps({ pythonClient }));
 

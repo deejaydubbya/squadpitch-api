@@ -119,7 +119,18 @@ function baseCreateDeps(overrides = {}) {
       approvalPolicy: { requiresHumanApproval: true },
       allowedChannels: ["INSTAGRAM"],
     })),
-    pythonClient: vi.fn(async () => ({ ok: true, body: validProposal() })),
+    pythonClient: vi.fn(async () => ({
+      ok: true,
+      body: {
+        ...validProposal(),
+        provenance: {
+          operation: "draft_content_proposal",
+          source: "squadpitch-ai",
+          fallbackUsed: false,
+          implementation: "draft_content_proposal_v1",
+        },
+      },
+    })),
     prismaClient: {
       aiActionProposal: {
         findUnique: vi.fn(async () => null),
@@ -147,7 +158,9 @@ describe("AI action proposals", () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.DUPLICATE_IDEMPOTENCY_KEY });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.DUPLICATE_IDEMPOTENCY_KEY,
+    });
     expect(pythonClient).not.toHaveBeenCalled();
   });
 
@@ -155,7 +168,11 @@ describe("AI action proposals", () => {
     const pythonClient = vi.fn();
     await expect(
       createDraftContentProposal(
-        baseCreateDeps({ featureEnabled: false, featureFlagEvaluator: vi.fn(async () => false), pythonClient }),
+        baseCreateDeps({
+          featureEnabled: false,
+          featureFlagEvaluator: vi.fn(async () => false),
+          pythonClient,
+        }),
       ),
     ).rejects.toMatchObject({
       code: AI_ACTION_PROPOSAL_ERROR_CODES.FEATURE_DISABLED,
@@ -167,21 +184,33 @@ describe("AI action proposals", () => {
   it("validates unsupported channel, cross-workspace references, invalid facts, and policy copy", async () => {
     await expect(
       validateDraftContentProposal({
-        proposal: validProposal({ proposedDrafts: [{ ...validProposal().proposedDrafts[0], channel: "FAX" }] }),
+        proposal: validProposal({
+          proposedDrafts: [
+            { ...validProposal().proposedDrafts[0], channel: "FAX" },
+          ],
+        }),
         workspaceId: "workspace-a",
         prismaClient: prismaForValidation(),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.UNSUPPORTED_CHANNEL });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.UNSUPPORTED_CHANNEL,
+    });
 
     await expect(
       validateDraftContentProposal({
-        proposal: validProposal({ citations: [{ ...validProposal().citations[0], workspaceId: "workspace-b" }] }),
+        proposal: validProposal({
+          citations: [
+            { ...validProposal().citations[0], workspaceId: "workspace-b" },
+          ],
+        }),
         workspaceId: "workspace-a",
         prismaClient: prismaForValidation(),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+    });
 
     await expect(
       validateDraftContentProposal({
@@ -189,7 +218,9 @@ describe("AI action proposals", () => {
           proposedDrafts: [
             {
               ...validProposal().proposedDrafts[0],
-              requiredFacts: [{ name: "price", status: "missing", sourceId: null }],
+              requiredFacts: [
+                { name: "price", status: "missing", sourceId: null },
+              ],
             },
           ],
         }),
@@ -197,18 +228,27 @@ describe("AI action proposals", () => {
         prismaClient: prismaForValidation(),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.INVALID_FACT });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.INVALID_FACT,
+    });
 
     await expect(
       validateDraftContentProposal({
         proposal: validProposal({
-          proposedDrafts: [{ ...validProposal().proposedDrafts[0], body: "Perfect for families near downtown." }],
+          proposedDrafts: [
+            {
+              ...validProposal().proposedDrafts[0],
+              body: "Perfect for families near downtown.",
+            },
+          ],
         }),
         workspaceId: "workspace-a",
         prismaClient: prismaForValidation(),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.FAIR_HOUSING_POLICY });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.FAIR_HOUSING_POLICY,
+    });
   });
 
   it("rejects cross-workspace media and property references", async () => {
@@ -216,19 +256,27 @@ describe("AI action proposals", () => {
       validateDraftContentProposal({
         proposal: validProposal(),
         workspaceId: "workspace-a",
-        prismaClient: prismaForValidation({ mediaAsset: { count: vi.fn(async () => 0) } }),
+        prismaClient: prismaForValidation({
+          mediaAsset: { count: vi.fn(async () => 0) },
+        }),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+    });
 
     await expect(
       validateDraftContentProposal({
         proposal: validProposal(),
         workspaceId: "workspace-a",
-        prismaClient: prismaForValidation({ workspaceDataItem: { count: vi.fn(async () => 0) } }),
+        prismaClient: prismaForValidation({
+          workspaceDataItem: { count: vi.fn(async () => 0) },
+        }),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
+    });
   });
 
   it("rejects replayed approval, expired proposals, and modified payloads", async () => {
@@ -241,7 +289,9 @@ describe("AI action proposals", () => {
         prismaClient: txPrisma(storedProposal({ status: "APPROVED" })),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.REPLAYED_APPROVAL });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.REPLAYED_APPROVAL,
+    });
 
     await expect(
       approveAiActionProposal({
@@ -249,10 +299,14 @@ describe("AI action proposals", () => {
         workspaceId: "workspace-a",
         proposalId: "proposal-1",
         authorizationService: vi.fn(async () => ({ allowed: true })),
-        prismaClient: txPrisma(storedProposal({ expiresAt: new Date("2026-07-21T12:00:00.000Z") })),
+        prismaClient: txPrisma(
+          storedProposal({ expiresAt: new Date("2026-07-21T12:00:00.000Z") }),
+        ),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.EXPIRED_PROPOSAL });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.EXPIRED_PROPOSAL,
+    });
 
     await expect(
       approveAiActionProposal({
@@ -260,10 +314,14 @@ describe("AI action proposals", () => {
         workspaceId: "workspace-a",
         proposalId: "proposal-1",
         authorizationService: vi.fn(async () => ({ allowed: true })),
-        prismaClient: txPrisma(storedProposal({ contentHash: "sha256:" + "b".repeat(64) })),
+        prismaClient: txPrisma(
+          storedProposal({ contentHash: "sha256:" + "b".repeat(64) }),
+        ),
         now,
       }),
-    ).rejects.toMatchObject({ code: AI_ACTION_PROPOSAL_ERROR_CODES.CONTENT_HASH_MISMATCH });
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.CONTENT_HASH_MISMATCH,
+    });
   });
 
   it("records rejection flow and approval audit without publishing", async () => {
@@ -282,7 +340,9 @@ describe("AI action proposals", () => {
       now,
     });
     expect(rejected.status).toBe("REJECTED");
-    expect(rejected.auditMetadata.events.at(-1)).toMatchObject({ type: "rejected" });
+    expect(rejected.auditMetadata.events.at(-1)).toMatchObject({
+      type: "rejected",
+    });
 
     const publishDraft = vi.fn();
     const approved = await approveAiActionProposal({
@@ -324,11 +384,16 @@ function txPrisma(proposal, overrides = {}) {
   const tx = {
     aiActionProposal: {
       findFirst: vi.fn(async () => proposal),
-      update: overrides.update ?? vi.fn(async ({ data }) => ({ id: proposal.id, ...data })),
+      update:
+        overrides.update ??
+        vi.fn(async ({ data }) => ({ id: proposal.id, ...data })),
     },
     mediaAsset: { count: vi.fn(async () => 1) },
     workspaceDataItem: { count: vi.fn(async () => 1) },
-    draft: { findFirst: vi.fn(async () => null), create: vi.fn(async () => ({ id: "draft-1" })) },
+    draft: {
+      findFirst: vi.fn(async () => null),
+      create: vi.fn(async () => ({ id: "draft-1" })),
+    },
   };
   return {
     $transaction: vi.fn(async (fn) => fn(tx)),

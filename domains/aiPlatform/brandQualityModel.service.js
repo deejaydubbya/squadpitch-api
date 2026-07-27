@@ -16,6 +16,7 @@ import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
 import {
   emitAiExecution,
   localProvenance,
+  pythonDomainPayload,
   shadowProvenance,
 } from "./executionProvenance.js";
 
@@ -339,7 +340,9 @@ export async function scoreBrandContentQuality({
       provenance,
     };
   }
-  const parsedResult = scoreResponseSchema.safeParse(result.body);
+  const parsedResult = scoreResponseSchema.safeParse(
+    pythonDomainPayload(result),
+  );
   if (!parsedResult.success) {
     const provenance = localProvenance({
       operation: "brand_quality_score",

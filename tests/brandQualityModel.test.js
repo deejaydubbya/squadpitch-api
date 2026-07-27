@@ -29,6 +29,12 @@ function pythonScore(overrides = {}) {
     explanations: ["Maximum policy/quality risk."],
     traceId: "trace-quality",
     proposalOnly: true,
+    provenance: {
+      operation: "brand_quality_score",
+      source: "squadpitch-ai",
+      fallbackUsed: false,
+      implementation: "deterministic_brand_quality_v1",
+    },
     ...overrides,
   };
 }

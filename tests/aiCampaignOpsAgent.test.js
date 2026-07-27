@@ -18,7 +18,9 @@ function validPythonPlan(overrides = {}) {
         channel: "INSTAGRAM",
         suggestedTime: "2026-07-23T10:00:00Z",
         contentBrief: "Use the approved property facts.",
-        requiredFacts: [{ name: "price", status: "available", sourceId: "property-1" }],
+        requiredFacts: [
+          { name: "price", status: "available", sourceId: "property-1" },
+        ],
         citations: [
           {
             sourceType: "property_listing",
@@ -30,7 +32,9 @@ function validPythonPlan(overrides = {}) {
         ],
         mediaRecommendations: ["Use exterior hero"],
         risks: [],
-        approvalRequirements: ["Human approval required before creating drafts."],
+        approvalRequirements: [
+          "Human approval required before creating drafts.",
+        ],
       },
     ],
     citations: [
@@ -59,6 +63,12 @@ function validPythonPlan(overrides = {}) {
     traceId: "trace-1",
     expiresAt: "2026-07-23T10:00:00Z",
     proposalOnly: true,
+    provenance: {
+      operation: "campaign_ops_plan",
+      source: "squadpitch-ai",
+      fallbackUsed: false,
+      implementation: "campaign_ops_v1",
+    },
     ...overrides,
   };
 }
@@ -98,7 +108,9 @@ describe("read-only campaign ops agent", () => {
 
     await expect(
       generateCampaignOpsAgentPreview(baseDeps({ actor: null, pythonClient })),
-    ).rejects.toMatchObject({ code: CAMPAIGN_OPS_AGENT_ERROR_CODES.AUTH_REQUIRED });
+    ).rejects.toMatchObject({
+      code: CAMPAIGN_OPS_AGENT_ERROR_CODES.AUTH_REQUIRED,
+    });
     expect(pythonClient).not.toHaveBeenCalled();
   });
 
@@ -126,20 +138,36 @@ describe("read-only campaign ops agent", () => {
 
     await expect(
       generateCampaignOpsAgentPreview(
-        baseDeps({ requestedScopes: ["campaign-plan:read", "publish:write"], pythonClient }),
+        baseDeps({
+          requestedScopes: ["campaign-plan:read", "publish:write"],
+          pythonClient,
+        }),
       ),
-    ).rejects.toMatchObject({ code: CAMPAIGN_OPS_AGENT_ERROR_CODES.WRITE_SCOPE_DENIED });
+    ).rejects.toMatchObject({
+      code: CAMPAIGN_OPS_AGENT_ERROR_CODES.WRITE_SCOPE_DENIED,
+    });
     expect(pythonClient).not.toHaveBeenCalled();
   });
 
   it("is gated by feature flag and paid tier", async () => {
     await expect(
-      generateCampaignOpsAgentPreview(baseDeps({ featureEnabled: false, featureFlagEvaluator: vi.fn(async () => false) })),
-    ).rejects.toMatchObject({ code: CAMPAIGN_OPS_AGENT_ERROR_CODES.FEATURE_DISABLED });
+      generateCampaignOpsAgentPreview(
+        baseDeps({
+          featureEnabled: false,
+          featureFlagEvaluator: vi.fn(async () => false),
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: CAMPAIGN_OPS_AGENT_ERROR_CODES.FEATURE_DISABLED,
+    });
 
     await expect(
-      generateCampaignOpsAgentPreview(baseDeps({ effectiveTierResolver: vi.fn(() => "FREE") })),
-    ).rejects.toMatchObject({ code: CAMPAIGN_OPS_AGENT_ERROR_CODES.TIER_LIMIT });
+      generateCampaignOpsAgentPreview(
+        baseDeps({ effectiveTierResolver: vi.fn(() => "FREE") }),
+      ),
+    ).rejects.toMatchObject({
+      code: CAMPAIGN_OPS_AGENT_ERROR_CODES.TIER_LIMIT,
+    });
   });
 
   it("returns proposal only and cannot publish", async () => {
@@ -153,7 +181,9 @@ describe("read-only campaign ops agent", () => {
       operation: "campaign_ops_plan",
       fallbackUsed: false,
     });
-    expect(JSON.stringify(result)).not.toMatch(/publishDraft|scheduleDraft|createCampaign/);
+    expect(JSON.stringify(result)).not.toMatch(
+      /publishDraft|scheduleDraft|createCampaign/,
+    );
   });
 
   it("validates citations and rejects cross-workspace responses", async () => {
@@ -176,7 +206,9 @@ describe("read-only campaign ops agent", () => {
           })),
         }),
       ),
-    ).rejects.toMatchObject({ code: CAMPAIGN_OPS_AGENT_ERROR_CODES.SCHEMA_INVALID });
+    ).rejects.toMatchObject({
+      code: CAMPAIGN_OPS_AGENT_ERROR_CODES.SCHEMA_INVALID,
+    });
   });
 
   it("maps provider timeout and schema failures safely", async () => {
@@ -192,11 +224,19 @@ describe("read-only campaign ops agent", () => {
       ),
     ).rejects.toMatchObject({ code: "PROVIDER_TIMEOUT", status: 504 });
 
-    expect(() => campaignOpsPlanResponseSchema.parse({ ...validPythonPlan(), proposalOnly: false })).toThrow();
+    expect(() =>
+      campaignOpsPlanResponseSchema.parse({
+        ...validPythonPlan(),
+        proposalOnly: false,
+      }),
+    ).toThrow();
   });
 
   it("signs only the read-only campaign plan scope", async () => {
-    const pythonClient = vi.fn(async () => ({ ok: true, body: validPythonPlan() }));
+    const pythonClient = vi.fn(async () => ({
+      ok: true,
+      body: validPythonPlan(),
+    }));
 
     await generateCampaignOpsAgentPreview(baseDeps({ pythonClient }));
 
