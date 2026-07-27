@@ -806,6 +806,12 @@ studioRouter.get(
   requireClientOwner,
   async (req, res, next) => {
     try {
+      // These are collection endpoints registered later in this router.
+      // Without skipping this dynamic route, Express treats the static
+      // path segment as an item ID and returns a misleading 404.
+      if (["top-performing", "unused", "suggestions"].includes(req.params.itemId)) {
+        return next("route");
+      }
       const item = await dataService.getDataItem(req.params.id, req.params.itemId);
       if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
       res.json(dataService.formatDataItem(item));
