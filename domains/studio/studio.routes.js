@@ -166,6 +166,7 @@ import * as propertyDataService from "../industry/propertyData.service.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
 import { generateCampaignOpsAgentPreview } from "../aiPlatform/campaignOpsAgent.service.js";
+import { setAiProvenanceHeaders } from "../aiPlatform/executionProvenance.js";
 
 export const studioRouter = express.Router();
 
@@ -5461,8 +5462,11 @@ studioRouter.post(
         workspaceId: req.params.id,
         objective: parsed.data.objective,
         sourceId: parsed.data.sourceId,
+        traceId: req.id,
       });
-      res.json(result);
+      const { provenance, ...body } = result;
+      setAiProvenanceHeaders(res, provenance);
+      res.json(body);
     } catch (err) {
       if (err?.code && err?.status) {
         return sendError(res, err.status, err.code, err.message, {

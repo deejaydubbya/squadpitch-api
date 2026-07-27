@@ -39,6 +39,7 @@ primary_region = "ord"
 [env]
   NODE_ENV = "production"
   ENABLE_WORKERS = "true"
+  AI_PROVENANCE_RESPONSE_HEADERS_ENABLED = "true"
 
 [[vm]]
   size = "performance-1x"

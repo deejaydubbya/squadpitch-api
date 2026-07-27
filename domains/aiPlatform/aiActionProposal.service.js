@@ -8,6 +8,7 @@ import { evaluateFlag } from "../internal/config.service.js";
 import { assertCanActorPerformWorkspaceScope } from "../authorization/workspaceAuthorization.service.js";
 import { buildCampaignOpsSnapshot } from "./campaignOpsAgent.service.js";
 import { callPythonDraftContentProposal, AI_PLATFORM_ERROR_CODES } from "./pythonAiPlatform.client.js";
+import { emitAiExecution, hostedProvenance } from "./executionProvenance.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
 
 export const AI_ACTION_PROPOSAL_ERROR_CODES = Object.freeze({
@@ -292,6 +293,7 @@ export async function createDraftContentProposal({
   snapshotBuilder = buildCampaignOpsSnapshot,
   pythonClient = callPythonDraftContentProposal,
 } = {}) {
+  const startedAt = Date.now();
   const actorUserId = actorId(actor);
   if (!actorUserId) {
     throw typedError(AI_ACTION_PROPOSAL_ERROR_CODES.AUTH_REQUIRED, "Authentication required", 401);
@@ -325,7 +327,9 @@ export async function createDraftContentProposal({
     secret: serviceAuthSecret,
     authorizationService,
   });
+  const serviceStartedAt = Date.now();
   const result = await pythonClient({ enabled: true, baseUrl: pythonBaseUrl, timeoutMs, envelope });
+  const serviceLatencyMs = Date.now() - serviceStartedAt;
   if (!result.ok) {
     throw typedError(result.errorCode ?? AI_ACTION_PROPOSAL_ERROR_CODES.PROVIDER_UNAVAILABLE, "Draft proposal provider failed", 503);
   }
@@ -357,7 +361,21 @@ export async function createDraftContentProposal({
       },
     },
   });
-  return { status: "proposed", proposal: record, oldNodePathUnaffected: true };
+  const provenance = hostedProvenance({
+    operation: "draft_content_proposal",
+    envelope,
+    pythonResult: result,
+    startedAt,
+    serviceLatencyMs,
+    featureFlag: true,
+  });
+  emitAiExecution(provenance, { workspaceId, actorUserId });
+  return {
+    status: "proposed",
+    proposal: record,
+    oldNodePathUnaffected: true,
+    provenance,
+  };
 }
 
 export async function approveAiActionProposal({

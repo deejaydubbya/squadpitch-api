@@ -5,6 +5,12 @@ import { evaluateFlag } from "../internal/config.service.js";
 import { assertCanActorPerformWorkspaceScope } from "../authorization/workspaceAuthorization.service.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
 import { callPythonAutopilotRank, AI_PLATFORM_ERROR_CODES } from "./pythonAiPlatform.client.js";
+import {
+  emitAiExecution,
+  hostedProvenance,
+  localProvenance,
+  shadowProvenance,
+} from "./executionProvenance.js";
 
 export const AUTOPILOT_ML_RANKING_SCHEMA_VERSION = "autopilot-opportunity-ranking.v1";
 export const AUTOPILOT_ML_MODEL_VERSION = "autopilot-logistic-ranker.v1";
@@ -99,6 +105,7 @@ export async function rankAutopilotOpportunities({
   featureFlagEvaluator = evaluateFlag,
   pythonClient = callPythonAutopilotRank,
 } = {}) {
+  const startedAt = Date.now();
   const actorUserId = actorId(actor);
   if (!actorUserId) {
     throw typedError(AUTOPILOT_ML_RANKING_ERROR_CODES.AUTH_REQUIRED, "Authentication required", 401);
@@ -129,12 +136,20 @@ export async function rankAutopilotOpportunities({
       userId: actorUserId,
     }));
   if (!flagEnabled) {
+    const provenance = localProvenance({
+      operation: "autopilot_rank",
+      startedAt,
+      implementation: "heuristic_autopilot_ranker_v1",
+      featureFlag: false,
+    });
+    emitAiExecution(provenance, { workspaceId, actorUserId });
     return {
       mode: "heuristic_fallback",
       rankedCandidates: heuristicOrder,
       mlRankings: null,
       oldNodePathUnaffected: true,
       reason: AUTOPILOT_ML_RANKING_ERROR_CODES.FEATURE_DISABLED,
+      provenance,
     };
   }
 
@@ -153,17 +168,53 @@ export async function rankAutopilotOpportunities({
     secret: serviceAuthSecret,
     authorizationService,
   });
+  const serviceStartedAt = Date.now();
   const result = await pythonClient({ enabled: true, baseUrl: pythonBaseUrl, timeoutMs, envelope });
+  const serviceLatencyMs = Date.now() - serviceStartedAt;
   if (!result.ok) {
+    const provenance = localProvenance({
+      operation: "autopilot_rank",
+      envelope,
+      startedAt,
+      implementation: "heuristic_autopilot_ranker_v1",
+      reason: result.errorCode,
+      attemptedHosted: true,
+      serviceLatencyMs,
+      featureFlag: true,
+    });
+    emitAiExecution(provenance, { workspaceId, actorUserId });
     return {
       mode: "heuristic_fallback",
       rankedCandidates: heuristicOrder,
       mlRankings: null,
       oldNodePathUnaffected: true,
       reason: result.errorCode ?? AUTOPILOT_ML_RANKING_ERROR_CODES.PROVIDER_UNAVAILABLE,
+      provenance,
     };
   }
-  const parsed = rankingResponseSchema.parse(result.body);
+  const parsedResult = rankingResponseSchema.safeParse(result.body);
+  if (!parsedResult.success) {
+    const provenance = localProvenance({
+      operation: "autopilot_rank",
+      envelope,
+      startedAt,
+      implementation: "heuristic_autopilot_ranker_v1",
+      reason: AI_PLATFORM_ERROR_CODES.SCHEMA_INVALID,
+      attemptedHosted: true,
+      serviceLatencyMs,
+      featureFlag: true,
+    });
+    emitAiExecution(provenance, { workspaceId, actorUserId });
+    return {
+      mode: "heuristic_fallback",
+      rankedCandidates: heuristicOrder,
+      mlRankings: null,
+      oldNodePathUnaffected: true,
+      reason: AI_PLATFORM_ERROR_CODES.SCHEMA_INVALID,
+      provenance,
+    };
+  }
+  const parsed = parsedResult.data;
   if (parsed.workspaceId !== workspaceId) {
     throw typedError(
       AUTOPILOT_ML_RANKING_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
@@ -174,10 +225,30 @@ export async function rankAutopilotOpportunities({
   const mlOrder = parsed.rankedCandidates
     .map((ranked) => parsedCandidates.find((candidate) => candidate.candidateId === ranked.candidateId))
     .filter(Boolean);
+  const provenance = shadowMode
+    ? shadowProvenance({
+        operation: "autopilot_rank",
+        envelope,
+        pythonResult: result,
+        startedAt,
+        serviceLatencyMs,
+        implementation: "heuristic_autopilot_ranker_v1",
+        featureFlag: true,
+      })
+    : hostedProvenance({
+        operation: "autopilot_rank",
+        envelope,
+        pythonResult: result,
+        startedAt,
+        serviceLatencyMs,
+        featureFlag: true,
+      });
+  emitAiExecution(provenance, { workspaceId, actorUserId });
   return {
     mode: shadowMode ? "shadow" : "ml_ranked",
     rankedCandidates: shadowMode ? heuristicOrder : mlOrder,
     mlRankings: parsed,
     oldNodePathUnaffected: shadowMode,
+    provenance,
   };
 }

@@ -148,6 +148,11 @@ describe("read-only campaign ops agent", () => {
     expect(result.status).toBe("proposal_only");
     expect(result.oldNodePathUnaffected).toBe(true);
     expect(result.proposal.proposalOnly).toBe(true);
+    expect(result.provenance).toMatchObject({
+      source: "squadpitch-ai",
+      operation: "campaign_ops_plan",
+      fallbackUsed: false,
+    });
     expect(JSON.stringify(result)).not.toMatch(/publishDraft|scheduleDraft|createCampaign/);
   });
 

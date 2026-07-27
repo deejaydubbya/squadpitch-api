@@ -356,6 +356,11 @@ export const env = {
   AI_PLATFORM_SERVICE_AUTH_KEY_ID:
     process.env.AI_PLATFORM_SERVICE_AUTH_KEY_ID ?? "primary",
   AI_PLATFORM_SERVICE_AUTH_SECRET: process.env.AI_PLATFORM_SERVICE_AUTH_SECRET,
+  APP_BUILD_SHA: process.env.APP_BUILD_SHA ?? process.env.FLY_IMAGE_REF,
+  AI_PROVENANCE_RESPONSE_HEADERS_ENABLED:
+    String(
+      process.env.AI_PROVENANCE_RESPONSE_HEADERS_ENABLED ?? "false",
+    ).toLowerCase() === "true",
   AI_RETRIEVAL_ENABLED:
     String(process.env.AI_RETRIEVAL_ENABLED ?? "false").toLowerCase() ===
     "true",

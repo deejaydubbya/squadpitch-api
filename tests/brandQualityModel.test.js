@@ -68,6 +68,11 @@ describe("brand content quality model wrapper", () => {
     expect(result.mode).toBe("deterministic_fallback");
     expect(result.reason).toBe(BRAND_QUALITY_ERROR_CODES.FEATURE_DISABLED);
     expect(result.qualityScore.proposalOnly).toBe(true);
+    expect(result.provenance).toMatchObject({
+      source: "node",
+      executionMode: "local",
+      fallbackUsed: false,
+    });
     expect(pythonClient).not.toHaveBeenCalled();
   });
 
@@ -103,6 +108,22 @@ describe("brand content quality model wrapper", () => {
     expect(result.mode).toBe("deterministic_fallback");
     expect(result.reason).toBe("PROVIDER_TIMEOUT");
     expect(result.oldNodePathUnaffected).toBe(true);
+    expect(result.provenance).toMatchObject({
+      source: "node_fallback",
+      fallbackLayer: "node",
+      fallbackReason: "timeout",
+    });
+  });
+
+  it("falls back with schema_mismatch when Python returns an invalid response", async () => {
+    const result = await scoreBrandContentQuality(
+      baseDeps({
+        pythonClient: vi.fn(async () => ({ ok: true, body: { nope: true } })),
+      }),
+    );
+
+    expect(result.mode).toBe("deterministic_fallback");
+    expect(result.provenance.fallbackReason).toBe("schema_mismatch");
   });
 
   it("signs content-score read scope and returns model output only in shadow mode", async () => {
@@ -116,6 +137,11 @@ describe("brand content quality model wrapper", () => {
     expect(result.modelScore.proposalOnly).toBe(true);
     expect(result).not.toHaveProperty("draft");
     expect(result).not.toHaveProperty("publish");
+    expect(result.provenance).toMatchObject({
+      source: "node",
+      executionMode: "shadow",
+      hostedAttempted: true,
+    });
   });
 
   it("rejects cross-workspace provider responses", async () => {

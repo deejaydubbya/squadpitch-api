@@ -13,6 +13,11 @@ import {
   requireCompatibleModel,
 } from "./modelRegistry.service.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
+import {
+  emitAiExecution,
+  localProvenance,
+  shadowProvenance,
+} from "./executionProvenance.js";
 
 export const BRAND_QUALITY_SCHEMA_VERSION = "brand-content-quality.v1";
 export const BRAND_QUALITY_MODEL_VERSION = "brand-quality-neural-shadow.v1";
@@ -221,6 +226,7 @@ export async function scoreBrandContentQuality({
   pythonClient = callPythonBrandQualityScore,
   modelRegistry = buildDefaultModelRegistry(),
 } = {}) {
+  const startedAt = Date.now();
   const actorUserId = actorId(actor);
   if (!actorUserId) {
     throw typedError(
@@ -270,12 +276,21 @@ export async function scoreBrandContentQuality({
       userId: actorUserId,
     }));
   if (!flagEnabled) {
+    const provenance = localProvenance({
+      operation: "brand_quality_score",
+      startedAt,
+      implementation: "deterministic_brand_quality_v1",
+      reason: BRAND_QUALITY_ERROR_CODES.FEATURE_DISABLED,
+      featureFlag: false,
+    });
+    emitAiExecution(provenance, { workspaceId, actorUserId });
     return {
       mode: "deterministic_fallback",
       qualityScore: localScore,
       modelScore: null,
       oldNodePathUnaffected: true,
       reason: BRAND_QUALITY_ERROR_CODES.FEATURE_DISABLED,
+      provenance,
     };
   }
 
@@ -294,13 +309,26 @@ export async function scoreBrandContentQuality({
     secret: serviceAuthSecret,
     authorizationService,
   });
+  const serviceStartedAt = Date.now();
   const result = await pythonClient({
     enabled: true,
     baseUrl: pythonBaseUrl,
     timeoutMs,
     envelope,
   });
+  const serviceLatencyMs = Date.now() - serviceStartedAt;
   if (!result.ok) {
+    const provenance = localProvenance({
+      operation: "brand_quality_score",
+      envelope,
+      startedAt,
+      implementation: "deterministic_brand_quality_v1",
+      reason: result.errorCode,
+      attemptedHosted: true,
+      serviceLatencyMs,
+      featureFlag: true,
+    });
+    emitAiExecution(provenance, { workspaceId, actorUserId });
     return {
       mode: "deterministic_fallback",
       qualityScore: localScore,
@@ -308,9 +336,32 @@ export async function scoreBrandContentQuality({
       oldNodePathUnaffected: true,
       reason:
         result.errorCode ?? BRAND_QUALITY_ERROR_CODES.PROVIDER_UNAVAILABLE,
+      provenance,
     };
   }
-  const parsedResponse = scoreResponseSchema.parse(result.body);
+  const parsedResult = scoreResponseSchema.safeParse(result.body);
+  if (!parsedResult.success) {
+    const provenance = localProvenance({
+      operation: "brand_quality_score",
+      envelope,
+      startedAt,
+      implementation: "deterministic_brand_quality_v1",
+      reason: AI_PLATFORM_ERROR_CODES.SCHEMA_INVALID,
+      attemptedHosted: true,
+      serviceLatencyMs,
+      featureFlag: true,
+    });
+    emitAiExecution(provenance, { workspaceId, actorUserId });
+    return {
+      mode: "deterministic_fallback",
+      qualityScore: localScore,
+      modelScore: null,
+      oldNodePathUnaffected: true,
+      reason: AI_PLATFORM_ERROR_CODES.SCHEMA_INVALID,
+      provenance,
+    };
+  }
+  const parsedResponse = parsedResult.data;
   if (parsedResponse.workspaceId !== workspaceId) {
     throw typedError(
       BRAND_QUALITY_ERROR_CODES.CROSS_WORKSPACE_REFERENCE,
@@ -318,10 +369,21 @@ export async function scoreBrandContentQuality({
       403,
     );
   }
+  const provenance = shadowProvenance({
+    operation: "brand_quality_score",
+    envelope,
+    pythonResult: result,
+    startedAt,
+    serviceLatencyMs,
+    implementation: "deterministic_brand_quality_v1",
+    featureFlag: true,
+  });
+  emitAiExecution(provenance, { workspaceId, actorUserId });
   return {
     mode: "shadow",
     qualityScore: localScore,
     modelScore: parsedResponse,
     oldNodePathUnaffected: true,
+    provenance,
   };
 }

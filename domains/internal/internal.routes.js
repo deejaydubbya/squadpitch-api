@@ -13,6 +13,7 @@ import * as webhooksService from "./webhooks.service.js";
 import * as systemHealthService from "./systemHealth.service.js";
 import * as configService from "./config.service.js";
 import * as aiObservabilityService from "../aiPlatform/observability.service.js";
+import { setAiProvenanceHeaders } from "../aiPlatform/executionProvenance.js";
 import * as aiExperimentationService from "../aiPlatform/experimentation.service.js";
 import { syncMetricsForDraft } from "../studio/metricsSyncService.js";
 import { prisma } from "../../prisma.js";
@@ -804,9 +805,12 @@ internalRouter.post(
         exposures: req.body?.exposures || [],
         outcomes: req.body?.outcomes || [],
         featureEnabled: true,
+        traceId: req.id,
         authorizationService: async () => ({ allowed: true }),
       });
-      res.json(report);
+      const { provenance, ...body } = report;
+      setAiProvenanceHeaders(res, provenance);
+      res.json(body);
     } catch (err) {
       next(err);
     }

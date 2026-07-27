@@ -9,6 +9,11 @@ import {
   callPythonExperimentAnalysis,
 } from "./pythonAiPlatform.client.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
+import {
+  emitAiExecution,
+  hostedProvenance,
+  localProvenance,
+} from "./executionProvenance.js";
 
 export const EXPERIMENT_ANALYSIS_SCHEMA_VERSION = "experiment-analysis.v1";
 
@@ -260,7 +265,9 @@ export async function getExperimentReport({
   timeoutMs = env.AI_PLATFORM_HEALTH_TIMEOUT_MS,
   serviceAuthKeyId = env.AI_PLATFORM_SERVICE_AUTH_KEY_ID,
   serviceAuthSecret = env.AI_PLATFORM_SERVICE_AUTH_SECRET,
+  traceId,
 } = {}) {
+  const startedAt = Date.now();
   const actorUserId = actorId(actor);
   if (!actorUserId)
     throw typedError(
@@ -282,12 +289,25 @@ export async function getExperimentReport({
       userId: actorUserId,
     }));
   if (!flagEnabled) {
-    return buildExperimentReportInterface({
+    const provenance = localProvenance({
+      operation: "experiment_analysis",
+      startedAt,
+      implementation: "deterministic_experiment_analysis_v1",
+      featureFlag: false,
+    });
+    emitAiExecution(provenance, {
+      workspaceId: parsed.workspaceId,
+      actorUserId,
+    });
+    return {
+      ...buildExperimentReportInterface({
       definition: parsed,
       exposures,
       outcomes,
       enabled: false,
-    });
+      }),
+      provenance,
+    };
   }
   assertNoCrossWorkspace(parsed, exposures, outcomes);
   const envelope = await createAuthorizedAiServiceEnvelope({
@@ -302,16 +322,33 @@ export async function getExperimentReport({
     },
     keyId: serviceAuthKeyId,
     secret: serviceAuthSecret,
+    ...(traceId ? { requestId: traceId, traceId } : {}),
     authorizationService,
     allowAdmin: true,
   });
+  const serviceStartedAt = Date.now();
   const result = await pythonClient({
     enabled: true,
     baseUrl: pythonBaseUrl,
     timeoutMs,
     envelope,
   });
+  const serviceLatencyMs = Date.now() - serviceStartedAt;
   if (!result.ok) {
+    const provenance = localProvenance({
+      operation: "experiment_analysis",
+      envelope,
+      startedAt,
+      implementation: "deterministic_experiment_analysis_v1",
+      reason: result.errorCode,
+      attemptedHosted: true,
+      serviceLatencyMs,
+      featureFlag: true,
+    });
+    emitAiExecution(provenance, {
+      workspaceId: parsed.workspaceId,
+      actorUserId,
+    });
     return {
       ...buildExperimentReportInterface({
         definition: parsed,
@@ -322,8 +359,21 @@ export async function getExperimentReport({
       analysis: null,
       status: "analysis_unavailable",
       reason: result.errorCode ?? EXPERIMENT_ERROR_CODES.PROVIDER_UNAVAILABLE,
+      provenance,
     };
   }
+  const provenance = hostedProvenance({
+    operation: "experiment_analysis",
+    envelope,
+    pythonResult: result,
+    startedAt,
+    serviceLatencyMs,
+    featureFlag: true,
+  });
+  emitAiExecution(provenance, {
+    workspaceId: parsed.workspaceId,
+    actorUserId,
+  });
   return {
     ...buildExperimentReportInterface({
       definition: parsed,
@@ -333,5 +383,6 @@ export async function getExperimentReport({
     }),
     analysis: result.body,
     status: "ok",
+    provenance,
   };
 }

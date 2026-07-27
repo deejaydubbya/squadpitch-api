@@ -7,6 +7,7 @@ import { getEffectiveTier, getSubscription } from "../billing/billing.service.js
 import { evaluateFlag } from "../internal/config.service.js";
 import { assertCanActorPerformWorkspaceScope } from "../authorization/workspaceAuthorization.service.js";
 import { callPythonCampaignOpsPlan, AI_PLATFORM_ERROR_CODES } from "./pythonAiPlatform.client.js";
+import { emitAiExecution, hostedProvenance } from "./executionProvenance.js";
 import { createAuthorizedAiServiceEnvelope } from "./serviceEnvelope.js";
 
 export const CAMPAIGN_OPS_AGENT_ALLOWED_SCOPES = Object.freeze(["campaign-plan:read"]);
@@ -215,6 +216,7 @@ export async function generateCampaignOpsAgentPreview({
   objective,
   sourceId,
   requestedScopes,
+  traceId,
   featureEnabled = env.AI_CAMPAIGN_OPS_AGENT_ENABLED,
   pythonBaseUrl = env.AI_PLATFORM_INTERNAL_BASE_URL,
   timeoutMs = env.AI_PLATFORM_HEALTH_TIMEOUT_MS,
@@ -228,6 +230,7 @@ export async function generateCampaignOpsAgentPreview({
   snapshotBuilder = buildCampaignOpsSnapshot,
   pythonClient = callPythonCampaignOpsPlan,
 } = {}) {
+  const startedAt = Date.now();
   const actorUserId = actorId(actor);
   if (!actorUserId) {
     throw typedError(CAMPAIGN_OPS_AGENT_ERROR_CODES.AUTH_REQUIRED, "Authentication required", 401);
@@ -275,15 +278,18 @@ export async function generateCampaignOpsAgentPreview({
     },
     keyId: serviceAuthKeyId,
     secret: serviceAuthSecret,
+    ...(traceId ? { requestId: traceId, traceId } : {}),
     authorizationService,
   });
 
+  const serviceStartedAt = Date.now();
   const result = await pythonClient({
     enabled: true,
     baseUrl: pythonBaseUrl,
     timeoutMs,
     envelope,
   });
+  const serviceLatencyMs = Date.now() - serviceStartedAt;
   if (!result.ok) {
     throw typedError(
       result.errorCode ?? CAMPAIGN_OPS_AGENT_ERROR_CODES.PROVIDER_UNAVAILABLE,
@@ -305,10 +311,20 @@ export async function generateCampaignOpsAgentPreview({
       422,
     );
   }
+  const provenance = hostedProvenance({
+    operation: "campaign_ops_plan",
+    envelope,
+    pythonResult: result,
+    startedAt,
+    serviceLatencyMs,
+    featureFlag: true,
+  });
+  emitAiExecution(provenance, { workspaceId, actorUserId });
   return {
     status: "proposal_only",
     benchmarkAgainst: "node_campaign_generation",
     oldNodePathUnaffected: true,
     proposal: parsed,
+    provenance,
   };
 }

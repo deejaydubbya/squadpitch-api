@@ -114,6 +114,7 @@ describe("Autopilot ML ranking wrapper", () => {
     expect(result.oldNodePathUnaffected).toBe(true);
     expect(result.rankedCandidates.map((item) => item.candidateId)).toEqual(["c1", "c2"]);
     expect(result.mlRankings.rankedCandidates[0].candidateId).toBe("c2");
+    expect(result.provenance.executionMode).toBe("shadow");
   });
 
   it("uses ML order only when explicitly not shadowing", async () => {
@@ -123,6 +124,7 @@ describe("Autopilot ML ranking wrapper", () => {
 
     expect(result.mode).toBe("ml_ranked");
     expect(result.rankedCandidates.map((item) => item.candidateId)).toEqual(["c2", "c1"]);
+    expect(result.provenance.source).toBe("squadpitch-ai");
   });
 
   it("rejects model version mismatch and cross-workspace candidates before Python call", async () => {

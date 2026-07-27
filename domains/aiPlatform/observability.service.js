@@ -282,19 +282,25 @@ function summarizeOperations(traces) {
         "HIGH_EDIT_DISTANCE",
       ].map((code) => [code, byErrorCode[code] || 0])),
     },
-    tracePointers: traces.slice(0, 50).map((trace) => ({
-      traceId: trace.traceId,
-      requestId: trace.requestId,
-      workspaceId: trace.clientId,
-      taskType: trace.taskType,
-      status: trace.status,
-      errorCode: trace.errorCode,
-      provider: trace.provider,
-      model: trace.model,
-      promptVersion: trace.promptVersion,
-      releaseGateStage: trace.releaseGateStage,
-      createdAt: trace.createdAt,
-    })),
+    tracePointers: traces.slice(0, 50).map((trace) => {
+      const provenance = Array.isArray(trace.steps)
+        ? trace.steps.find((step) => step?.type === "execution_provenance")
+        : null;
+      return {
+        traceId: trace.traceId,
+        requestId: trace.requestId,
+        workspaceId: trace.clientId,
+        taskType: trace.taskType,
+        status: trace.status,
+        errorCode: trace.errorCode,
+        provider: trace.provider,
+        model: trace.model,
+        promptVersion: trace.promptVersion,
+        releaseGateStage: trace.releaseGateStage,
+        createdAt: trace.createdAt,
+        provenance: provenance ? redactAiTraceValue(provenance) : null,
+      };
+    }),
     rollbackControls: {
       aiActionProposals: "Disable ai_action_proposals_enabled and AI_ACTION_PROPOSALS_ENABLED",
       campaignOpsAgent: "Disable ai_campaign_ops_agent_enabled and AI_CAMPAIGN_OPS_AGENT_ENABLED",
