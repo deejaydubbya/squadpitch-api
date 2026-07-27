@@ -43,7 +43,8 @@ export function productionVerificationOperations({
       key: "campaign_ops",
       name: "Campaign Ops",
       execute: async (workspaceId, traceId) => {
-        const objective = "Create a safe read-only verification campaign plan.";
+        const objective =
+          "Create a safe read-only campaign plan with professional, locally informed market guidance.";
         const result = await campaignOps({
           actor: VERIFY_ACTOR,
           workspaceId,
