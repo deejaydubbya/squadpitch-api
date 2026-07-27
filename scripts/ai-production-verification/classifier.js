@@ -12,6 +12,7 @@ export function classifyAiVerification({
   provenance,
   latencyMs,
   message,
+  diagnostics,
 }) {
   const source = provenance?.source ?? null;
   const fallbackUsed = provenance?.fallbackUsed === true;
@@ -53,6 +54,7 @@ export function classifyAiVerification({
     traceId: provenance?.traceId ?? null,
     latencyMs: provenance?.totalLatencyMs ?? latencyMs ?? null,
     usableResult: usableResult === true,
+    diagnostics: sanitizeDiagnostics(diagnostics),
     message: sanitizeMessage(message),
   };
 }
@@ -87,4 +89,18 @@ function sanitizeMessage(message) {
     .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
     .replace(/(token|secret|password)=\S+/gi, "$1=[REDACTED]")
     .slice(0, 240);
+}
+
+function sanitizeDiagnostics(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    workspaceId:
+      typeof value.workspaceId === "string" ? value.workspaceId : null,
+    proposalType:
+      typeof value.proposalType === "string" ? value.proposalType : null,
+    schemaVersion:
+      typeof value.schemaVersion === "string" ? value.schemaVersion : null,
+    dryRun: value.dryRun === true,
+    persistence: value.persistence === true,
+  };
 }

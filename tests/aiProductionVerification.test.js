@@ -203,6 +203,54 @@ describe("AI production verification classification", () => {
 });
 
 describe("AI production verification orchestration", () => {
+  it("classifies the real non-persisting Action Proposal operation as hosted", async () => {
+    const actionProposal = vi.fn(async ({ workspaceId }) => ({
+      status: "dry_run",
+      dryRun: true,
+      persistence: false,
+      proposal: {
+        schemaVersion: "draft-content-proposal.v1",
+        proposalType: "draft_content",
+        workspaceId,
+        proposalOnly: true,
+      },
+      provenance: {
+        source: "squadpitch-ai",
+        fallbackUsed: false,
+        implementation: "draft_content_proposal_v1",
+      },
+    }));
+    const operation = productionVerificationOperations({
+      actionProposal,
+    }).find((item) => item.key === "action_proposal");
+    const raw = await operation.execute("workspace-a", "trace-action");
+    const classified = classifyAiVerification({
+      operation: operation.key,
+      name: operation.name,
+      latencyMs: 12,
+      ...raw,
+    });
+
+    expect(actionProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: "workspace-a",
+        traceId: "trace-action",
+        featureEnabled: true,
+      }),
+    );
+    expect(classified).toMatchObject({
+      status: "PASS",
+      source: "squadpitch-ai",
+      diagnostics: {
+        workspaceId: "workspace-a",
+        proposalType: "draft_content",
+        schemaVersion: "draft-content-proposal.v1",
+        dryRun: true,
+        persistence: false,
+      },
+    });
+  });
+
   it("classifies the real retrieval verification operation as hosted even when empty", async () => {
     const retrieval = vi.fn(async ({ workspaceId }) => ({
       workspaceId,

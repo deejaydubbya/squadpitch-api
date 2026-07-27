@@ -336,13 +336,14 @@ export async function validateDraftContentProposal({
   };
 }
 
-export async function createDraftContentProposal({
+export async function generateDraftContentProposal({
   actor,
   workspaceId,
   objective,
   requestedChannels = [],
   sourceId,
   idempotencyKey,
+  traceId,
   featureEnabled = env.AI_ACTION_PROPOSALS_ENABLED,
   pythonBaseUrl = env.AI_PLATFORM_INTERNAL_BASE_URL,
   timeoutMs = env.AI_PLATFORM_HEALTH_TIMEOUT_MS,
@@ -355,6 +356,8 @@ export async function createDraftContentProposal({
   effectiveTierResolver = getEffectiveTier,
   snapshotBuilder = buildCampaignOpsSnapshot,
   pythonClient = callPythonDraftContentProposal,
+  skipReferenceChecks = false,
+  beforeGeneration,
 } = {}) {
   const startedAt = Date.now();
   const actorUserId = actorId(actor);
@@ -379,22 +382,7 @@ export async function createDraftContentProposal({
     subscriptionFetcher,
     effectiveTierResolver,
   });
-
-  const existing = await prismaClient.aiActionProposal.findUnique({
-    where: {
-      clientId_idempotencyKey: { clientId: workspaceId, idempotencyKey },
-    },
-  });
-  if (existing) {
-    throw typedError(
-      AI_ACTION_PROPOSAL_ERROR_CODES.DUPLICATE_IDEMPOTENCY_KEY,
-      "Duplicate proposal idempotency key",
-      409,
-      {
-        proposalId: existing.id,
-      },
-    );
-  }
+  await beforeGeneration?.();
 
   const snapshot = await snapshotBuilder({
     workspaceId,
@@ -416,6 +404,7 @@ export async function createDraftContentProposal({
     },
     keyId: serviceAuthKeyId,
     secret: serviceAuthSecret,
+    ...(traceId ? { requestId: traceId, traceId } : {}),
     authorizationService,
   });
   const serviceStartedAt = Date.now();
@@ -441,8 +430,56 @@ export async function createDraftContentProposal({
     proposal,
     workspaceId,
     prismaClient,
+    skipReferenceChecks,
   });
-  const proposalPayload = normalizeProposalPayload(proposal);
+  const provenance = hostedProvenance({
+    operation: "draft_content_proposal",
+    envelope,
+    pythonResult: result,
+    startedAt,
+    serviceLatencyMs,
+    featureFlag: true,
+  });
+  emitAiExecution(provenance, { workspaceId, actorUserId });
+  return {
+    actorUserId,
+    proposal,
+    proposalPayload: normalizeProposalPayload(proposal),
+    validationResults,
+    provenance,
+  };
+}
+
+export async function createDraftContentProposal(options = {}) {
+  const { prismaClient = prisma, workspaceId, idempotencyKey } = options;
+  const generated = await generateDraftContentProposal({
+    ...options,
+    prismaClient,
+    beforeGeneration: async () => {
+      const existing = await prismaClient.aiActionProposal.findUnique({
+        where: {
+          clientId_idempotencyKey: { clientId: workspaceId, idempotencyKey },
+        },
+      });
+      if (existing) {
+        throw typedError(
+          AI_ACTION_PROPOSAL_ERROR_CODES.DUPLICATE_IDEMPOTENCY_KEY,
+          "Duplicate proposal idempotency key",
+          409,
+          {
+            proposalId: existing.id,
+          },
+        );
+      }
+    },
+  });
+  const {
+    actorUserId,
+    proposal,
+    proposalPayload,
+    validationResults,
+    provenance,
+  } = generated;
   const contentHash = contentHashForProposalPayload(proposalPayload);
   const record = await prismaClient.aiActionProposal.create({
     data: {
@@ -474,20 +511,26 @@ export async function createDraftContentProposal({
       },
     },
   });
-  const provenance = hostedProvenance({
-    operation: "draft_content_proposal",
-    envelope,
-    pythonResult: result,
-    startedAt,
-    serviceLatencyMs,
-    featureFlag: true,
-  });
-  emitAiExecution(provenance, { workspaceId, actorUserId });
   return {
     status: "proposed",
     proposal: record,
     oldNodePathUnaffected: true,
     provenance,
+  };
+}
+
+export async function generateDraftContentProposalDryRun(options = {}) {
+  const generated = await generateDraftContentProposal({
+    ...options,
+    skipReferenceChecks: true,
+  });
+  return {
+    status: "dry_run",
+    proposal: generated.proposal,
+    validationResults: generated.validationResults,
+    dryRun: true,
+    persistence: false,
+    provenance: generated.provenance,
   };
 }
 

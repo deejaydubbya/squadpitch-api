@@ -1,4 +1,5 @@
 import { generateCampaignOpsAgentPreview } from "./campaignOpsAgent.service.js";
+import { generateDraftContentProposalDryRun } from "./aiActionProposal.service.js";
 import { rankAutopilotOpportunities } from "./autopilotMlRanking.service.js";
 import { scoreBrandContentQuality } from "./brandQualityModel.service.js";
 import { queryWorkspaceRetrieval } from "./retrievalQuery.service.js";
@@ -37,6 +38,7 @@ export function productionVerificationOperations({
   autopilot = rankAutopilotOpportunities,
   brandQuality = scoreBrandContentQuality,
   retrieval = queryWorkspaceRetrieval,
+  actionProposal = generateDraftContentProposalDryRun,
 } = {}) {
   return [
     {
@@ -127,6 +129,64 @@ export function productionVerificationOperations({
       },
     },
     {
+      key: "action_proposal",
+      name: "Action Proposal",
+      execute: async (workspaceId, traceId) => {
+        const objective =
+          "Draft an Instagram listing post for 123 Verification Avenue using approved property facts.";
+        const result = await actionProposal({
+          actor: VERIFY_ACTOR,
+          workspaceId,
+          objective,
+          requestedChannels: ["INSTAGRAM"],
+          idempotencyKey: `production-verification:${traceId}`,
+          traceId,
+          featureEnabled: true,
+          authorizationService: allowReadOnlyVerification,
+          featureFlagEvaluator: async () => true,
+          subscriptionFetcher: async () => ({ status: "ACTIVE", tier: "PRO" }),
+          effectiveTierResolver: () => "PRO",
+          snapshotBuilder: async () => ({
+            workspaceId,
+            objective,
+            items: [
+              {
+                sourceType: "property_listing",
+                sourceId: "production-verification-property",
+                title: "123 Verification Avenue",
+                text: "123 Verification Avenue is listed for $425,000 with 3 bedrooms and 2 bathrooms.",
+                contentHash:
+                  "sha256:9dd0aa0d083244ceeb89a4c3c25fef9d2921daeb08f34ece307f69e2c5a4a81a",
+                trust: "authoritative",
+                language: "en",
+              },
+            ],
+            media: [],
+            calendar: [],
+            approvalPolicy: { requiresHumanApproval: true },
+            allowedChannels: ["INSTAGRAM"],
+          }),
+        });
+        return {
+          usableResult:
+            result?.status === "dry_run" &&
+            result?.dryRun === true &&
+            result?.persistence === false &&
+            result?.proposal?.proposalOnly === true &&
+            result?.proposal?.proposalType === "draft_content" &&
+            result?.proposal?.workspaceId === workspaceId,
+          provenance: result?.provenance,
+          diagnostics: {
+            workspaceId,
+            proposalType: result?.proposal?.proposalType ?? null,
+            schemaVersion: result?.proposal?.schemaVersion ?? null,
+            dryRun: result?.dryRun === true,
+            persistence: result?.persistence === true,
+          },
+        };
+      },
+    },
+    {
       key: "autopilot_ranking",
       name: "Autopilot Ranking",
       execute: async (workspaceId) => {
@@ -198,6 +258,7 @@ export async function runProductionAiVerification({
         name: operation.name,
         usableResult: result?.usableResult === true,
         provenance: result?.provenance ?? null,
+        diagnostics: result?.diagnostics ?? null,
         latencyMs: Date.now() - startedAt,
         message:
           result?.usableResult === true
@@ -219,13 +280,7 @@ export async function runProductionAiVerification({
     environment: process.env.NODE_ENV ?? "unknown",
     generatedAt: new Date().toISOString(),
     results,
-    skipped: [
-      {
-        operation: "action_proposal",
-        name: "Action Proposal",
-        reason: "The current operation persists a proposal record",
-      },
-    ],
+    skipped: [],
   };
 }
 

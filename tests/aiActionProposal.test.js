@@ -5,6 +5,7 @@ import {
   approveAiActionProposal,
   contentHashForProposalPayload,
   createDraftContentProposal,
+  generateDraftContentProposalDryRun,
   rejectAiActionProposal,
   validateDraftContentProposal,
 } from "../domains/aiPlatform/aiActionProposal.service.js";
@@ -145,6 +146,89 @@ function baseCreateDeps(overrides = {}) {
 }
 
 describe("AI action proposals", () => {
+  it("executes the hosted dry-run without persistence or downstream mutations", async () => {
+    const create = vi.fn();
+    const update = vi.fn();
+    const transaction = vi.fn();
+    const draftCreate = vi.fn();
+    const pythonClient = vi.fn(async () => ({
+      ok: true,
+      body: {
+        ...validProposal({ expiresAt: "2027-07-23T12:00:00.000Z" }),
+        provenance: {
+          implementation: "draft_content_proposal_v1",
+          fallbackUsed: false,
+          traceId: "python-trace-1",
+        },
+      },
+    }));
+    const result = await generateDraftContentProposalDryRun(
+      baseCreateDeps({
+        traceId: "verification-trace",
+        pythonClient,
+        prismaClient: {
+          aiActionProposal: { create, update },
+          draft: { create: draftCreate },
+          $transaction: transaction,
+        },
+      }),
+    );
+
+    expect(pythonClient.mock.calls[0][0].envelope).toMatchObject({
+      traceId: "verification-trace",
+      workspaceId: "workspace-a",
+      scopes: ["campaign-plan:read"],
+    });
+    expect(result).toMatchObject({
+      status: "dry_run",
+      dryRun: true,
+      persistence: false,
+      proposal: { proposalType: "draft_content", proposalOnly: true },
+      provenance: {
+        source: "squadpitch-ai",
+        fallbackUsed: false,
+        implementation: "draft_content_proposal_v1",
+      },
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(draftCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthorized dry-runs before hosted execution", async () => {
+    const pythonClient = vi.fn();
+    await expect(
+      generateDraftContentProposalDryRun(
+        baseCreateDeps({ actor: null, pythonClient }),
+      ),
+    ).rejects.toMatchObject({
+      code: AI_ACTION_PROPOSAL_ERROR_CODES.AUTH_REQUIRED,
+    });
+    expect(pythonClient).not.toHaveBeenCalled();
+  });
+
+  it("keeps normal proposal creation persistent", async () => {
+    const input = baseCreateDeps({
+      pythonClient: vi.fn(async () => ({
+        ok: true,
+        body: {
+          ...validProposal({ expiresAt: "2027-07-23T12:00:00.000Z" }),
+          provenance: {
+            implementation: "draft_content_proposal_v1",
+            fallbackUsed: false,
+          },
+        },
+      })),
+    });
+    const result = await createDraftContentProposal(input);
+    expect(input.prismaClient.aiActionProposal.create).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: "proposed",
+      proposal: { id: "proposal-1" },
+    });
+  });
+
   it("rejects duplicate idempotency keys before Python call", async () => {
     const pythonClient = vi.fn();
     await expect(
