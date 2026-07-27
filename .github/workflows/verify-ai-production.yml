@@ -1,0 +1,52 @@
+name: Verify AI Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: Fail when any fallback warning occurs
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SQUADPITCH_VERIFY_BASE_URL: ${{ secrets.SQUADPITCH_VERIFY_BASE_URL }}
+      SQUADPITCH_VERIFY_TOKEN: ${{ secrets.SQUADPITCH_VERIFY_TOKEN }}
+      SQUADPITCH_VERIFY_WORKSPACE_ID: ${{ secrets.SQUADPITCH_VERIFY_WORKSPACE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify deployed AI
+        shell: bash
+        run: |
+          set +e
+          STRICT_ARG=""
+          if [ "${{ inputs.strict }}" = "true" ]; then STRICT_ARG="--strict"; fi
+          npm run verify:ai-production -- --json $STRICT_ARG | tee ai-production-verification.json
+          VERIFY_EXIT=${PIPESTATUS[0]}
+          echo "VERIFY_EXIT=$VERIFY_EXIT" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-production-verification
+          path: ai-production-verification.json
+          if-no-files-found: error
+
+      - name: Preserve verifier exit semantics
+        if: always()
+        shell: bash
+        run: exit "${VERIFY_EXIT:-1}"

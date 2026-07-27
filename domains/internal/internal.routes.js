@@ -50,6 +50,38 @@ internalRouter.get(`${BASE}/me`, (req, res) => {
   res.json(service.getUserWithRoles(req.user, req.roles));
 });
 
+// Read-only, synthetic hosted-AI verification. This route never publishes,
+// creates drafts, invokes integrations, or persists verification fixtures.
+internalRouter.post(
+  `${BASE}/ai/production-verification`,
+  async (req, res, next) => {
+    try {
+      const workspaceId =
+        typeof req.body?.workspaceId === "string"
+          ? req.body.workspaceId.trim()
+          : "";
+      if (!workspaceId || workspaceId.length > 128) {
+        return sendError(
+          res,
+          400,
+          "INVALID_WORKSPACE_ID",
+          "A valid verification workspaceId is required",
+        );
+      }
+      const { runProductionAiVerification } = await import(
+        "../aiPlatform/productionVerification.service.js"
+      );
+      const result = await runProductionAiVerification({
+        workspaceId,
+        requestTraceId: req.id,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // ── Workspace Inspector ──────────────────────────────────────────────────
 
 internalRouter.get(`${BASE}/workspaces`, async (req, res, next) => {
