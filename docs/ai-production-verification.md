@@ -48,7 +48,7 @@ npm run verify:ai-production
 Machine-readable output:
 
 ```bash
-npm run verify:ai-production -- --json
+npm run --silent verify:ai-production -- --json
 ```
 
 Strict mode:
