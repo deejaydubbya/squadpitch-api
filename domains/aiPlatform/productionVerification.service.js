@@ -154,9 +154,9 @@ export function productionVerificationOperations({
                 sourceType: "property_listing",
                 sourceId: "production-verification-property",
                 title: "123 Verification Avenue",
-                text: "123 Verification Avenue is listed for $425,000 with 3 bedrooms and 2 bathrooms.",
+                text: "Address: 123 Verification Avenue. Price: $425,000. Bedrooms: 3. Bathrooms: 2.",
                 contentHash:
-                  "sha256:9dd0aa0d083244ceeb89a4c3c25fef9d2921daeb08f34ece307f69e2c5a4a81a",
+                  "sha256:46828f1a128cbaa4c139d32de094e2b3583bbfae7d62409edc14d2966256cb8a",
                 trust: "authoritative",
                 language: "en",
               },
