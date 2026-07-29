@@ -31,6 +31,7 @@ import { sendThreadsReply } from "./inbox.outbound.threads.service.js";
 import { sendFacebookCommentReply } from "./inbox.outbound.facebook.service.js";
 import { sendInstagramCommentReply } from "./inbox.outbound.instagram.service.js";
 import { sendInboxSms } from "./inbox.outbound.sms.service.js";
+import { isStopRequest, twilioDeliveryFailure } from "./twilioSafety.js";
 
 export const inboxRouter = express.Router();
 
@@ -53,7 +54,13 @@ function handleServiceError(res, err, next) {
 // across providers. Body content is deliberately omitted — only
 // the channel + outcome + ids are recorded (the Message row
 // already preserves the body if anyone needs to inspect later).
-async function auditOutboundAttempt(req, kind, conversationId, outcome, extras = {}) {
+async function auditOutboundAttempt(
+  req,
+  kind,
+  conversationId,
+  outcome,
+  extras = {},
+) {
   await writeAudit(req, {
     action: `inbox.outbound.${kind}.${outcome}`,
     resourceType: "Conversation",
@@ -75,7 +82,10 @@ inboxRouter.get(
     try {
       const parsed = ListConversationsQuerySchema.safeParse(req.query);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const result = await service.listConversations(req.params.id, parsed.data);
+      const result = await service.listConversations(
+        req.params.id,
+        parsed.data,
+      );
       res.json(result);
     } catch (err) {
       next(err);
@@ -93,7 +103,12 @@ inboxRouter.get(
         req.params.conversationId,
       );
       if (!conversation) {
-        return sendError(res, 404, "CONVERSATION_NOT_FOUND", "Conversation not found");
+        return sendError(
+          res,
+          404,
+          "CONVERSATION_NOT_FOUND",
+          "Conversation not found",
+        );
       }
       res.json({ conversation });
     } catch (err) {
@@ -227,12 +242,19 @@ inboxRouter.post(
       // duplicate provider send. Falls through to a normal send
       // when missing — older clients still work.
       const idempotencyKey =
-        typeof req.headers["idempotency-key"] === "string" && req.headers["idempotency-key"].trim()
+        typeof req.headers["idempotency-key"] === "string" &&
+        req.headers["idempotency-key"].trim()
           ? req.headers["idempotency-key"].trim().slice(0, 128)
           : null;
-      await auditOutboundAttempt(req, "email", req.params.conversationId, "attempt", {
-        fromSuggestionId: parsed.data.fromSuggestionId ?? null,
-      });
+      await auditOutboundAttempt(
+        req,
+        "email",
+        req.params.conversationId,
+        "attempt",
+        {
+          fromSuggestionId: parsed.data.fromSuggestionId ?? null,
+        },
+      );
       let message;
       try {
         message = await sendInboxEmail(
@@ -242,16 +264,28 @@ inboxRouter.post(
           { ...parsed.data, idempotencyKey },
         );
       } catch (sendErr) {
-        await auditOutboundAttempt(req, "email", req.params.conversationId, "failure", {
-          errorCode: sendErr?.code ?? null,
-          errorStatus: sendErr?.status ?? null,
-        });
+        await auditOutboundAttempt(
+          req,
+          "email",
+          req.params.conversationId,
+          "failure",
+          {
+            errorCode: sendErr?.code ?? null,
+            errorStatus: sendErr?.status ?? null,
+          },
+        );
         throw sendErr;
       }
-      await auditOutboundAttempt(req, "email", req.params.conversationId, "success", {
-        messageId: message.id,
-        providerMessageId: message.providerMessageId ?? null,
-      });
+      await auditOutboundAttempt(
+        req,
+        "email",
+        req.params.conversationId,
+        "success",
+        {
+          messageId: message.id,
+          providerMessageId: message.providerMessageId ?? null,
+        },
+      );
       // spinstr15 — when the user fired the send with an AI
       // suggestion attached, audit the acceptance explicitly so
       // analytics can tell "drafted" from "drafted + sent".
@@ -299,7 +333,12 @@ inboxRouter.post(
         req.headers["idempotency-key"].trim()
           ? req.headers["idempotency-key"].trim().slice(0, 128)
           : null;
-      await auditOutboundAttempt(req, "sms", req.params.conversationId, "attempt");
+      await auditOutboundAttempt(
+        req,
+        "sms",
+        req.params.conversationId,
+        "attempt",
+      );
       let message;
       try {
         message = await sendInboxSms(
@@ -309,16 +348,28 @@ inboxRouter.post(
           { body, idempotencyKey },
         );
       } catch (sendErr) {
-        await auditOutboundAttempt(req, "sms", req.params.conversationId, "failure", {
-          errorCode: sendErr?.code ?? null,
-          errorStatus: sendErr?.status ?? null,
-        });
+        await auditOutboundAttempt(
+          req,
+          "sms",
+          req.params.conversationId,
+          "failure",
+          {
+            errorCode: sendErr?.code ?? null,
+            errorStatus: sendErr?.status ?? null,
+          },
+        );
         throw sendErr;
       }
-      await auditOutboundAttempt(req, "sms", req.params.conversationId, "success", {
-        messageId: message.id,
-        providerMessageId: message.providerMessageId ?? null,
-      });
+      await auditOutboundAttempt(
+        req,
+        "sms",
+        req.params.conversationId,
+        "success",
+        {
+          messageId: message.id,
+          providerMessageId: message.providerMessageId ?? null,
+        },
+      );
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
@@ -347,7 +398,10 @@ inboxRouter.post(
 // an urlencoded parser scoped to JUST this route. extended:false
 // keeps the parsed shape flat (Twilio params are all top-level
 // strings — From, Body, MessageSid, etc.).
-const twilioWebhookBody = express.urlencoded({ extended: false, limit: "256kb" });
+const twilioWebhookBody = express.urlencoded({
+  extended: false,
+  limit: "256kb",
+});
 
 inboxRouter.post(
   `${BASE}/inbox/webhooks/twilio/inbound`,
@@ -385,7 +439,10 @@ inboxRouter.post(
         req.body ?? {},
       );
     } catch (err) {
-      console.error("[INBOX_INBOUND_SMS] signature verify threw:", err?.message);
+      console.error(
+        "[INBOX_INBOUND_SMS] signature verify threw:",
+        err?.message,
+      );
       valid = false;
     }
     if (!valid) {
@@ -399,27 +456,23 @@ inboxRouter.post(
 
     try {
       const from = typeof req.body?.From === "string" ? req.body.From : null;
-      const text = typeof req.body?.Body === "string" ? req.body.Body : "";
-      const cmd = text.trim().toUpperCase();
-      if (from && (cmd === "STOP" || cmd === "STOPALL" || cmd === "UNSUBSCRIBE" || cmd === "CANCEL" || cmd === "END" || cmd === "QUIT")) {
+      if (from && isStopRequest(req.body)) {
         const { prisma } = await import("../../prisma.js");
         const contacts = await prisma.contact.findMany({
           where: { phone: from },
           select: { id: true, enrichmentJson: true },
         });
         for (const c of contacts) {
-          await prisma.contact
-            .update({
-              where: { id: c.id },
-              data: {
-                enrichmentJson: {
-                  ...(c.enrichmentJson ?? {}),
-                  smsOptOut: true,
-                  smsOptOutAt: new Date().toISOString(),
-                },
+          await prisma.contact.update({
+            where: { id: c.id },
+            data: {
+              enrichmentJson: {
+                ...(c.enrichmentJson ?? {}),
+                smsOptOut: true,
+                smsOptOutAt: new Date().toISOString(),
               },
-            })
-            .catch(() => {});
+            },
+          });
         }
         console.log("[INBOX_INBOUND_SMS] STOP recorded:", {
           from,
@@ -431,11 +484,79 @@ inboxRouter.post(
       // Advanced Opt-Out emits the standard "You've been
       // unsubscribed" automatically.
       res.set("Content-Type", "text/xml");
-      res.status(200).send("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>");
+      res
+        .status(200)
+        .send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     } catch (err) {
       console.error("[INBOX_INBOUND_SMS] webhook error:", err?.message);
       res.set("Content-Type", "text/xml");
-      res.status(200).send("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>");
+      res
+        .status(500)
+        .send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    }
+  },
+);
+
+inboxRouter.post(
+  `${BASE}/inbox/webhooks/twilio/status`,
+  twilioWebhookBody,
+  async (req, res) => {
+    const { env } = await import("../../config/env.js");
+    const signature = req.get?.("x-twilio-signature") ?? null;
+    if (!signature || !env.TWILIO_AUTH_TOKEN) {
+      return sendError(
+        res,
+        403,
+        "INVALID_SIGNATURE",
+        "Invalid Twilio signature.",
+      );
+    }
+    try {
+      const twilio = await import("twilio");
+      const valid = twilio.default.validateRequest(
+        env.TWILIO_AUTH_TOKEN,
+        signature,
+        env.TWILIO_STATUS_CALLBACK_URL,
+        req.body ?? {},
+      );
+      if (!valid) {
+        return sendError(
+          res,
+          403,
+          "INVALID_SIGNATURE",
+          "Invalid Twilio signature.",
+        );
+      }
+
+      const sid =
+        typeof req.body?.MessageSid === "string" ? req.body.MessageSid : null;
+      if (
+        sid &&
+        (!req.body?.AccountSid ||
+          req.body.AccountSid === env.TWILIO_ACCOUNT_SID) &&
+        twilioDeliveryFailure(req.body?.MessageStatus)
+      ) {
+        const { prisma } = await import("../../prisma.js");
+        await prisma.message.updateMany({
+          where: {
+            providerMessageId: sid,
+            channel: "SMS",
+            deliveryStatus: { not: "FAILED" },
+          },
+          data: {
+            deliveryStatus: "FAILED",
+            errorReason: req.body?.ErrorCode
+              ? `Twilio delivery failure ${req.body.ErrorCode}`
+              : "Twilio reported delivery failure",
+          },
+        });
+      }
+      return res.status(204).send();
+    } catch (err) {
+      console.error("[INBOX_SMS_STATUS] processing failed", {
+        errorName: err?.name,
+      });
+      return res.status(500).send();
     }
   },
 );
@@ -465,7 +586,12 @@ inboxRouter.post(
         req.headers["idempotency-key"].trim()
           ? req.headers["idempotency-key"].trim().slice(0, 128)
           : null;
-      await auditOutboundAttempt(req, "review_reply", req.params.conversationId, "attempt");
+      await auditOutboundAttempt(
+        req,
+        "review_reply",
+        req.params.conversationId,
+        "attempt",
+      );
       let message;
       try {
         message = await sendGbpReviewReply(
@@ -475,15 +601,27 @@ inboxRouter.post(
           { body, idempotencyKey },
         );
       } catch (sendErr) {
-        await auditOutboundAttempt(req, "review_reply", req.params.conversationId, "failure", {
-          errorCode: sendErr?.code ?? null,
-          errorStatus: sendErr?.status ?? null,
-        });
+        await auditOutboundAttempt(
+          req,
+          "review_reply",
+          req.params.conversationId,
+          "failure",
+          {
+            errorCode: sendErr?.code ?? null,
+            errorStatus: sendErr?.status ?? null,
+          },
+        );
         throw sendErr;
       }
-      await auditOutboundAttempt(req, "review_reply", req.params.conversationId, "success", {
-        messageId: message.id,
-      });
+      await auditOutboundAttempt(
+        req,
+        "review_reply",
+        req.params.conversationId,
+        "success",
+        {
+          messageId: message.id,
+        },
+      );
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
@@ -531,7 +669,12 @@ inboxRouter.post(
         select: { provider: true },
       });
       if (!conv) {
-        return sendError(res, 404, "CONVERSATION_NOT_FOUND", "Conversation not found");
+        return sendError(
+          res,
+          404,
+          "CONVERSATION_NOT_FOUND",
+          "Conversation not found",
+        );
       }
       const auditKind =
         conv.provider === "YOUTUBE"
@@ -543,7 +686,12 @@ inboxRouter.post(
               : conv.provider === "INSTAGRAM"
                 ? "instagram_comment"
                 : "comment_reply";
-      await auditOutboundAttempt(req, auditKind, req.params.conversationId, "attempt");
+      await auditOutboundAttempt(
+        req,
+        auditKind,
+        req.params.conversationId,
+        "attempt",
+      );
       let message;
       try {
         if (conv.provider === "YOUTUBE") {
@@ -575,10 +723,16 @@ inboxRouter.post(
             { body, idempotencyKey },
           );
         } else {
-          await auditOutboundAttempt(req, auditKind, req.params.conversationId, "failure", {
-            errorCode: "PROVIDER_NOT_AVAILABLE",
-            errorStatus: 412,
-          });
+          await auditOutboundAttempt(
+            req,
+            auditKind,
+            req.params.conversationId,
+            "failure",
+            {
+              errorCode: "PROVIDER_NOT_AVAILABLE",
+              errorStatus: 412,
+            },
+          );
           return sendError(
             res,
             412,
@@ -587,15 +741,27 @@ inboxRouter.post(
           );
         }
       } catch (sendErr) {
-        await auditOutboundAttempt(req, auditKind, req.params.conversationId, "failure", {
-          errorCode: sendErr?.code ?? null,
-          errorStatus: sendErr?.status ?? null,
-        });
+        await auditOutboundAttempt(
+          req,
+          auditKind,
+          req.params.conversationId,
+          "failure",
+          {
+            errorCode: sendErr?.code ?? null,
+            errorStatus: sendErr?.status ?? null,
+          },
+        );
         throw sendErr;
       }
-      await auditOutboundAttempt(req, auditKind, req.params.conversationId, "success", {
-        messageId: message.id,
-      });
+      await auditOutboundAttempt(
+        req,
+        auditKind,
+        req.params.conversationId,
+        "success",
+        {
+          messageId: message.id,
+        },
+      );
       res.status(201).json({ message });
     } catch (err) {
       handleServiceError(res, err, next);
@@ -631,9 +797,8 @@ inboxRouter.post(
           "Connect a Google Business Profile location first.",
         );
       }
-      const { pollGbpReviewsForConnection } = await import(
-        "./gbpReviewPoller.service.js"
-      );
+      const { pollGbpReviewsForConnection } =
+        await import("./gbpReviewPoller.service.js");
       const summary = await pollGbpReviewsForConnection(conn);
       res.json(summary);
     } catch (err) {
@@ -782,7 +947,10 @@ inboxRouter.get(
       });
       const filename = `squadpitch-contact-${contact.id}.json`;
       res.setHeader("Content-Type", "application/json");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
       res.json({
         exportedAt: new Date().toISOString(),
         workspaceId: req.params.id,
@@ -888,9 +1056,8 @@ inboxRouter.post(
       // time too, but keeping this here so the test-injector
       // doesn't increase the cold-start surface for the more
       // common Inbox routes above.
-      const { ingestGbpReview } = await import(
-        "./inbox.gbp.ingestion.service.js"
-      );
+      const { ingestGbpReview } =
+        await import("./inbox.gbp.ingestion.service.js");
       const body = req.body ?? {};
       const result = await ingestGbpReview({
         locationName: body.locationName,
@@ -902,7 +1069,10 @@ inboxRouter.post(
         starRating: Number.isFinite(body.starRating) ? body.starRating : 5,
         comment: typeof body.comment === "string" ? body.comment : "",
         reviewer: {
-          googleId: typeof body.reviewerId === "string" ? body.reviewerId : `sim_${Date.now()}`,
+          googleId:
+            typeof body.reviewerId === "string"
+              ? body.reviewerId
+              : `sim_${Date.now()}`,
           displayName:
             typeof body.reviewerName === "string"
               ? body.reviewerName

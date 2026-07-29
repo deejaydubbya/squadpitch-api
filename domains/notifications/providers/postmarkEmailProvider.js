@@ -2,6 +2,7 @@
 // Falls back to console logging if POSTMARK_SERVER_TOKEN is not configured.
 
 import { env } from "../../../config/env.js";
+import { requireSuccessfulPostmarkResponse } from "../../inbox/postmarkSafety.js";
 
 let client = null;
 
@@ -21,18 +22,20 @@ export async function sendEmail({ to, subject, html }) {
   const pm = await getClient();
   if (!pm) {
     console.log(
-      `[NOTIFICATION:EMAIL] (no provider) to=${to} subject="${subject}"`
+      `[NOTIFICATION:EMAIL] (no provider) to=${to} subject="${subject}"`,
     );
     return null;
   }
 
-  const result = await pm.sendEmail({
-    From: env.NOTIFICATION_FROM_EMAIL,
-    To: to,
-    Subject: subject,
-    HtmlBody: html,
-    MessageStream: "outbound",
-  });
+  const result = requireSuccessfulPostmarkResponse(
+    await pm.sendEmail({
+      From: env.NOTIFICATION_FROM_EMAIL,
+      To: to,
+      Subject: subject,
+      HtmlBody: html,
+      MessageStream: env.POSTMARK_MESSAGE_STREAM,
+    }),
+  );
 
   return { messageId: result.MessageID };
 }

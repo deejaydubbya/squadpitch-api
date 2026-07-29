@@ -79,7 +79,9 @@ export async function createClient(data, createdBy) {
       // generated content. Column has a DB-level default of "en"
       // so omitting it here is safe; pass-through lets onboarding
       // commit the user's chosen language at creation time.
-      ...(data.defaultLanguage ? { defaultLanguage: data.defaultLanguage } : {}),
+      ...(data.defaultLanguage
+        ? { defaultLanguage: data.defaultLanguage }
+        : {}),
       createdBy,
     },
   });
@@ -105,9 +107,26 @@ export async function archiveClient(clientId, userId) {
   if (!existing) throw notFound();
   if (userId && existing.createdBy !== userId) throw forbidden();
 
-  return prisma.client.update({
-    where: { id: clientId },
-    data: { status: "ARCHIVED" },
+  return prisma.$transaction(async (tx) => {
+    await tx.draft.updateMany({
+      where: { clientId, status: "SCHEDULED" },
+      data: {
+        status: "FAILED",
+        publishError: "Workspace archived; publishing disabled.",
+      },
+    });
+    await tx.site.updateMany({
+      where: { clientId },
+      data: { status: "ARCHIVED" },
+    });
+    await tx.channelConnection.deleteMany({ where: { clientId } });
+    await tx.workspaceTechStackConnection.deleteMany({
+      where: { workspaceId: clientId },
+    });
+    return tx.client.update({
+      where: { id: clientId },
+      data: { status: "ARCHIVED" },
+    });
   });
 }
 
@@ -303,8 +322,8 @@ export async function upsertChannelSettings(clientId, items) {
           trailingHashtags: item.trailingHashtags ?? [],
           notes: item.notes ?? null,
         },
-      })
-    )
+      }),
+    ),
   );
   invalidateClientContext(clientId).catch(() => {});
   return result;
@@ -321,15 +340,21 @@ export function formatClient(client) {
     status: client.status,
     logoUrl: client.logoUrl,
     industryKey: client.industryKey ?? null,
-    timezone: client.timezone ?? 'UTC',
-    defaultLanguage: client.defaultLanguage ?? 'en',
+    timezone: client.timezone ?? "UTC",
+    defaultLanguage: client.defaultLanguage ?? "en",
     createdBy: client.createdBy,
     createdAt: client.createdAt,
     updatedAt: client.updatedAt,
     draftCount: client._count?.drafts ?? 0,
-    brandProfile: client.brandProfile ? formatBrandProfile(client.brandProfile) : null,
-    voiceProfile: client.voiceProfile ? formatVoiceProfile(client.voiceProfile) : null,
-    mediaProfile: client.mediaProfile ? formatMediaProfile(client.mediaProfile) : null,
+    brandProfile: client.brandProfile
+      ? formatBrandProfile(client.brandProfile)
+      : null,
+    voiceProfile: client.voiceProfile
+      ? formatVoiceProfile(client.voiceProfile)
+      : null,
+    mediaProfile: client.mediaProfile
+      ? formatMediaProfile(client.mediaProfile)
+      : null,
     channelSettings: Array.isArray(client.channelSettings)
       ? client.channelSettings.map(formatChannelSettings)
       : undefined,

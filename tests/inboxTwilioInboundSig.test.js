@@ -19,7 +19,11 @@ import request from "supertest";
 import twilio from "twilio";
 
 const AUTH_TOKEN = "test-auth-token-xyz";
-const WEBHOOK_URL = "https://squadpitch-api.fly.dev/api/v1/inbox/webhooks/twilio/inbound";
+const WEBHOOK_URL =
+  "https://squadpitch-api.fly.dev/api/v1/inbox/webhooks/twilio/inbound";
+const STATUS_URL =
+  "https://squadpitch-api.fly.dev/api/v1/inbox/webhooks/twilio/status";
+const ACCOUNT_SID = `AC${"a".repeat(32)}`;
 
 let prismaMock;
 let updateCalls;
@@ -39,7 +43,9 @@ vi.mock("../config/env.js", () => ({
       AUTH0_AUDIENCE: "test-audience",
       AUTH0_DOMAIN: "test.auth0.com",
       TWILIO_AUTH_TOKEN: AUTH_TOKEN,
+      TWILIO_ACCOUNT_SID: ACCOUNT_SID,
       TWILIO_INBOUND_WEBHOOK_URL: WEBHOOK_URL,
+      TWILIO_STATUS_CALLBACK_URL: STATUS_URL,
     };
   },
 }));
@@ -58,6 +64,9 @@ beforeEach(() => {
         updateCalls.push(args);
         return { id: args.where.id, ...args.data };
       }),
+    },
+    message: {
+      updateMany: vi.fn(async () => ({ count: 1 })),
     },
   };
 });
@@ -148,5 +157,73 @@ describe("Twilio inbound webhook — signature verification", () => {
     // isn't STOP/STOPALL/etc.
     expect(res.status).toBe(200);
     expect(updateCalls).toHaveLength(0);
+  });
+
+  it("honors Twilio Advanced Opt-Out's OptOutType even for a localized body", async () => {
+    const app = await buildApp();
+    const body = {
+      From: "+15551234567",
+      Body: "BAJA",
+      OptOutType: "STOP",
+    };
+    const res = await request(app)
+      .post("/api/v1/inbox/webhooks/twilio/inbound")
+      .set("X-Twilio-Signature", signRequest(body))
+      .type("form")
+      .send(body);
+    expect(res.status).toBe(200);
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].data.enrichmentJson.smsOptOut).toBe(true);
+  });
+
+  it("returns 500 so Twilio retries when persisting STOP fails", async () => {
+    prismaMock.contact.update.mockRejectedValueOnce(
+      new Error("db unavailable"),
+    );
+    const app = await buildApp();
+    const body = { From: "+15551234567", Body: "STOP" };
+    const res = await request(app)
+      .post("/api/v1/inbox/webhooks/twilio/inbound")
+      .set("X-Twilio-Signature", signRequest(body))
+      .type("form")
+      .send(body);
+    expect(res.status).toBe(500);
+  });
+
+  it("marks failed delivery callbacks once and rejects invalid signatures", async () => {
+    const app = await buildApp();
+    const body = {
+      AccountSid: ACCOUNT_SID,
+      MessageSid: `SM${"b".repeat(32)}`,
+      MessageStatus: "undelivered",
+      ErrorCode: "30007",
+    };
+    const signature = twilio.getExpectedTwilioSignature(
+      AUTH_TOKEN,
+      STATUS_URL,
+      body,
+    );
+    const accepted = await request(app)
+      .post("/api/v1/inbox/webhooks/twilio/status")
+      .set("X-Twilio-Signature", signature)
+      .type("form")
+      .send(body);
+    expect(accepted.status).toBe(204);
+    expect(prismaMock.message.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          providerMessageId: body.MessageSid,
+          deliveryStatus: { not: "FAILED" },
+        }),
+      }),
+    );
+
+    const rejected = await request(app)
+      .post("/api/v1/inbox/webhooks/twilio/status")
+      .set("X-Twilio-Signature", "bad")
+      .type("form")
+      .send(body);
+    expect(rejected.status).toBe(403);
+    expect(prismaMock.message.updateMany).toHaveBeenCalledTimes(1);
   });
 });

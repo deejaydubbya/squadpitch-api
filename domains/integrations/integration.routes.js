@@ -15,10 +15,15 @@ import {
   dispatchToAdapter,
 } from "./integration.service.js";
 import { getAdapter } from "./adapters/index.js";
+import { publicIntegrationCapabilities } from "./integrationCapabilityMatrix.js";
 
 export const integrationRouter = express.Router();
 
 const BASE = "/api/v1/integrations";
+
+integrationRouter.get(`${BASE}/capabilities`, (_req, res) => {
+  res.json({ integrations: publicIntegrationCapabilities() });
+});
 
 // GET all integrations (optionally filter by type)
 integrationRouter.get(BASE, async (req, res, next) => {
@@ -35,7 +40,8 @@ integrationRouter.get(BASE, async (req, res, next) => {
 integrationRouter.get(`${BASE}/:id`, async (req, res, next) => {
   try {
     const integration = await getIntegration(req.user.id, req.params.id);
-    if (!integration) return res.status(404).json({ error: "Integration not found" });
+    if (!integration)
+      return res.status(404).json({ error: "Integration not found" });
     res.json({ integration });
   } catch (err) {
     next(err);
@@ -50,9 +56,15 @@ integrationRouter.post(BASE, async (req, res, next) => {
       return res.status(400).json({ error: "type and name are required" });
     }
     if (!getAdapter(type)) {
-      return res.status(400).json({ error: `Unknown integration type: ${type}` });
+      return res
+        .status(400)
+        .json({ error: `Unknown integration type: ${type}` });
     }
-    const integration = await createIntegration(req.user.id, { type, name, config });
+    const integration = await createIntegration(req.user.id, {
+      type,
+      name,
+      config,
+    });
     res.status(201).json({ integration });
   } catch (err) {
     next(err);
@@ -63,9 +75,14 @@ integrationRouter.post(BASE, async (req, res, next) => {
 integrationRouter.put(`${BASE}/:id`, async (req, res, next) => {
   try {
     const { name, config, isActive } = req.body;
-    await updateIntegration(req.user.id, req.params.id, { name, config, isActive });
+    await updateIntegration(req.user.id, req.params.id, {
+      name,
+      config,
+      isActive,
+    });
     const updated = await getIntegration(req.user.id, req.params.id);
-    if (!updated) return res.status(404).json({ error: "Integration not found" });
+    if (!updated)
+      return res.status(404).json({ error: "Integration not found" });
     res.json({ integration: updated });
   } catch (err) {
     next(err);
@@ -86,7 +103,8 @@ integrationRouter.delete(`${BASE}/:id`, async (req, res, next) => {
 integrationRouter.get(`${BASE}/:id/logs`, async (req, res, next) => {
   try {
     const integration = await getIntegration(req.user.id, req.params.id);
-    if (!integration) return res.status(404).json({ error: "Integration not found" });
+    if (!integration)
+      return res.status(404).json({ error: "Integration not found" });
 
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
     const offset = parseInt(req.query.offset) || 0;
@@ -101,13 +119,14 @@ integrationRouter.get(`${BASE}/:id/logs`, async (req, res, next) => {
 integrationRouter.post(`${BASE}/:id/test`, async (req, res, next) => {
   try {
     const integration = await getIntegration(req.user.id, req.params.id);
-    if (!integration) return res.status(404).json({ error: "Integration not found" });
+    if (!integration)
+      return res.status(404).json({ error: "Integration not found" });
 
     const results = await dispatchToAdapter(
       integration.type,
       req.user.id,
       "TEST",
-      { message: "Test event from Squadpitch" }
+      { message: "Test event from Squadpitch" },
     );
     res.json({ ok: true, results });
   } catch (err) {
@@ -119,7 +138,8 @@ integrationRouter.post(`${BASE}/:id/test`, async (req, res, next) => {
 integrationRouter.post(`${BASE}/:id/retry/:logId`, async (req, res, next) => {
   try {
     const integration = await getIntegration(req.user.id, req.params.id);
-    if (!integration) return res.status(404).json({ error: "Integration not found" });
+    if (!integration)
+      return res.status(404).json({ error: "Integration not found" });
 
     const { getIntegrationLog } = await import("./integration.service.js");
     const log = await getIntegrationLog(req.params.logId);
@@ -127,14 +147,16 @@ integrationRouter.post(`${BASE}/:id/retry/:logId`, async (req, res, next) => {
       return res.status(404).json({ error: "Log entry not found" });
     }
     if (log.status !== "failed") {
-      return res.status(400).json({ error: "Only failed deliveries can be retried" });
+      return res
+        .status(400)
+        .json({ error: "Only failed deliveries can be retried" });
     }
 
     const results = await dispatchToAdapter(
       integration.type,
       req.user.id,
       log.eventType,
-      { message: "Retry from Squadpitch", retryOf: log.id }
+      { message: "Retry from Squadpitch", retryOf: log.id },
     );
     res.json({ ok: true, results });
   } catch (err) {

@@ -15,6 +15,19 @@ enum UserRole {
   VIEWER
 }
 
+enum AccountLifecycleRequestType {
+  DELETE_ACCOUNT
+  EXPORT_ACCOUNT
+}
+
+enum AccountLifecycleRequestStatus {
+  PENDING
+  VERIFIED
+  PROCESSING
+  COMPLETED
+  REJECTED
+}
+
 enum ClientStatus {
   DRAFT
   ACTIVE
@@ -202,7 +215,28 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  lifecycleRequests AccountLifecycleRequest[]
+
   @@map("users")
+}
+
+model AccountLifecycleRequest {
+  id            String                        @id @default(cuid())
+  userId        String
+  auth0Sub      String
+  emailSnapshot String
+  type          AccountLifecycleRequestType
+  status        AccountLifecycleRequestStatus @default(PENDING)
+  requestedAt   DateTime                      @default(now())
+  verifiedAt    DateTime?
+  completedAt   DateTime?
+  operatorNotes String?                       @db.Text
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, type, status])
+  @@index([status, requestedAt])
+  @@map("account_lifecycle_requests")
 }
 
 // ── Client ─────────────────────────────────────────────────────────────
@@ -1534,6 +1568,27 @@ model Subscription {
   updatedAt              DateTime           @updatedAt
 
   @@map("subscriptions")
+}
+
+enum SignupPlanIntentStatus {
+  SELECTED
+  CHECKOUT_CREATED
+  ACTIVATED
+}
+
+model SignupPlanIntent {
+  id                      String                 @id @default(cuid())
+  userId                  String                 @unique
+  desiredTier             PlanTier
+  status                  SignupPlanIntentStatus @default(SELECTED)
+  stripeCheckoutSessionId String?                @unique
+  checkoutUrl             String?
+  checkoutAttempt         Int                    @default(0)
+  activatedAt             DateTime?
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  @@map("signup_plan_intents")
 }
 
 model UsageRecord {

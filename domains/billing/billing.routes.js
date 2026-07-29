@@ -4,9 +4,23 @@ import { env } from "../../config/env.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
 import { logEvent } from "../../lib/logger.js";
 import * as billingService from "./billing.service.js";
-import { getUsageForPeriod, getAiCostBreakdown } from "./aiUsageTracking.service.js";
-import { getAllServicesHealth, checkBudgetStatus, getThrottlePolicy, setAdminFlag, clearAdminFlag } from "./serviceHealth.service.js";
-import { CreateCheckoutSchema, CreatePortalSchema, ChangePlanSchema } from "./billing.schemas.js";
+import {
+  getUsageForPeriod,
+  getAiCostBreakdown,
+} from "./aiUsageTracking.service.js";
+import {
+  getAllServicesHealth,
+  checkBudgetStatus,
+  getThrottlePolicy,
+  setAdminFlag,
+  clearAdminFlag,
+} from "./serviceHealth.service.js";
+import {
+  CreateCheckoutSchema,
+  CreatePortalSchema,
+  ChangePlanSchema,
+  SignupPlanSchema,
+} from "./billing.schemas.js";
 // requireAdminRole reads the Auth0 roles claim (squadpitch.com /
 // mivalta.com fallback) and only lets through users with the "admin"
 // role. The legacy requireAdmin middleware (env ADMIN_USER_IDS) is
@@ -65,6 +79,44 @@ billingRouter.post(`${BASE}/checkout-session`, async (req, res, next) => {
       ...parsed.data,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Signup plan handoff ─────────────────────────────────────────────────
+
+billingRouter.get(`${BASE}/signup-plan`, async (req, res, next) => {
+  try {
+    res.json(await billingService.getSignupPlanIntent(req.user.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+billingRouter.put(`${BASE}/signup-plan`, async (req, res, next) => {
+  try {
+    const parsed = SignupPlanSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    res.json(
+      await billingService.selectSignupPlan({
+        userId: req.user.id,
+        tier: parsed.data.tier,
+      }),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+billingRouter.post(`${BASE}/signup-plan/checkout`, async (req, res, next) => {
+  try {
+    res.json(
+      await billingService.resumeSignupCheckout({
+        userId: req.user.id,
+        email: req.user.email,
+      }),
+    );
   } catch (err) {
     next(err);
   }
@@ -158,55 +210,75 @@ billingRouter.get(`${BASE}/system-health`, async (req, res, next) => {
 
 // ── Admin Controls ──────────────────────────────────────────────────────
 
-billingRouter.post(`${BASE}/admin/pause-ai`, requireAdminRole, async (req, res, next) => {
-  try {
-    await setAdminFlag("sp:admin:pause_ai");
-    res.json({ ok: true, flag: "pause_ai", value: true });
-  } catch (err) {
-    next(err);
-  }
-});
+billingRouter.post(
+  `${BASE}/admin/pause-ai`,
+  requireAdminRole,
+  async (req, res, next) => {
+    try {
+      await setAdminFlag("sp:admin:pause_ai");
+      res.json({ ok: true, flag: "pause_ai", value: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-billingRouter.post(`${BASE}/admin/resume-ai`, requireAdminRole, async (req, res, next) => {
-  try {
-    await clearAdminFlag("sp:admin:pause_ai");
-    res.json({ ok: true, flag: "pause_ai", value: false });
-  } catch (err) {
-    next(err);
-  }
-});
+billingRouter.post(
+  `${BASE}/admin/resume-ai`,
+  requireAdminRole,
+  async (req, res, next) => {
+    try {
+      await clearAdminFlag("sp:admin:pause_ai");
+      res.json({ ok: true, flag: "pause_ai", value: false });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-billingRouter.post(`${BASE}/admin/disable-video`, requireAdminRole, async (req, res, next) => {
-  try {
-    await setAdminFlag("sp:admin:disable_video");
-    res.json({ ok: true, flag: "disable_video", value: true });
-  } catch (err) {
-    next(err);
-  }
-});
+billingRouter.post(
+  `${BASE}/admin/disable-video`,
+  requireAdminRole,
+  async (req, res, next) => {
+    try {
+      await setAdminFlag("sp:admin:disable_video");
+      res.json({ ok: true, flag: "disable_video", value: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-billingRouter.post(`${BASE}/admin/enable-video`, requireAdminRole, async (req, res, next) => {
-  try {
-    await clearAdminFlag("sp:admin:disable_video");
-    res.json({ ok: true, flag: "disable_video", value: false });
-  } catch (err) {
-    next(err);
-  }
-});
+billingRouter.post(
+  `${BASE}/admin/enable-video`,
+  requireAdminRole,
+  async (req, res, next) => {
+    try {
+      await clearAdminFlag("sp:admin:disable_video");
+      res.json({ ok: true, flag: "disable_video", value: false });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-billingRouter.get(`${BASE}/admin/status`, requireAdminRole, async (req, res, next) => {
-  try {
-    const [services, openai, fal, throttle] = await Promise.all([
-      getAllServicesHealth(),
-      checkBudgetStatus("openai"),
-      checkBudgetStatus("fal"),
-      getThrottlePolicy(),
-    ]);
-    res.json({ services, budget: { openai, fal }, throttle });
-  } catch (err) {
-    next(err);
-  }
-});
+billingRouter.get(
+  `${BASE}/admin/status`,
+  requireAdminRole,
+  async (req, res, next) => {
+    try {
+      const [services, openai, fal, throttle] = await Promise.all([
+        getAllServicesHealth(),
+        checkBudgetStatus("openai"),
+        checkBudgetStatus("fal"),
+        getThrottlePolicy(),
+      ]);
+      res.json({ services, budget: { openai, fal }, throttle });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Stripe webhook ───────────────────────────────────────────────────────
 // NOTE: This route needs raw body. It's mounted separately in server.js
@@ -221,10 +293,19 @@ billingRouter.post(`${BASE}/webhook`, async (req, res) => {
   let event;
   try {
     const stripe = new Stripe(env.STRIPE_SECRET_KEY);
-    event = stripe.webhooks.constructEvent(req.body, sig, env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      env.STRIPE_WEBHOOK_SECRET,
+    );
   } catch (err) {
     logEvent("stripe.webhook.signature_failed", { error: err.message });
-    return sendError(res, 400, "WEBHOOK_SIGNATURE_ERROR", `Webhook signature verification failed: ${err.message}`);
+    return sendError(
+      res,
+      400,
+      "WEBHOOK_SIGNATURE_ERROR",
+      `Webhook signature verification failed: ${err.message}`,
+    );
   }
 
   logEvent("stripe.webhook.received", {

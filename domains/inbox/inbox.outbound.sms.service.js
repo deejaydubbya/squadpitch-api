@@ -31,6 +31,7 @@
 import { prisma } from "../../prisma.js";
 import { env } from "../../config/env.js";
 import { sendSms } from "../notifications/providers/twilioSmsProvider.js";
+import { checkRateLimit } from "../sites/rateLimit.js";
 
 const STOP_FOOTER = "\n\nReply STOP to opt out.";
 
@@ -46,7 +47,10 @@ class SmsReplyError extends Error {
 
 function isSmsConfigured() {
   return Boolean(
-    env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM_NUMBER,
+    env.TWILIO_ACCOUNT_SID &&
+    env.TWILIO_AUTH_TOKEN &&
+    env.TWILIO_FROM_NUMBER &&
+    env.TWILIO_MESSAGING_SERVICE_SID,
   );
 }
 
@@ -72,10 +76,10 @@ export async function sendInboxSms(
   // call when any of these fail, but we re-check server-side so
   // a stale UI cache can't slip a send past us.
   if (!env.SMS_SENDING_ENABLED) {
-    throw new SmsReplyError(
-      "SMS sending is not enabled in this workspace.",
-      { status: 412, code: "PROVIDER_NOT_AVAILABLE" },
-    );
+    throw new SmsReplyError("SMS sending is not enabled in this workspace.", {
+      status: 412,
+      code: "PROVIDER_NOT_AVAILABLE",
+    });
   }
   if (!env.SMS_A2P_APPROVED) {
     throw new SmsReplyError(
@@ -132,10 +136,10 @@ export async function sendInboxSms(
     });
   }
   if (contact.enrichmentJson?.smsOptOut === true) {
-    throw new SmsReplyError(
-      "Contact has opted out of SMS (replied STOP).",
-      { status: 412, code: "PROVIDER_NOT_AVAILABLE" },
-    );
+    throw new SmsReplyError("Contact has opted out of SMS (replied STOP).", {
+      status: 412,
+      code: "PROVIDER_NOT_AVAILABLE",
+    });
   }
 
   // Decide whether to append the compliance footer. First send
@@ -145,6 +149,12 @@ export async function sendInboxSms(
   // message deletion.
   const isFirstSend = !contact.enrichmentJson?.smsFooterSentAt;
   const finalBody = isFirstSend ? trimmed + STOP_FOOTER : trimmed;
+  if (finalBody.length > (env.INBOX_SMS_MAX_CHARS ?? 480)) {
+    throw new SmsReplyError("SMS exceeds the configured message length cap.", {
+      status: 400,
+      code: "MESSAGE_TOO_LONG",
+    });
+  }
 
   // Idempotency pre-check.
   if (idempotencyKey) {
@@ -160,6 +170,15 @@ export async function sendInboxSms(
       }
       return existing;
     }
+  }
+
+  const cap = env.INBOX_SMS_DAILY_CAP ?? 50;
+  const rate = await checkRateLimit("inbox-sms", clientId, cap, 24 * 60 * 60);
+  if (!rate.allowed) {
+    throw new SmsReplyError(`Workspace daily SMS cap (${cap}) reached.`, {
+      status: 429,
+      code: "RATE_LIMITED",
+    });
   }
 
   // Step 1: write Message in SENDING state BEFORE the provider
@@ -231,7 +250,10 @@ export async function sendInboxSms(
     if (callErr instanceof SmsReplyError) throw callErr;
     throw new SmsReplyError(reason, {
       status: httpStatus >= 400 && httpStatus < 500 ? 502 : 503,
-      code: httpStatus >= 400 && httpStatus < 500 ? "PROVIDER_FAILED" : "PROVIDER_UNREACHABLE",
+      code:
+        httpStatus >= 400 && httpStatus < 500
+          ? "PROVIDER_FAILED"
+          : "PROVIDER_UNREACHABLE",
       providerError: reason,
     });
   }

@@ -27,7 +27,8 @@ const prismaMock = {
       let row;
       if (userId) row = subStore.get(userId);
       else if (sid) {
-        for (const s of subStore.values()) if (s.stripeSubscriptionId === sid) row = s;
+        for (const s of subStore.values())
+          if (s.stripeSubscriptionId === sid) row = s;
       }
       if (!row) return null;
       Object.assign(row, data);
@@ -36,7 +37,10 @@ const prismaMock = {
     updateMany: vi.fn(async ({ where, data }) => {
       let count = 0;
       for (const s of subStore.values()) {
-        if (where.stripeSubscriptionId && s.stripeSubscriptionId === where.stripeSubscriptionId) {
+        if (
+          where.stripeSubscriptionId &&
+          s.stripeSubscriptionId === where.stripeSubscriptionId
+        ) {
           Object.assign(s, data);
           count++;
         }
@@ -50,12 +54,12 @@ const stripeRetrieveMock = vi.fn();
 vi.mock("stripe", () => ({
   default: vi.fn(function Stripe() {
     return {
-    subscriptions: { retrieve: stripeRetrieveMock, update: vi.fn() },
-    customers: { create: vi.fn() },
-    checkout: { sessions: { create: vi.fn() } },
-    billingPortal: { sessions: { create: vi.fn() } },
-    webhooks: { constructEvent: vi.fn() },
-    prices: { retrieve: vi.fn() },
+      subscriptions: { retrieve: stripeRetrieveMock, update: vi.fn() },
+      customers: { create: vi.fn() },
+      checkout: { sessions: { create: vi.fn() } },
+      billingPortal: { sessions: { create: vi.fn() } },
+      webhooks: { constructEvent: vi.fn() },
+      prices: { retrieve: vi.fn() },
     };
   }),
 }));
@@ -87,7 +91,13 @@ describe("Stripe webhook ordering / dedup guard", () => {
       id: "evt_1",
       type: "checkout.session.completed",
       created: 1_000_000_000,
-      data: { object: { customer: "cus_x", subscription: "sub_live", metadata: { userId: "u1", tier: "PRO" } } },
+      data: {
+        object: {
+          customer: "cus_x",
+          subscription: "sub_live",
+          metadata: { userId: "u1", tier: "PRO" },
+        },
+      },
     });
     const after = subStore.get("u1");
     expect(after.tier).toBe("PRO");
@@ -187,5 +197,33 @@ describe("Stripe webhook ordering / dedup guard", () => {
 
     expect(subStore.get("u1").status).toBe("CANCELED");
     expect(subStore.get("u1").lastStripeEventId).toBe("evt_cancel");
+  });
+
+  it("applies past-due and recovery events in order", async () => {
+    subStore.set("u1", {
+      userId: "u1",
+      stripeCustomerId: "cus_x",
+      stripeSubscriptionId: "sub_live",
+      tier: "PRO",
+      status: "ACTIVE",
+      lastStripeEventCreated: 1_000,
+      lastStripeEventId: "evt_start",
+    });
+
+    await billing.handleWebhookEvent({
+      id: "evt_past_due",
+      type: "invoice.payment_failed",
+      created: 2_000,
+      data: { object: { subscription: "sub_live" } },
+    });
+    expect(subStore.get("u1").status).toBe("PAST_DUE");
+
+    await billing.handleWebhookEvent({
+      id: "evt_recovered",
+      type: "invoice.paid",
+      created: 3_000,
+      data: { object: { subscription: "sub_live" } },
+    });
+    expect(subStore.get("u1").status).toBe("ACTIVE");
   });
 });

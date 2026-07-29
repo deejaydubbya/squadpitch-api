@@ -6,7 +6,9 @@ export const env = {
   AUTH0_DOMAIN: process.env.AUTH0_DOMAIN,
   AUTH0_AUDIENCE: process.env.AUTH0_AUDIENCE,
   DATABASE_URL: process.env.DATABASE_URL,
-  NODE_ENV: process.env.NODE_ENV ?? "production",
+  // Never infer production. Fly sets this explicitly; local and one-off
+  // processes should not silently activate production-only behavior.
+  NODE_ENV: process.env.NODE_ENV ?? "development",
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
 
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
@@ -14,6 +16,15 @@ export const env = {
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET,
 
   REDIS_URL: process.env.REDIS_URL,
+  ENABLE_WORKERS:
+    String(process.env.ENABLE_WORKERS ?? "false").toLowerCase() === "true",
+  PRODUCTION_CANARY_WORKSPACE_ID:
+    process.env.PRODUCTION_CANARY_WORKSPACE_ID,
+  PRODUCTION_CANARY_MEDIA_ENABLED:
+    String(process.env.PRODUCTION_CANARY_MEDIA_ENABLED ?? "false").toLowerCase() ===
+    "true",
+  PRODUCTION_CANARY_SITES_HEALTH_URL:
+    process.env.PRODUCTION_CANARY_SITES_HEALTH_URL,
 
   // OpenAI — text generation
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -97,8 +108,7 @@ export const env = {
   // PUBLIC_SITES_BASE_DOMAIN is the hostname suffix the resolve
   // endpoint accepts. Must match the value set on the
   // squadpitch-sites runtime (default "squadpitchsites.com").
-  PUBLIC_SITES_BASE_DOMAIN:
-    process.env.PUBLIC_SITES_BASE_DOMAIN || "squadpitchsites.com",
+  PUBLIC_SITES_BASE_DOMAIN: process.env.PUBLIC_SITES_BASE_DOMAIN,
   // RUNTIME_REVALIDATE_URL points at the squadpitch-sites
   // /api/revalidate endpoint so the API can drop cached pages
   // immediately on publish. Token must match the value the
@@ -245,9 +255,8 @@ export const env = {
   POSTMARK_MESSAGE_STREAM: process.env.POSTMARK_MESSAGE_STREAM ?? "outbound",
   INBOX_EMAIL_FROM: process.env.INBOX_EMAIL_FROM,
   INBOX_EMAIL_REPLY_DOMAIN: process.env.INBOX_EMAIL_REPLY_DOMAIN,
-  // HMAC secret the Postmark inbound webhook signs with. Required
-  // by the inbound parser (separate prompt); set today so the
-  // shape exists.
+  // Password used to authenticate Postmark's inbound webhook via
+  // HTTP Basic Auth (or an injected X-Postmark-Secret header).
   POSTMARK_INBOUND_WEBHOOK_SECRET: process.env.POSTMARK_INBOUND_WEBHOOK_SECRET,
   // Per-workspace daily send cap. Conservative default so a runaway
   // workspace (or a bug) can't blast a Postmark account dry.
@@ -260,6 +269,7 @@ export const env = {
   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
   TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
+  TWILIO_MESSAGING_SERVICE_SID: process.env.TWILIO_MESSAGING_SERVICE_SID,
   // Exact public URL Twilio uses to POST inbound SMS to us.
   // Required for X-Twilio-Signature verification — the HMAC is
   // computed over (URL + sorted form params), and Fly's proxy
@@ -271,6 +281,19 @@ export const env = {
   TWILIO_INBOUND_WEBHOOK_URL:
     process.env.TWILIO_INBOUND_WEBHOOK_URL ??
     "https://squadpitch-api.fly.dev/api/v1/inbox/webhooks/twilio/inbound",
+  TWILIO_STATUS_CALLBACK_URL:
+    process.env.TWILIO_STATUS_CALLBACK_URL ??
+    "https://squadpitch-api.fly.dev/api/v1/inbox/webhooks/twilio/status",
+  INBOX_SMS_DAILY_CAP: Number.isFinite(
+    parseInt(process.env.INBOX_SMS_DAILY_CAP, 10),
+  )
+    ? parseInt(process.env.INBOX_SMS_DAILY_CAP, 10)
+    : 50,
+  INBOX_SMS_MAX_CHARS: Number.isFinite(
+    parseInt(process.env.INBOX_SMS_MAX_CHARS, 10),
+  )
+    ? parseInt(process.env.INBOX_SMS_MAX_CHARS, 10)
+    : 480,
   // SMS sending gates. Two independently-flippable flags so the
   // workspace can hold sending back even after A2P approval lands
   // (or vice versa — flip A2P_APPROVED to acknowledge approval
@@ -293,7 +316,7 @@ export const env = {
     String(process.env.SMS_SENDING_ENABLED ?? "false").toLowerCase() === "true",
   VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY,
   VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
-  APP_URL: process.env.APP_URL ?? "https://squadpitch-web.fly.dev",
+  APP_URL: process.env.APP_URL,
 
   // Google Drive (media import)
   GOOGLE_DRIVE_CLIENT_ID: process.env.GOOGLE_DRIVE_CLIENT_ID,
@@ -316,7 +339,6 @@ export const env = {
   DROPBOX_REDIRECT_URI: process.env.DROPBOX_REDIRECT_URI,
 
   // Admin
-  ADMIN_USER_IDS: process.env.ADMIN_USER_IDS ?? "",
 
   // Global AI budget caps (cents per month)
   OPENAI_MONTHLY_BUDGET_CENTS:
@@ -397,6 +419,7 @@ export const env = {
 
   // Stripe billing
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+  STRIPE_EXPECTED_MODE: process.env.STRIPE_EXPECTED_MODE ?? "test",
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
   STRIPE_STARTER_PRICE_ID: process.env.STRIPE_STARTER_PRICE_ID,
   STRIPE_PRO_PRICE_ID: process.env.STRIPE_PRO_PRICE_ID,

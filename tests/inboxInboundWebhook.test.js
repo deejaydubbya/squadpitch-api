@@ -31,9 +31,8 @@ vi.mock("../config/env.js", () => ({
 }));
 
 const service = await import("../domains/inbox/inbox.inbound.email.service.js");
-const { inboxWebhookRouter } = await import(
-  "../domains/inbox/inbox.webhook.routes.js"
-);
+const { inboxWebhookRouter } =
+  await import("../domains/inbox/inbox.webhook.routes.js");
 
 // ── Prisma mock builder ────────────────────────────────────────────────
 
@@ -59,9 +58,15 @@ function buildPrismaMock({ conversations = [], messages = [] } = {}) {
           if (where.channel && m.channel !== where.channel) continue;
           if (where.OR) {
             const matched = where.OR.some((cond) => {
-              if (cond.providerMessageId && m.providerMessageId === cond.providerMessageId)
+              if (
+                cond.providerMessageId &&
+                m.providerMessageId === cond.providerMessageId
+              )
                 return true;
-              if (cond.externalMessageId && m.externalMessageId === cond.externalMessageId)
+              if (
+                cond.externalMessageId &&
+                m.externalMessageId === cond.externalMessageId
+              )
                 return true;
               return false;
             });
@@ -103,9 +108,7 @@ function basePayload(overrides = {}) {
     MessageID: "<external-postmark-id-123@postmarkapp.com>",
     MailboxHash: "conv-abc",
     To: "reply+conv-abc@mail.squadpitch.com",
-    ToFull: [
-      { Email: "reply+conv-abc@mail.squadpitch.com", Name: "" },
-    ],
+    ToFull: [{ Email: "reply+conv-abc@mail.squadpitch.com", Name: "" }],
     OriginalRecipient: "reply+conv-abc@mail.squadpitch.com",
     Attachments: [],
     ...overrides,
@@ -141,7 +144,9 @@ describe("inbound — happy path", () => {
     expect(msg.party).toBe("CONTACT");
     expect(msg.channel).toBe("EMAIL");
     expect(msg.body).toContain("508 King George Court");
-    expect(msg.providerMessageId).toBe("<external-postmark-id-123@postmarkapp.com>");
+    expect(msg.providerMessageId).toBe(
+      "<external-postmark-id-123@postmarkapp.com>",
+    );
     expect(msg.deliveryStatus).toBe("SENT");
   });
 
@@ -149,7 +154,12 @@ describe("inbound — happy path", () => {
     await service.processInboundEmail(
       basePayload({
         Attachments: [
-          { Name: "spec.pdf", ContentType: "application/pdf", ContentLength: 1024, Content: "BASE64-NEVER-STORED" },
+          {
+            Name: "spec.pdf",
+            ContentType: "application/pdf",
+            ContentLength: 1024,
+            Content: "BASE64-NEVER-STORED",
+          },
         ],
       }),
     );
@@ -171,7 +181,9 @@ describe("inbound — happy path", () => {
   });
 
   it("updates conversation lastMessageAt / lastMessageFrom and leaves it unread", async () => {
-    const before = new Date(state.prisma.state.convs.get("conv-abc").workspaceReadAt);
+    const before = new Date(
+      state.prisma.state.convs.get("conv-abc").workspaceReadAt,
+    );
     await service.processInboundEmail(basePayload());
     const conv = state.prisma.state.convs.get("conv-abc");
     expect(conv.lastMessageFrom).toBe("CONTACT");
@@ -193,7 +205,9 @@ describe("inbound — happy path", () => {
     await service.processInboundEmail(basePayload());
     // First persisted row is the inbound CONTACT message; the
     // reopen audit follows. Both share the same conversation.
-    const systemMsgs = state.prisma.state.msgs.filter((m) => m.party === "SYSTEM");
+    const systemMsgs = state.prisma.state.msgs.filter(
+      (m) => m.party === "SYSTEM",
+    );
     expect(systemMsgs).toHaveLength(1);
     expect(systemMsgs[0].conversationId).toBe("conv-abc");
     expect(systemMsgs[0].channel).toBeNull();
@@ -208,13 +222,17 @@ describe("inbound — happy path", () => {
     expect(state.prisma.state.convs.get("conv-abc").status).toBe("CLOSED");
     expect(result.reopened).toBe(false);
     // No audit message either — we didn't reopen, so no event.
-    const systemMsgs = state.prisma.state.msgs.filter((m) => m.party === "SYSTEM");
+    const systemMsgs = state.prisma.state.msgs.filter(
+      (m) => m.party === "SYSTEM",
+    );
     expect(systemMsgs).toHaveLength(0);
   });
 
   it("does NOT write a SYSTEM audit when an OPEN conversation receives a reply", async () => {
     await service.processInboundEmail(basePayload());
-    const systemMsgs = state.prisma.state.msgs.filter((m) => m.party === "SYSTEM");
+    const systemMsgs = state.prisma.state.msgs.filter(
+      (m) => m.party === "SYSTEM",
+    );
     expect(systemMsgs).toHaveLength(0);
   });
 
@@ -262,7 +280,12 @@ describe("inbound — conversation id extraction", () => {
       prisma: buildPrismaMock({
         conversations: [
           // Real cuid format (Prisma @default(cuid)) — pure [a-z0-9].
-          { id: "cmp79j0v3000csohpabzj4md9", clientId: "client-1", status: "OPEN", spam: false },
+          {
+            id: "cmp79j0v3000csohpabzj4md9",
+            clientId: "client-1",
+            status: "OPEN",
+            spam: false,
+          },
         ],
       }),
     };
@@ -357,9 +380,7 @@ describe("inbound — RFC threading capture (spinstr407)", () => {
       }),
     );
     const msg = state.prisma.state.msgs[0];
-    expect(msg.payloadJson.inReplyTo).toBe(
-      "<prior-out-1@mail.squadpitch.com>",
-    );
+    expect(msg.payloadJson.inReplyTo).toBe("<prior-out-1@mail.squadpitch.com>");
   });
 
   it("captures References from the Headers array into payloadJson", async () => {
@@ -368,7 +389,8 @@ describe("inbound — RFC threading capture (spinstr407)", () => {
         Headers: [
           {
             Name: "References",
-            Value: "<root@mail.squadpitch.com> <middle@external> <prior-out@mail.squadpitch.com>",
+            Value:
+              "<root@mail.squadpitch.com> <middle@external> <prior-out@mail.squadpitch.com>",
           },
         ],
       }),
@@ -396,7 +418,9 @@ describe("inbound — RFC threading capture (spinstr407)", () => {
 
   it("omits threading fields when the inbound payload has no Headers entries for them", async () => {
     await service.processInboundEmail(
-      basePayload({ Headers: [{ Name: "Date", Value: "Wed, 15 May 2026 20:00:00 +0000" }] }),
+      basePayload({
+        Headers: [{ Name: "Date", Value: "Wed, 15 May 2026 20:00:00 +0000" }],
+      }),
     );
     const msg = state.prisma.state.msgs[0];
     // payloadJson should not contain inReplyTo or references keys.
@@ -573,15 +597,11 @@ describe("webhook — secret verification", () => {
     }
   });
 
-  it("accepts query-param secret", async () => {
+  it("rejects query-param secrets so credentials cannot leak through URLs", async () => {
     const { server, url } = await startTestServer();
     try {
-      const res = await postJson(
-        `${url}?secret=test-secret`,
-        basePayload(),
-      );
-      expect(res.status).toBe(200);
-      expect(res.body.ok).toBe(true);
+      const res = await postJson(`${url}?secret=test-secret`, basePayload());
+      expect(res.status).toBe(403);
     } finally {
       server.close();
     }

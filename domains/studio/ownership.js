@@ -13,15 +13,23 @@ export async function requireClientOwner(req, res, next) {
     const clientId = req.params.id || req.params.clientId;
     const client = await prisma.client.findUnique({
       where: { id: clientId },
-      select: { createdBy: true },
+      select: { createdBy: true, status: true },
     });
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
     if (client.createdBy !== getAuth0Sub(req)) {
       req.log?.warn(
         { clientId, owner: client.createdBy, actor: getAuth0Sub(req) },
-        "client_owner_mismatch"
+        "client_owner_mismatch",
       );
       return sendError(res, 403, "FORBIDDEN", "Forbidden");
+    }
+    if (client.status === "ARCHIVED") {
+      return sendError(
+        res,
+        410,
+        "WORKSPACE_ARCHIVED",
+        "This workspace is archived.",
+      );
     }
     next();
   } catch (err) {
@@ -34,16 +42,21 @@ export async function requireClientOwner(req, res, next) {
 export async function requireDraftOwner(req, res, next) {
   try {
     const draftId = req.params.id;
-    if (!draftId) return sendError(res, 400, "MISSING_DRAFT_ID", "Missing draft id");
+    if (!draftId)
+      return sendError(res, 400, "MISSING_DRAFT_ID", "Missing draft id");
     const draft = await prisma.draft.findUnique({
       where: { id: draftId },
-      select: { id: true, clientId: true, client: { select: { createdBy: true } } },
+      select: {
+        id: true,
+        clientId: true,
+        client: { select: { createdBy: true } },
+      },
     });
     if (!draft) return sendError(res, 404, "NOT_FOUND", "Draft not found");
     if (draft.client?.createdBy !== getAuth0Sub(req)) {
       req.log?.warn(
         { draftId, owner: draft.client?.createdBy, actor: getAuth0Sub(req) },
-        "draft_owner_mismatch"
+        "draft_owner_mismatch",
       );
       return sendError(res, 404, "NOT_FOUND", "Draft not found");
     }
@@ -59,16 +72,21 @@ export async function requireDraftOwner(req, res, next) {
 export async function requireAssetOwner(req, res, next) {
   try {
     const assetId = req.params.assetId || req.params.id;
-    if (!assetId) return sendError(res, 400, "MISSING_ASSET_ID", "Missing asset id");
+    if (!assetId)
+      return sendError(res, 400, "MISSING_ASSET_ID", "Missing asset id");
     const asset = await prisma.mediaAsset.findUnique({
       where: { id: assetId },
-      select: { id: true, clientId: true, client: { select: { createdBy: true } } },
+      select: {
+        id: true,
+        clientId: true,
+        client: { select: { createdBy: true } },
+      },
     });
     if (!asset) return sendError(res, 404, "NOT_FOUND", "Asset not found");
     if (asset.client?.createdBy !== getAuth0Sub(req)) {
       req.log?.warn(
         { assetId, owner: asset.client?.createdBy, actor: getAuth0Sub(req) },
-        "asset_owner_mismatch"
+        "asset_owner_mismatch",
       );
       return sendError(res, 404, "NOT_FOUND", "Asset not found");
     }
@@ -98,7 +116,7 @@ export function requireBodyClientOwner(field = "clientId") {
       if (client.createdBy !== getAuth0Sub(req)) {
         req.log?.warn(
           { clientId, owner: client.createdBy, actor: getAuth0Sub(req), field },
-          "body_client_owner_mismatch"
+          "body_client_owner_mismatch",
         );
         // 404 (not 403) to avoid leaking workspace existence via id probing.
         return sendError(res, 404, "NOT_FOUND", "Client not found");
@@ -117,7 +135,11 @@ export function requireBodyClientOwner(field = "clientId") {
 // reshaping into a middleware chain.
 export async function assertClientOwnedByCurrentUser(clientId, req) {
   if (!clientId || typeof clientId !== "string") {
-    return { status: 400, code: "MISSING_CLIENT_ID", message: "Missing clientId" };
+    return {
+      status: 400,
+      code: "MISSING_CLIENT_ID",
+      message: "Missing clientId",
+    };
   }
   const client = await prisma.client.findUnique({
     where: { id: clientId },
@@ -129,7 +151,7 @@ export async function assertClientOwnedByCurrentUser(clientId, req) {
   if (client.createdBy !== getAuth0Sub(req)) {
     req.log?.warn(
       { clientId, owner: client.createdBy, actor: getAuth0Sub(req) },
-      "body_client_owner_mismatch"
+      "body_client_owner_mismatch",
     );
     return { status: 404, code: "NOT_FOUND", message: "Client not found" };
   }
@@ -216,13 +238,17 @@ export async function requireAssetAndDraftSameWorkspace(req, res, next) {
     }
     const draft = await prisma.draft.findUnique({
       where: { id: draftId },
-      select: { id: true, clientId: true, client: { select: { createdBy: true } } },
+      select: {
+        id: true,
+        clientId: true,
+        client: { select: { createdBy: true } },
+      },
     });
     if (!draft) return sendError(res, 404, "NOT_FOUND", "Draft not found");
     if (draft.client?.createdBy !== getAuth0Sub(req)) {
       req.log?.warn(
         { draftId, owner: draft.client?.createdBy, actor: getAuth0Sub(req) },
-        "draft_owner_mismatch"
+        "draft_owner_mismatch",
       );
       return sendError(res, 404, "NOT_FOUND", "Draft not found");
     }
@@ -234,13 +260,13 @@ export async function requireAssetAndDraftSameWorkspace(req, res, next) {
           draftId,
           draftClient: draft.clientId,
         },
-        "cross_workspace_link_blocked"
+        "cross_workspace_link_blocked",
       );
       return sendError(
         res,
         403,
         "CROSS_WORKSPACE_FORBIDDEN",
-        "Asset and draft must belong to the same workspace"
+        "Asset and draft must belong to the same workspace",
       );
     }
     req.draft = { id: draft.id, clientId: draft.clientId };

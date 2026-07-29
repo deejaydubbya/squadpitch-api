@@ -231,9 +231,10 @@ describe("providerCapabilities — scope hygiene", () => {
 
   it("Google Business Profile is gated on business.manage", () => {
     const gbp = providerCapabilities.GOOGLE_BUSINESS;
-    expect(gbp.missingScopes).toContain(
+    expect(gbp.currentScopes).toContain(
       "https://www.googleapis.com/auth/business.manage",
     );
+    expect(gbp.appReviewStatus).toBe("not-submitted");
   });
 
   // spinstr411 — channel registry surfacing only; no real send/poll

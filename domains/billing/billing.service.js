@@ -1,15 +1,22 @@
 import Stripe from "stripe";
 import { env } from "../../config/env.js";
 import { prisma } from "../../prisma.js";
-import { getLimitsForTier, getTierRank, PAID_TIERS } from "./billing.constants.js";
+import {
+  getLimitsForTier,
+  getTierRank,
+  PAID_TIERS,
+} from "./billing.constants.js";
 import { logEvent } from "../../lib/logger.js";
+import {
+  allowlistedBillingUrl,
+  stripeSubscriptionStatus,
+} from "./stripeSafety.js";
 
-const stripe = env.STRIPE_SECRET_KEY
-  ? new Stripe(env.STRIPE_SECRET_KEY)
-  : null;
+const stripe = env.STRIPE_SECRET_KEY ? new Stripe(env.STRIPE_SECRET_KEY) : null;
 
 function requireStripe() {
-  if (!stripe) throw Object.assign(new Error("Stripe not configured"), { status: 503 });
+  if (!stripe)
+    throw Object.assign(new Error("Stripe not configured"), { status: 503 });
   return stripe;
 }
 
@@ -38,6 +45,13 @@ const TIER_PRICE_MAP = {
 //   - status is ACTIVE or TRIALING (live billing states)
 //   - tier is one of STARTER / PRO / GROWTH / AGENCY
 const ACTIVE_STATUSES = new Set(["ACTIVE", "TRIALING"]);
+const NON_DUPLICABLE_STATUSES = new Set(["ACTIVE", "TRIALING", "PAST_DUE"]);
+
+function hasExistingBillableSubscription(sub) {
+  return Boolean(
+    sub?.stripeSubscriptionId && NON_DUPLICABLE_STATUSES.has(sub.status),
+  );
+}
 
 export function getEffectiveTier(sub) {
   if (!sub) return "FREE";
@@ -55,11 +69,20 @@ const PLANS_CACHE_TTL = 300_000; // 5 minutes
 
 export async function getPlans() {
   // Return cached if fresh
-  if (_plansCache && Date.now() - _plansCacheAt < PLANS_CACHE_TTL) return _plansCache;
+  if (_plansCache && Date.now() - _plansCacheAt < PLANS_CACHE_TTL)
+    return _plansCache;
 
   const s = requireStripe();
   const tiers = ["STARTER", "PRO", "GROWTH", "AGENCY"];
-  const plans = [{ tier: "FREE", priceId: null, amount: 0, currency: "usd", interval: "month" }];
+  const plans = [
+    {
+      tier: "FREE",
+      priceId: null,
+      amount: 0,
+      currency: "usd",
+      interval: "month",
+    },
+  ];
 
   for (const tier of tiers) {
     const priceId = TIER_PRICE_MAP[tier];
@@ -74,7 +97,10 @@ export async function getPlans() {
         interval: price.recurring?.interval ?? "month",
       });
     } catch (err) {
-      console.error(`[BILLING] Failed to fetch price for ${tier}:`, err.message);
+      console.error(
+        `[BILLING] Failed to fetch price for ${tier}:`,
+        err.message,
+      );
     }
   }
 
@@ -116,20 +142,48 @@ export async function getOrCreateCustomer(userId, email) {
 
 // ── Checkout ─────────────────────────────────────────────────────────────
 
-export async function createCheckoutSession({ userId, email, tier, successUrl, cancelUrl }) {
+export async function createCheckoutSession({
+  userId,
+  email,
+  tier,
+  successUrl,
+  cancelUrl,
+  idempotencyKey,
+}) {
   const s = requireStripe();
+  const existingSubscription = await prisma.subscription.findUnique({
+    where: { userId },
+  });
+  if (hasExistingBillableSubscription(existingSubscription)) {
+    throw Object.assign(
+      new Error(
+        "An active subscription already exists; change the current plan instead",
+      ),
+      { status: 409 },
+    );
+  }
   const customerId = await getOrCreateCustomer(userId, email);
   const priceId = TIER_PRICE_MAP[tier];
-  if (!priceId) throw Object.assign(new Error(`No price configured for tier: ${tier}`), { status: 400 });
+  if (!priceId)
+    throw Object.assign(new Error(`No price configured for tier: ${tier}`), {
+      status: 400,
+    });
 
-  const session = await s.checkout.sessions.create({
-    customer: customerId,
-    mode: "subscription",
-    line_items: [{ price: priceId, quantity: 1 }],
-    success_url: successUrl,
-    cancel_url: cancelUrl,
-    metadata: { userId, tier },
-  });
+  const session = await s.checkout.sessions.create(
+    {
+      customer: customerId,
+      client_reference_id: userId,
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: allowlistedBillingUrl(successUrl, env.APP_URL),
+      cancel_url: allowlistedBillingUrl(cancelUrl, env.APP_URL),
+      metadata: { userId, tier },
+      subscription_data: { metadata: { userId, tier } },
+    },
+    idempotencyKey
+      ? { idempotencyKey: `checkout:${userId}:${idempotencyKey}` }
+      : undefined,
+  );
 
   logEvent("billing.checkout.session_created", {
     userId,
@@ -139,6 +193,141 @@ export async function createCheckoutSession({ userId, email, tier, successUrl, c
   });
 
   return { url: session.url };
+}
+
+export async function selectSignupPlan({ userId, tier }) {
+  if (!PAID_TIERS.includes(tier)) {
+    throw Object.assign(new Error("Unknown paid plan"), { status: 400 });
+  }
+
+  const current = await prisma.subscription.findUnique({ where: { userId } });
+  const effectiveTier = getEffectiveTier(current);
+  if (effectiveTier !== "FREE") {
+    return { status: "ACTIVATED", desiredTier: effectiveTier, effectiveTier };
+  }
+  if (hasExistingBillableSubscription(current)) {
+    throw Object.assign(
+      new Error(
+        "An existing subscription needs recovery in the Customer Portal",
+      ),
+      { status: 409 },
+    );
+  }
+
+  const intent = await prisma.signupPlanIntent.upsert({
+    where: { userId },
+    create: { userId, desiredTier: tier },
+    update: {
+      desiredTier: tier,
+      status: "SELECTED",
+      stripeCheckoutSessionId: null,
+      checkoutUrl: null,
+      checkoutAttempt: { increment: 1 },
+      activatedAt: null,
+    },
+  });
+  logEvent("signup.plan.selected", { userId, tier });
+  return { ...intent, effectiveTier: "FREE" };
+}
+
+export async function getSignupPlanIntent(userId) {
+  const [intent, subscription] = await Promise.all([
+    prisma.signupPlanIntent.findUnique({ where: { userId } }),
+    prisma.subscription.findUnique({ where: { userId } }),
+  ]);
+  const effectiveTier = getEffectiveTier(subscription);
+  if (intent && effectiveTier !== "FREE" && intent.status !== "ACTIVATED") {
+    const activated = await prisma.signupPlanIntent.update({
+      where: { userId },
+      data: { status: "ACTIVATED", activatedAt: new Date() },
+    });
+    return { ...activated, effectiveTier };
+  }
+  return { intent, effectiveTier };
+}
+
+export async function resumeSignupCheckout({ userId, email }) {
+  const state = await getSignupPlanIntent(userId);
+  if (state.effectiveTier !== "FREE") {
+    return { status: "ACTIVATED", effectiveTier: state.effectiveTier };
+  }
+
+  let intent = state.intent;
+  if (!intent) {
+    throw Object.assign(new Error("Select a plan before starting checkout"), {
+      status: 409,
+    });
+  }
+
+  const s = requireStripe();
+  if (intent.stripeCheckoutSessionId) {
+    const existing = await s.checkout.sessions.retrieve(
+      intent.stripeCheckoutSessionId,
+    );
+    if (existing.status === "open" && existing.url) {
+      logEvent("signup.checkout.resumed", {
+        userId,
+        tier: intent.desiredTier,
+        stripeSessionId: existing.id,
+      });
+      return { status: "CHECKOUT_CREATED", url: existing.url };
+    }
+    intent = await prisma.signupPlanIntent.update({
+      where: { userId },
+      data: {
+        checkoutAttempt: { increment: 1 },
+        stripeCheckoutSessionId: null,
+        checkoutUrl: null,
+        status: "SELECTED",
+      },
+    });
+  }
+
+  const customerId = await getOrCreateCustomer(userId, email);
+  const priceId = TIER_PRICE_MAP[intent.desiredTier];
+  if (!priceId) {
+    throw Object.assign(
+      new Error(`No price configured for tier: ${intent.desiredTier}`),
+      { status: 400 },
+    );
+  }
+
+  const continuation = `${env.APP_URL}/signup/continue`;
+  const session = await s.checkout.sessions.create(
+    {
+      customer: customerId,
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${continuation}?checkout=success`,
+      cancel_url: `${continuation}?checkout=cancel`,
+      metadata: {
+        userId,
+        tier: intent.desiredTier,
+        signupPlanIntentId: intent.id,
+      },
+      subscription_data: {
+        metadata: { userId, tier: intent.desiredTier },
+      },
+    },
+    {
+      idempotencyKey: `signup-plan:${intent.id}:${intent.checkoutAttempt}`,
+    },
+  );
+
+  await prisma.signupPlanIntent.update({
+    where: { userId },
+    data: {
+      status: "CHECKOUT_CREATED",
+      stripeCheckoutSessionId: session.id,
+      checkoutUrl: session.url,
+    },
+  });
+  logEvent("signup.checkout.started", {
+    userId,
+    tier: intent.desiredTier,
+    stripeSessionId: session.id,
+  });
+  return { status: "CHECKOUT_CREATED", url: session.url };
 }
 
 // ── Portal ───────────────────────────────────────────────────────────────
@@ -152,7 +341,7 @@ export async function createPortalSession({ userId, returnUrl }) {
 
   const session = await s.billingPortal.sessions.create({
     customer: sub.stripeCustomerId,
-    return_url: returnUrl,
+    return_url: allowlistedBillingUrl(returnUrl, env.APP_URL),
   });
 
   return { url: session.url };
@@ -248,13 +437,34 @@ export async function checkUsageNearing(userId, field) {
   if (limit === Infinity) return null;
   const pct = current / limit;
   if (pct >= 1) {
-    return { nearing: true, status: "exceeded", metric: field, used: current, limit, tier };
+    return {
+      nearing: true,
+      status: "exceeded",
+      metric: field,
+      used: current,
+      limit,
+      tier,
+    };
   }
   if (pct >= 0.9) {
-    return { nearing: true, status: "urgent", metric: field, used: current, limit, tier };
+    return {
+      nearing: true,
+      status: "urgent",
+      metric: field,
+      used: current,
+      limit,
+      tier,
+    };
   }
   if (pct >= 0.7) {
-    return { nearing: true, status: "warning", metric: field, used: current, limit, tier };
+    return {
+      nearing: true,
+      status: "warning",
+      metric: field,
+      used: current,
+      limit,
+      tier,
+    };
   }
   return null;
 }
@@ -275,7 +485,10 @@ export async function checkClientLimit(userId) {
   });
   if (!user) return false;
   const count = await prisma.client.count({
-    where: { createdBy: user.auth0Sub, status: { notIn: ["ARCHIVED", "DRAFT"] } },
+    where: {
+      createdBy: user.auth0Sub,
+      status: { notIn: ["ARCHIVED", "DRAFT"] },
+    },
   });
   return count < limit;
 }
@@ -305,23 +518,35 @@ export async function enforceUsageLimit(userId, field) {
  * Check if adding `additionalBytes` would exceed storage limits.
  * Returns { allowed, reason?, current?, limit? }
  */
-export async function checkStorageLimit(userId, additionalBytes, isVideo = false) {
+export async function checkStorageLimit(
+  userId,
+  additionalBytes,
+  isVideo = false,
+) {
   const { storage, limits } = await getUsage(userId);
   const newTotal = storage.totalBytes + additionalBytes;
-  if (newTotal > limits.totalStorageBytes && limits.totalStorageBytes !== Infinity) {
+  if (
+    newTotal > limits.totalStorageBytes &&
+    limits.totalStorageBytes !== Infinity
+  ) {
     return {
       allowed: false,
-      reason: "Total storage limit reached. Delete unused assets or upgrade your plan.",
+      reason:
+        "Total storage limit reached. Delete unused assets or upgrade your plan.",
       current: storage.totalBytes,
       limit: limits.totalStorageBytes,
     };
   }
   if (isVideo) {
     const newVideoTotal = storage.videoBytes + additionalBytes;
-    if (newVideoTotal > limits.videoStorageBytes && limits.videoStorageBytes !== Infinity) {
+    if (
+      newVideoTotal > limits.videoStorageBytes &&
+      limits.videoStorageBytes !== Infinity
+    ) {
       return {
         allowed: false,
-        reason: "Video storage limit reached. Delete unused videos or upgrade your plan.",
+        reason:
+          "Video storage limit reached. Delete unused videos or upgrade your plan.",
         current: storage.videoBytes,
         limit: limits.videoStorageBytes,
       };
@@ -334,7 +559,12 @@ export async function checkStorageLimit(userId, additionalBytes, isVideo = false
  * Build a structured quota error object for route responses.
  */
 export function buildQuotaError(limitType, current, allowed, tier) {
-  const NEXT_TIER = { FREE: "STARTER", STARTER: "PRO", PRO: "GROWTH", GROWTH: "AGENCY" };
+  const NEXT_TIER = {
+    FREE: "STARTER",
+    STARTER: "PRO",
+    PRO: "GROWTH",
+    GROWTH: "AGENCY",
+  };
   const nextTier = NEXT_TIER[tier];
   const nextLimits = nextTier ? getLimitsForTier(nextTier) : null;
   const nextValue = nextLimits?.[limitType];
@@ -356,7 +586,8 @@ export function buildQuotaError(limitType, current, allowed, tier) {
  */
 export async function getRemainingUsage(userId) {
   const { usage, limits, tier, period, storage } = await getUsage(userId);
-  const rem = (field) => Math.max(0, (limits[field] ?? Infinity) - (usage[field] ?? 0));
+  const rem = (field) =>
+    Math.max(0, (limits[field] ?? Infinity) - (usage[field] ?? 0));
   return {
     period,
     tier,
@@ -420,12 +651,19 @@ export async function changePlan({ userId, newTier }) {
 
   const sub = await prisma.subscription.findUnique({ where: { userId } });
   if (!sub?.stripeSubscriptionId) {
-    throw Object.assign(new Error("No active subscription to change. Use checkout to subscribe first."), { status: 400 });
+    throw Object.assign(
+      new Error(
+        "No active subscription to change. Use checkout to subscribe first.",
+      ),
+      { status: 400 },
+    );
   }
 
   const newPriceId = TIER_PRICE_MAP[newTier];
   if (!newPriceId) {
-    throw Object.assign(new Error(`No price configured for tier: ${newTier}`), { status: 400 });
+    throw Object.assign(new Error(`No price configured for tier: ${newTier}`), {
+      status: 400,
+    });
   }
 
   // Prevent changing to the same tier
@@ -437,31 +675,36 @@ export async function changePlan({ userId, newTier }) {
   const stripeSub = await s.subscriptions.retrieve(sub.stripeSubscriptionId);
   const subscriptionItemId = stripeSub.items?.data?.[0]?.id;
   if (!subscriptionItemId) {
-    throw Object.assign(new Error("Could not find subscription item"), { status: 500 });
+    throw Object.assign(new Error("Could not find subscription item"), {
+      status: 500,
+    });
   }
 
   const isUpgrade = getTierRank(newTier) > getTierRank(sub.tier);
 
   // Update the existing subscription with proration
   const updated = await s.subscriptions.update(sub.stripeSubscriptionId, {
-    items: [{
-      id: subscriptionItemId,
-      price: newPriceId,
-    }],
+    items: [
+      {
+        id: subscriptionItemId,
+        price: newPriceId,
+      },
+    ],
     proration_behavior: "create_prorations",
     metadata: { tier: newTier },
   });
 
-  const periodEnd = updated.current_period_end
-    ?? updated.items?.data?.[0]?.current_period_end;
+  const periodEnd =
+    updated.current_period_end ?? updated.items?.data?.[0]?.current_period_end;
 
-  // Update local DB immediately for upgrades (downgrades confirmed via webhook)
-  await prisma.subscription.update({
-    where: { userId },
-    data: {
-      tier: newTier,
-      ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
-    },
+  // Stripe's signed webhook remains authoritative for both upgrades and
+  // downgrades. Never grant a higher tier from this response alone.
+  logEvent("billing.subscription.change_requested", {
+    userId,
+    fromTier: sub.tier,
+    toTier: newTier,
+    isUpgrade,
+    stripeSubscriptionId: sub.stripeSubscriptionId,
   });
 
   return {
@@ -478,7 +721,7 @@ export async function changePlan({ userId, newTier }) {
 const PRICE_TO_TIER = Object.fromEntries(
   Object.entries(TIER_PRICE_MAP)
     .filter(([, v]) => v)
-    .map(([k, v]) => [v, k])
+    .map(([k, v]) => [v, k]),
 );
 
 // ── Stripe webhook ordering / dedup guard ─────────────────────────────
@@ -551,8 +794,8 @@ export async function handleWebhookEvent(event) {
       const sub = await s.subscriptions.retrieve(subscriptionId);
 
       // current_period_end moved to items in newer Stripe API versions
-      const periodEnd = sub.current_period_end
-        ?? sub.items?.data?.[0]?.current_period_end;
+      const periodEnd =
+        sub.current_period_end ?? sub.items?.data?.[0]?.current_period_end;
 
       const before = guard.sub;
 
@@ -578,6 +821,13 @@ export async function handleWebhookEvent(event) {
         },
       });
 
+      if (prisma.signupPlanIntent) {
+        await prisma.signupPlanIntent.updateMany({
+          where: { userId },
+          data: { status: "ACTIVATED", activatedAt: new Date() },
+        });
+      }
+
       logEvent("billing.subscription.activated", {
         userId,
         fromTier: before ? getEffectiveTier(before) : "FREE",
@@ -589,7 +839,9 @@ export async function handleWebhookEvent(event) {
 
     case "customer.subscription.updated": {
       const sub = event.data.object;
-      const guard = await shouldProcessEvent(event, { stripeSubscriptionId: sub.id });
+      const guard = await shouldProcessEvent(event, {
+        stripeSubscriptionId: sub.id,
+      });
       if (!guard.allow) {
         logSkippedEvent(event, guard.reason, guard.sub);
         break;
@@ -597,13 +849,10 @@ export async function handleWebhookEvent(event) {
       const dbSub = guard.sub;
       if (!dbSub) break;
 
-      const status = sub.status === "active" ? "ACTIVE"
-        : sub.status === "past_due" ? "PAST_DUE"
-        : sub.status === "canceled" ? "CANCELED"
-        : "ACTIVE";
+      const status = stripeSubscriptionStatus(sub.status);
 
-      const periodEnd = sub.current_period_end
-        ?? sub.items?.data?.[0]?.current_period_end;
+      const periodEnd =
+        sub.current_period_end ?? sub.items?.data?.[0]?.current_period_end;
 
       // Sync tier from Stripe price ID (handles plan changes via Stripe dashboard or API)
       const currentPriceId = sub.items?.data?.[0]?.price?.id;
@@ -646,7 +895,9 @@ export async function handleWebhookEvent(event) {
 
     case "customer.subscription.deleted": {
       const sub = event.data.object;
-      const guard = await shouldProcessEvent(event, { stripeSubscriptionId: sub.id });
+      const guard = await shouldProcessEvent(event, {
+        stripeSubscriptionId: sub.id,
+      });
       if (!guard.allow) {
         logSkippedEvent(event, guard.reason, guard.sub);
         break;
@@ -668,7 +919,9 @@ export async function handleWebhookEvent(event) {
       const subId = invoice.subscription;
       if (!subId) break;
 
-      const guard = await shouldProcessEvent(event, { stripeSubscriptionId: subId });
+      const guard = await shouldProcessEvent(event, {
+        stripeSubscriptionId: subId,
+      });
       if (!guard.allow) {
         logSkippedEvent(event, guard.reason, guard.sub);
         break;
@@ -690,7 +943,9 @@ export async function handleWebhookEvent(event) {
       const subId = invoice.subscription;
       if (!subId) break;
 
-      const guard = await shouldProcessEvent(event, { stripeSubscriptionId: subId });
+      const guard = await shouldProcessEvent(event, {
+        stripeSubscriptionId: subId,
+      });
       if (!guard.allow) {
         logSkippedEvent(event, guard.reason, guard.sub);
         break;

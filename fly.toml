@@ -34,7 +34,7 @@ primary_region = "ord"
     timeout = "5s"
     grace_period = "30s"
     method = "GET"
-    path = "/health"
+    path = "/ready"
 
 [env]
   NODE_ENV = "production"

@@ -35,7 +35,10 @@ inboxWebhookRouter.post(
       // the lengths match, and (c) whether the prefix/suffix matches
       // (so a copy-paste typo is obvious). Will be removed once
       // the inbound webhook is confirmed working end-to-end.
-      console.warn("[postmark.inbound] 403 — secret mismatch:", auditAuthAttempt(req));
+      console.warn(
+        "[postmark.inbound] 403 — secret mismatch:",
+        auditAuthAttempt(req),
+      );
       return sendError(res, 403, "FORBIDDEN", "Invalid webhook secret");
     }
 
@@ -76,7 +79,10 @@ export function verifyWebhookSecret(req) {
 
   // 1. X-Postmark-Secret header
   const headerSecret = req.headers["x-postmark-secret"];
-  if (typeof headerSecret === "string" && timingSafeEqual(headerSecret, expected)) {
+  if (
+    typeof headerSecret === "string" &&
+    timingSafeEqual(headerSecret, expected)
+  ) {
     return true;
   }
 
@@ -84,7 +90,9 @@ export function verifyWebhookSecret(req) {
   const auth = req.headers["authorization"];
   if (typeof auth === "string" && auth.startsWith("Basic ")) {
     try {
-      const decoded = Buffer.from(auth.slice(6).trim(), "base64").toString("utf8");
+      const decoded = Buffer.from(auth.slice(6).trim(), "base64").toString(
+        "utf8",
+      );
       const idx = decoded.indexOf(":");
       const password = idx >= 0 ? decoded.slice(idx + 1) : decoded;
       if (timingSafeEqual(password, expected)) return true;
@@ -94,11 +102,6 @@ export function verifyWebhookSecret(req) {
   }
 
   // 3. ?secret= query param
-  const querySecret = req.query?.secret;
-  if (typeof querySecret === "string" && timingSafeEqual(querySecret, expected)) {
-    return true;
-  }
-
   return false;
 }
 
@@ -120,7 +123,6 @@ function auditAuthAttempt(req) {
   const expected = env.POSTMARK_INBOUND_WEBHOOK_SECRET;
   const out = {
     expectedConfigured: Boolean(expected),
-    expectedLen: typeof expected === "string" ? expected.length : 0,
     expectedFp: fingerprint(expected),
     methods: {
       header: false,
@@ -142,7 +144,9 @@ function auditAuthAttempt(req) {
   if (typeof auth === "string" && auth.startsWith("Basic ")) {
     out.methods.basicAuth = true;
     try {
-      const decoded = Buffer.from(auth.slice(6).trim(), "base64").toString("utf8");
+      const decoded = Buffer.from(auth.slice(6).trim(), "base64").toString(
+        "utf8",
+      );
       const idx = decoded.indexOf(":");
       const password = idx >= 0 ? decoded.slice(idx + 1) : decoded;
       out.basicAuthFp = fingerprint(password);
@@ -151,18 +155,11 @@ function auditAuthAttempt(req) {
     }
   }
 
-  const querySecret = req.query?.secret;
-  if (typeof querySecret === "string" && querySecret.length > 0) {
-    out.methods.query = true;
-    out.queryFp = fingerprint(querySecret);
-  }
-
   return out;
 }
 
 // "len=64 first=DXBf last=Oq6C" — enough to spot a typo, not
 // enough to reconstruct the value.
 function fingerprint(s) {
-  if (typeof s !== "string" || s.length === 0) return null;
-  return `len=${s.length} first=${s.slice(0, 4)} last=${s.slice(-4)}`;
+  return typeof s === "string" && s.length > 0 ? "present" : null;
 }

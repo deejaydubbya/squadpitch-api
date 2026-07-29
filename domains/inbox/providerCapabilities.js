@@ -34,12 +34,12 @@ export const providerCapabilities = {
   SQUADSITES: {
     label: "SquadSites form",
     ingestComments: false,
-    ingestDMs: true,         // form submissions land as CONTACT messages
+    ingestDMs: true, // form submissions land as CONTACT messages
     ingestReviews: false,
     sendPublicReply: false,
-    sendDM: false,           // direct outbound is email, handled separately
+    sendDM: false, // direct outbound is email, handled separately
     sendReview: false,
-    webhooks: false,         // internal — same-process intake
+    webhooks: false, // internal — same-process intake
     polling: false,
     currentScopes: [],
     missingScopes: [],
@@ -51,12 +51,12 @@ export const providerCapabilities = {
   EMAIL: {
     label: "Email (Postmark)",
     ingestComments: false,
-    ingestDMs: true,         // inbound replies via Postmark webhook
+    ingestDMs: true, // inbound replies via Postmark webhook
     ingestReviews: false,
     sendPublicReply: false,
-    sendDM: true,            // outbound via Postmark sendEmail — PROVEN
+    sendDM: true, // outbound via Postmark sendEmail — PROVEN
     sendReview: false,
-    webhooks: true,          // Postmark inbound webhook
+    webhooks: true, // Postmark inbound webhook
     polling: false,
     currentScopes: ["POSTMARK_SERVER_TOKEN", "POSTMARK_INBOUND_WEBHOOK_SECRET"],
     missingScopes: [],
@@ -68,18 +68,22 @@ export const providerCapabilities = {
   SMS: {
     label: "SMS (Twilio)",
     ingestComments: false,
-    ingestDMs: true,         // possible: Twilio inbound SMS webhook
+    ingestDMs: true, // possible: Twilio inbound SMS webhook
     ingestReviews: false,
     sendPublicReply: false,
-    sendDM: true,            // possible: Twilio Programmable Messaging
+    sendDM: true, // possible: Twilio Programmable Messaging
     sendReview: false,
     webhooks: true,
     polling: false,
-    currentScopes: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"],
+    currentScopes: [
+      "TWILIO_ACCOUNT_SID",
+      "TWILIO_AUTH_TOKEN",
+      "TWILIO_MESSAGING_SERVICE_SID",
+    ],
     missingScopes: [],
     appReviewStatus: "not-submitted",
     notes:
-      "Env vars exist but no adapter yet. Need outbound service mirroring inbox.outbound.email.service.js + inbound webhook route. A2P 10DLC registration required for US carriers before any production send.",
+      "Outbound, signed inbound/status webhooks, STOP persistence, idempotency, and delivery failure tracking are wired. Production remains blocked until the correct A2P/ISV registration is approved and both SMS gates are enabled.",
   },
 
   FACEBOOK: {
@@ -103,7 +107,7 @@ export const providerCapabilities = {
     sendPublicReply: false,
     sendDM: false,
     sendReview: false,
-    webhooks: false,         // Meta webhooks removed June 2026; ingestion is poll-driven
+    webhooks: false, // Meta webhooks removed June 2026; ingestion is poll-driven
     polling: true,
     // Keep in sync with FACEBOOK_SCOPES in
     // domains/studio/oauth/facebook.oauth.js. The seven-scope shape
@@ -150,7 +154,7 @@ export const providerCapabilities = {
     sendPublicReply: false,
     sendDM: false,
     sendReview: false,
-    webhooks: false,                  // Meta webhooks removed June 2026; ingestion is poll-driven
+    webhooks: false, // Meta webhooks removed June 2026; ingestion is poll-driven
     polling: true,
     // Post-IG-OAuth-migration (Prompts 01-02) the Instagram channel
     // requests the new Instagram Login / Business Login scope
@@ -178,15 +182,15 @@ export const providerCapabilities = {
   GOOGLE_BUSINESS: {
     label: "Google Business Profile",
     ingestComments: false,
-    ingestDMs: false,        // GBP Messages API was deprecated 2024
-    ingestReviews: false,    // possible via Reviews API
+    ingestDMs: false, // GBP Messages API was deprecated 2024
+    ingestReviews: false, // possible via Reviews API
     sendPublicReply: false,
     sendDM: false,
-    sendReview: false,       // possible: reviews.reply
-    webhooks: false,         // no push API for reviews — polling only
+    sendReview: false, // possible: reviews.reply
+    webhooks: false, // no push API for reviews — polling only
     polling: true,
-    currentScopes: [],
-    missingScopes: ["https://www.googleapis.com/auth/business.manage"],
+    currentScopes: ["https://www.googleapis.com/auth/business.manage"],
+    missingScopes: [],
     appReviewStatus: "not-submitted",
     notes:
       "Reviews INGESTION layer landed in spinstr11 (domains/inbox/inbox.gbp.ingestion.service.js) — accepts a normalized review payload and writes provider=GOOGLE_BUSINESS, sourceType=REVIEW, visibility=PUBLIC. Still missing: OAuth flow (googleBusinessProfile.oauth.js), the reviews polling worker that calls accounts.locations.reviews.list, and the reviews.updateReply send path. Need Google sensitive-scope verification for business.manage before any of those can fire in production.",
@@ -194,13 +198,13 @@ export const providerCapabilities = {
 
   YOUTUBE: {
     label: "YouTube",
-    ingestComments: true,    // youtube.readonly grants commentThreads.list — POLLER WIRED
-    ingestDMs: false,        // no DM API on YouTube
+    ingestComments: true, // youtube.readonly grants commentThreads.list — POLLER WIRED
+    ingestDMs: false, // no DM API on YouTube
     ingestReviews: false,
-    sendPublicReply: true,   // youtube.force-ssl now requested; resolver checks per-connection scope grant
+    sendPublicReply: true, // youtube.force-ssl now requested; resolver checks per-connection scope grant
     sendDM: false,
     sendReview: false,
-    webhooks: false,         // PubSubHubbub only for new videos, not comments
+    webhooks: false, // PubSubHubbub only for new videos, not comments
     polling: true,
     currentScopes: [
       "https://www.googleapis.com/auth/youtube.upload",
@@ -208,15 +212,15 @@ export const providerCapabilities = {
       "https://www.googleapis.com/auth/youtube.force-ssl",
     ],
     missingScopes: [],
-    appReviewStatus: "live",         // current scopes already approved
+    appReviewStatus: "live", // current scopes already approved
     notes:
       "Comment-ingestion poller landed in spinstr416 (inbox.youtube.ingestion.service.js + youtubeCommentPoller.service.js + youtubeCommentPollerWorker.js). Reply via comments.insert is feasible once a connection's granted scopes include youtube.force-ssl — the OAuth consent request asks for it, but Google's unverified-app guard blocks non-test-users from granting it until the project completes sensitive-scope verification. Test users on the Cloud project can grant it now. Resolver gates REPLY_PUBLIC_COMMENT on the actual granted-scopes list. No webhook for comments — polling required.",
   },
 
   LINKEDIN: {
     label: "LinkedIn (personal)",
-    ingestComments: false,   // personal posts have no programmatic comment ingest
-    ingestDMs: false,        // LinkedIn Messaging API is closed
+    ingestComments: false, // personal posts have no programmatic comment ingest
+    ingestDMs: false, // LinkedIn Messaging API is closed
     ingestReviews: false,
     sendPublicReply: false,
     sendDM: false,
@@ -224,7 +228,7 @@ export const providerCapabilities = {
     webhooks: false,
     polling: false,
     currentScopes: ["openid", "profile", "w_member_social"],
-    missingScopes: ["r_member_social"],  // even with this, comment-read on personal posts isn't reliable
+    missingScopes: ["r_member_social"], // even with this, comment-read on personal posts isn't reliable
     appReviewStatus: "live",
     notes:
       "Personal-feed Inbox isn't viable on LinkedIn's current partner API. Defer entirely — orgs are the realistic surface.",
@@ -244,14 +248,14 @@ export const providerCapabilities = {
     sendPublicReply: false,
     sendDM: false,
     sendReview: false,
-    webhooks: false,         // LinkedIn does NOT push org events
+    webhooks: false, // LinkedIn does NOT push org events
     polling: false,
     currentScopes: [
       "r_organization_admin",
       "w_organization_social",
       "r_organization_social",
     ],
-    missingScopes: [],       // scopes ARE present; LinkedIn's app gate is the blocker
+    missingScopes: [], // scopes ARE present; LinkedIn's app gate is the blocker
     appReviewStatus: "submitted",
     notes:
       "Community Management API approval pending. Do NOT flip ingestion or reply on until LinkedIn approves the app. Resolver surfaces 'Pending LinkedIn Community Management API approval.' for both REPLY_PUBLIC_COMMENT and REPLY_DM on LINKEDIN conversations.",
@@ -259,15 +263,20 @@ export const providerCapabilities = {
 
   X: {
     label: "X (Twitter)",
-    ingestComments: false,   // would need tier-gated mentions endpoint at scale
-    ingestDMs: false,        // dm.read scope NOT in our set + tier-gated
+    ingestComments: false, // would need tier-gated mentions endpoint at scale
+    ingestDMs: false, // dm.read scope NOT in our set + tier-gated
     ingestReviews: false,
-    sendPublicReply: true,   // tweet.write is in scope — could reply
-    sendDM: false,           // dm.write not in scope
+    sendPublicReply: true, // tweet.write is in scope — could reply
+    sendDM: false, // dm.write not in scope
     sendReview: false,
-    webhooks: false,         // Account Activity API requires Enterprise tier
+    webhooks: false, // Account Activity API requires Enterprise tier
     polling: true,
-    currentScopes: ["tweet.write", "tweet.read", "users.read", "offline.access"],
+    currentScopes: [
+      "tweet.write",
+      "tweet.read",
+      "users.read",
+      "offline.access",
+    ],
     missingScopes: ["dm.read", "dm.write"],
     appReviewStatus: "live",
     notes:
@@ -285,7 +294,7 @@ export const providerCapabilities = {
     webhooks: false,
     polling: false,
     currentScopes: ["user.info.basic", "video.publish"],
-    missingScopes: [],       // TikTok has no public comment/DM APIs
+    missingScopes: [], // TikTok has no public comment/DM APIs
     appReviewStatus: "live",
     notes:
       "Publish-only. TikTok does not expose comment or DM APIs to third parties. Inbox cannot ingest from TikTok today.",
@@ -298,7 +307,7 @@ export const providerCapabilities = {
     // 15-min interval and ingests each reply idempotently as
     // provider=THREADS, sourceType=SOCIAL_COMMENT, visibility=PUBLIC.
     ingestComments: true,
-    ingestDMs: false,        // Threads has no DM API
+    ingestDMs: false, // Threads has no DM API
     ingestReviews: false,
     // Reply publishing is intentionally gated. threads_manage_replies
     // is granted, but Threads' "reply to a thread" is implemented as
@@ -310,7 +319,7 @@ export const providerCapabilities = {
     sendPublicReply: false,
     sendDM: false,
     sendReview: false,
-    webhooks: false,         // Threads Webhook doesn't cover reply ingestion
+    webhooks: false, // Threads Webhook doesn't cover reply ingestion
     polling: true,
     currentScopes: [
       "threads_basic",
@@ -327,8 +336,8 @@ export const providerCapabilities = {
 
   PINTEREST: {
     label: "Pinterest",
-    ingestComments: false,   // would need pin_comment scopes (none requested)
-    ingestDMs: false,        // no DM API
+    ingestComments: false, // would need pin_comment scopes (none requested)
+    ingestDMs: false, // no DM API
     ingestReviews: false,
     sendPublicReply: false,
     sendDM: false,
@@ -356,7 +365,7 @@ export const providerCapabilities = {
     sendPublicReply: false,
     sendDM: true,
     sendReview: false,
-    webhooks: true,         // same-process via website widget
+    webhooks: true, // same-process via website widget
     polling: false,
     currentScopes: [],
     missingScopes: [],
@@ -368,7 +377,7 @@ export const providerCapabilities = {
   MANUAL: {
     label: "Manual",
     ingestComments: false,
-    ingestDMs: true,         // user records the message themselves
+    ingestDMs: true, // user records the message themselves
     ingestReviews: false,
     sendPublicReply: false,
     sendDM: false,

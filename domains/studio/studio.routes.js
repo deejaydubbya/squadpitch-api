@@ -9,7 +9,10 @@ import { prisma } from "../../prisma.js";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
 import { sniffImageMime, sniffVideoMime } from "../../lib/mimeDetect.js";
-import { computeAutoScheduleSlots, resolveClientTimezone } from "../../lib/scheduleHelpers.js";
+import {
+  computeAutoScheduleSlots,
+  resolveClientTimezone,
+} from "../../lib/scheduleHelpers.js";
 import {
   requireClientOwner,
   requireDraftOwner,
@@ -104,64 +107,132 @@ import {
   PersonaCutoutSchema,
   PersonaBlendSchema,
 } from "./studio.schemas.js";
-import { getAnalyticsOverview, getPostDetail } from "./analyticsOverview.service.js";
-import { getPostMetricHistory, getPostMetricGrowth } from "./postMetricHistory.service.js";
+import {
+  getAnalyticsOverview,
+  getPostDetail,
+} from "./analyticsOverview.service.js";
+import {
+  getPostMetricHistory,
+  getPostMetricGrowth,
+} from "./postMetricHistory.service.js";
 import * as dataService from "./data.service.js";
 import * as blueprintService from "./blueprint.service.js";
 import * as opportunityService from "./contentOpportunity.service.js";
 import * as dataAnalyticsService from "./dataAnalytics.service.js";
 import { generateInsights } from "./insights.service.js";
 import { generateRecommendations } from "./recommendations.service.js";
-import { previewAutopilot, executeAutopilot } from "./dataAwareAutopilot.service.js";
-import { getDashboardRecommendations, getDashboardActions } from "./dashboard.service.js";
+import {
+  previewAutopilot,
+  executeAutopilot,
+} from "./dataAwareAutopilot.service.js";
+import {
+  getDashboardRecommendations,
+  getDashboardActions,
+} from "./dashboard.service.js";
 import { getRecommendations } from "./recommendationEngine.service.js";
 import { getUnusedData, getDataSuggestions } from "./dataUsage.service.js";
 import { signState, verifyState } from "./oauth/oauthStateCodec.js";
 import { getOAuthForChannel } from "./oauth/index.js";
-import { checkUsageLimit, incrementUsage, checkUsageNearing, checkClientLimit, getSubscription, getEffectiveTier, checkStorageLimit, buildQuotaError, enforceUsageLimit } from "../billing/billing.service.js";
+import {
+  checkUsageLimit,
+  incrementUsage,
+  checkUsageNearing,
+  checkClientLimit,
+  getSubscription,
+  getEffectiveTier,
+  checkStorageLimit,
+  buildQuotaError,
+  enforceUsageLimit,
+} from "../billing/billing.service.js";
 import { getLimitsForTier } from "../billing/billing.constants.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
-import { isProviderBudgetExceeded, getServiceStatus, getThrottlePolicy } from "../billing/serviceHealth.service.js";
+import {
+  isProviderBudgetExceeded,
+  getServiceStatus,
+  getThrottlePolicy,
+} from "../billing/serviceHealth.service.js";
 import { redisGet, redisSet, redisSetNX, redisDel } from "../../redis.js";
 import crypto from "crypto";
 import { encryptToken } from "../../lib/tokenCrypto.js";
-import { enqueueNotification, recordActivity } from "../notifications/notification.service.js";
+import {
+  enqueueNotification,
+  recordActivity,
+} from "../notifications/notification.service.js";
 import * as importService from "./dataImport.service.js";
 import * as onboardingService from "./onboardingSetup.service.js";
 import * as agentOnboarding from "./agentOnboarding.service.js";
 import { crawlWebsite } from "./crawlWebsite.js";
 import { filterPropertyImages } from "./scrapeUrl.js";
-import { getStarterAngles, getIndustryTechStack, getRecommendationTemplates, getAssetTagDefaults } from "../industry/industry.service.js";
+import {
+  getStarterAngles,
+  getIndustryTechStack,
+  getRecommendationTemplates,
+  getAssetTagDefaults,
+} from "../industry/industry.service.js";
 import { RE_CAPABILITY_MAP } from "../industry/realEstateContext.js";
 import {
   getWorkspaceTechStackView,
   upsertWorkspaceTechStackConnection,
 } from "../industry/techStack.service.js";
 import { invalidateClientContext } from "./generation/clientOrchestrator.js";
-import { getAutopilotSettings, updateAutopilotSettings, runAutopilot, runScheduledAutopilot, evaluateAllAutopilotWorkspaces, getAutopilotStatus, getAutopilotReadiness, getAutopilotActivity } from "./autopilot.service.js";
-import { getContentPreferences, updateContentPreferences } from "./contentPreferences.service.js";
-import { zonedLocalToUtc, bumpToNextAllowedDay, getClientTimezone } from "../../lib/timezone.js";
+import {
+  getAutopilotSettings,
+  updateAutopilotSettings,
+  runAutopilot,
+  runScheduledAutopilot,
+  evaluateAllAutopilotWorkspaces,
+  getAutopilotStatus,
+  getAutopilotReadiness,
+  getAutopilotActivity,
+} from "./autopilot.service.js";
+import {
+  getContentPreferences,
+  updateContentPreferences,
+} from "./contentPreferences.service.js";
+import {
+  zonedLocalToUtc,
+  bumpToNextAllowedDay,
+  getClientTimezone,
+} from "../../lib/timezone.js";
 import { initialCampaignStatus, formatCampaign } from "./campaign.service.js";
 import { evaluateFlag } from "../internal/config.service.js";
-import { getPlannerSuggestions, planMyWeek, swapSuggestion } from "./plannerSuggestion.service.js";
+import {
+  getPlannerSuggestions,
+  planMyWeek,
+  swapSuggestion,
+} from "./plannerSuggestion.service.js";
 import { getAllTimingSuggestions } from "./postTiming.js";
 import * as listingIngestion from "./listingIngestion.service.js";
 import * as urlCampaignIntake from "./urlCampaignIntake.service.js";
 import * as gbpProvider from "../integrations/providers/gbpProvider.js";
-import { syncGBP, getGBPReviews, getGBPBusinessProfile, getGBPInsights } from "./gbpSync.service.js";
+import {
+  syncGBP,
+  getGBPReviews,
+  getGBPBusinessProfile,
+  getGBPInsights,
+} from "./gbpSync.service.js";
 import { reanalyzeAllReviews } from "./gbpReviewAnalysis.service.js";
 import * as fubProvider from "../integrations/providers/fubProvider.js";
 import { syncCRM } from "./crmSync.service.js";
 import * as listingFeedService from "./listingFeed.service.js";
 import * as trackableLinkService from "./trackableLink.service.js";
 import { logConversionEvent } from "./conversionEvent.service.js";
-import { stampSourceAttribution, RE_SOURCE_TYPES } from "../industry/realEstateAssets.js";
+import {
+  stampSourceAttribution,
+  RE_SOURCE_TYPES,
+} from "../industry/realEstateAssets.js";
 import * as personaService from "./brandPersona.service.js";
 import { requireTier } from "../../middleware/requireTier.js";
 import { validateDraftMedia } from "./publishing/publishingService.js";
-import { enrichListingById, enrichAllListings } from "../industry/propertyEnrichment.service.js";
+import {
+  enrichListingById,
+  enrichAllListings,
+} from "../industry/propertyEnrichment.service.js";
 import { evaluateStaleListings, getEvents } from "./listingEvents.service.js";
-import { generateSampleListings, simulateListingEvent } from "./listingSimulator.service.js";
+import {
+  generateSampleListings,
+  simulateListingEvent,
+} from "./listingSimulator.service.js";
 import * as propertyDataService from "../industry/propertyData.service.js";
 import multer from "multer";
 import { parseDocument, isAcceptedFile } from "./documentParser.js";
@@ -183,7 +254,11 @@ const CampaignOpsAgentPreviewSchema = z.object({
  * Returns the lock key if acquired (so caller can release it), or null if already in-flight.
  */
 async function acquireDedup(userId, action, body) {
-  const hash = crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex").slice(0, 16);
+  const hash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(body))
+    .digest("hex")
+    .slice(0, 16);
   const key = `sp:dedup:${userId}:${action}:${hash}`;
   // Atomic set-if-not-exists via NX — avoids GET/SET race condition
   const acquired = await redisSetNX(key, "1", DEDUP_TTL);
@@ -220,7 +295,12 @@ studioRouter.post(`${BASE}/workspaces`, async (req, res, next) => {
 
     const allowed = await checkClientLimit(req.user.id);
     if (!allowed) {
-      return sendError(res, 403, "CLIENT_LIMIT_REACHED", "Upgrade your plan to create more clients");
+      return sendError(
+        res,
+        403,
+        "CLIENT_LIMIT_REACHED",
+        "Upgrade your plan to create more clients",
+      );
     }
 
     const actorSub = getAuth0Sub(req);
@@ -231,297 +311,440 @@ studioRouter.post(`${BASE}/workspaces`, async (req, res, next) => {
   }
 });
 
-studioRouter.get(`${BASE}/workspaces/:id`, requireClientOwner, async (req, res, next) => {
-  try {
-    const actorSub = getAuth0Sub(req);
-    const client = await service.getClient(req.params.id, actorSub);
-    if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
-    res.json(service.formatClient(client));
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const actorSub = getAuth0Sub(req);
+      const client = await service.getClient(req.params.id, actorSub);
+      if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
+      res.json(service.formatClient(client));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.patch(`${BASE}/workspaces/:id`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = UpdateClientSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    // spinstr421 — refuse to assign a coming-soon industryKey.
-    // The onboarding selector already grays these out, but the
-    // server still pre-flights so a hand-crafted request can't
-    // sneak past the UI. Pass-through is fine for clearing the
-    // value (null) or omitting it entirely.
-    if (parsed.data.industryKey) {
-      const { isIndustryKeySelectable } = await import(
-        "../industry/registry.js"
+studioRouter.patch(
+  `${BASE}/workspaces/:id`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpdateClientSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      // spinstr421 — refuse to assign a coming-soon industryKey.
+      // The onboarding selector already grays these out, but the
+      // server still pre-flights so a hand-crafted request can't
+      // sneak past the UI. Pass-through is fine for clearing the
+      // value (null) or omitting it entirely.
+      if (parsed.data.industryKey) {
+        const { isIndustryKeySelectable } =
+          await import("../industry/registry.js");
+        if (!isIndustryKeySelectable(parsed.data.industryKey)) {
+          return sendError(
+            res,
+            400,
+            "INDUSTRY_NOT_SELECTABLE",
+            "That industry isn't available yet. Choose Real Estate or Car Sales.",
+          );
+        }
+      }
+      const actorSub = getAuth0Sub(req);
+      const client = await service.updateClient(
+        req.params.id,
+        parsed.data,
+        actorSub,
       );
-      if (!isIndustryKeySelectable(parsed.data.industryKey)) {
+      res.json(service.formatClient(client));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.delete(
+  `${BASE}/workspaces/:id`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      if (req.body?.confirmation !== "ARCHIVE WORKSPACE") {
         return sendError(
           res,
           400,
-          "INDUSTRY_NOT_SELECTABLE",
-          "That industry isn't available yet. Choose Real Estate or Car Sales.",
+          "CONFIRMATION_REQUIRED",
+          'Enter "ARCHIVE WORKSPACE" to archive this workspace.',
         );
       }
+      const actorSub = getAuth0Sub(req);
+      const client = await service.archiveClient(req.params.id, actorSub);
+      await writeAudit(req, {
+        action: "workspace.archived",
+        resourceType: "Client",
+        resourceId: client.id,
+        metadata: {
+          automationStopped: true,
+          storedConnectionsRemoved: true,
+        },
+      });
+      res.json(service.formatClient(client));
+    } catch (err) {
+      next(err);
     }
-    const actorSub = getAuth0Sub(req);
-    const client = await service.updateClient(req.params.id, parsed.data, actorSub);
-    res.json(service.formatClient(client));
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.delete(`${BASE}/workspaces/:id`, requireClientOwner, async (req, res, next) => {
-  try {
-    const actorSub = getAuth0Sub(req);
-    const client = await service.archiveClient(req.params.id, actorSub);
-    res.json(service.formatClient(client));
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 // ── Brand profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/workspaces/:id/brand`, requireClientOwner, async (req, res, next) => {
-  try {
-    const brand = await service.getBrandProfile(req.params.id);
-    res.json({ brand: service.formatBrandProfile(brand) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/brand`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const brand = await service.getBrandProfile(req.params.id);
+      res.json({ brand: service.formatBrandProfile(brand) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.put(`${BASE}/workspaces/:id/brand`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = UpsertBrandProfileSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const actorSub = getAuth0Sub(req);
-    const brand = await service.upsertBrandProfile(
-      req.params.id,
-      parsed.data,
-      actorSub
-    );
-    res.json({ brand: service.formatBrandProfile(brand) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.put(
+  `${BASE}/workspaces/:id/brand`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpsertBrandProfileSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const actorSub = getAuth0Sub(req);
+      const brand = await service.upsertBrandProfile(
+        req.params.id,
+        parsed.data,
+        actorSub,
+      );
+      res.json({ brand: service.formatBrandProfile(brand) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Voice profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/workspaces/:id/voice`, requireClientOwner, async (req, res, next) => {
-  try {
-    const voice = await service.getVoiceProfile(req.params.id);
-    res.json({ voice: service.formatVoiceProfile(voice) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/voice`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const voice = await service.getVoiceProfile(req.params.id);
+      res.json({ voice: service.formatVoiceProfile(voice) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.put(`${BASE}/workspaces/:id/voice`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = UpsertVoiceProfileSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const actorSub = getAuth0Sub(req);
-    const voice = await service.upsertVoiceProfile(
-      req.params.id,
-      parsed.data,
-      actorSub
-    );
-    res.json({ voice: service.formatVoiceProfile(voice) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.put(
+  `${BASE}/workspaces/:id/voice`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpsertVoiceProfileSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const actorSub = getAuth0Sub(req);
+      const voice = await service.upsertVoiceProfile(
+        req.params.id,
+        parsed.data,
+        actorSub,
+      );
+      res.json({ voice: service.formatVoiceProfile(voice) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Media profile ───────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/workspaces/:id/media`, requireClientOwner, async (req, res, next) => {
-  try {
-    const media = await service.getMediaProfile(req.params.id);
-    res.json({ media: service.formatMediaProfile(media) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/media`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const media = await service.getMediaProfile(req.params.id);
+      res.json({ media: service.formatMediaProfile(media) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.put(`${BASE}/workspaces/:id/media`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = UpsertMediaProfileSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const actorSub = getAuth0Sub(req);
-    const media = await service.upsertMediaProfile(
-      req.params.id,
-      parsed.data,
-      actorSub
-    );
-    res.json({ media: service.formatMediaProfile(media) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.put(
+  `${BASE}/workspaces/:id/media`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpsertMediaProfileSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const actorSub = getAuth0Sub(req);
+      const media = await service.upsertMediaProfile(
+        req.params.id,
+        parsed.data,
+        actorSub,
+      );
+      res.json({ media: service.formatMediaProfile(media) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Brand Persona ──────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/workspaces/:id/brand-persona`, requireClientOwner, async (req, res, next) => {
-  try {
-    const persona = await personaService.getBrandPersona(req.params.id);
-    res.json({ persona: personaService.formatBrandPersona(persona) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/brand-persona`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const persona = await personaService.getBrandPersona(req.params.id);
+      res.json({ persona: personaService.formatBrandPersona(persona) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.put(`${BASE}/workspaces/:id/brand-persona`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = UpsertBrandPersonaSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const actorSub = getAuth0Sub(req);
-    const persona = await personaService.upsertBrandPersona(
-      req.params.id,
-      parsed.data,
-      actorSub
-    );
+studioRouter.put(
+  `${BASE}/workspaces/:id/brand-persona`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpsertBrandPersonaSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const actorSub = getAuth0Sub(req);
+      const persona = await personaService.upsertBrandPersona(
+        req.params.id,
+        parsed.data,
+        actorSub,
+      );
 
-    // Fire PERSONA_CREATED for new personas (createdAt matches updatedAt)
-    if (persona.createdAt?.getTime() === persona.updatedAt?.getTime()) {
+      // Fire PERSONA_CREATED for new personas (createdAt matches updatedAt)
+      if (persona.createdAt?.getTime() === persona.updatedAt?.getTime()) {
+        recordActivity({
+          userId: req.user.id,
+          clientId: req.params.id,
+          eventType: "PERSONA_CREATED",
+          payload: {
+            personaName: persona.name,
+            personaType: persona.personaType,
+            clientId: req.params.id,
+          },
+          resourceType: "persona",
+          resourceId: req.params.id,
+        }).catch(() => {});
+      }
+
+      res.json({ persona: personaService.formatBrandPersona(persona) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.delete(
+  `${BASE}/workspaces/:id/brand-persona`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      await personaService.deleteBrandPersona(req.params.id);
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/brand-persona/training-images`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = AddTrainingImageSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const actorSub = getAuth0Sub(req);
+      const image = await personaService.addTrainingImage(
+        req.params.id,
+        parsed.data,
+        actorSub,
+      );
+      res.status(201).json({ image });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.delete(
+  `${BASE}/workspaces/:id/brand-persona/training-images/:imageId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const actorSub = getAuth0Sub(req);
+      await personaService.removeTrainingImage(
+        req.params.id,
+        req.params.imageId,
+        actorSub,
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/brand-persona/consent`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const actorSub = getAuth0Sub(req);
+      const persona = await personaService.recordConsent(
+        req.params.id,
+        actorSub,
+      );
+      res.json({ persona: personaService.formatBrandPersona(persona) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/brand-persona/train`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const actorSub = getAuth0Sub(req);
+
+      // Check fal service health before starting expensive training
+      if ((await getServiceStatus("fal")) === "down") {
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "AI training temporarily unavailable",
+        );
+      }
+      if (await isProviderBudgetExceeded("fal")) {
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI budget limits exceeded. Try again later",
+        );
+      }
+
+      const result = await personaService.startTraining(
+        req.params.id,
+        actorSub,
+      );
+
       recordActivity({
         userId: req.user.id,
         clientId: req.params.id,
-        eventType: "PERSONA_CREATED",
-        payload: { personaName: persona.name, personaType: persona.personaType, clientId: req.params.id },
+        eventType: "PERSONA_TRAINING_STARTED",
+        payload: {
+          personaName: result.personaName ?? null,
+          clientId: req.params.id,
+        },
         resourceType: "persona",
         resourceId: req.params.id,
       }).catch(() => {});
+
+      res.status(202).json({ ok: true, ...result });
+    } catch (err) {
+      next(err);
     }
+  },
+);
 
-    res.json({ persona: personaService.formatBrandPersona(persona) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.post(
+  `${BASE}/workspaces/:id/brand-persona/previews`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const actorSub = getAuth0Sub(req);
+      const previews = await personaService.requestPreviews(
+        req.params.id,
+        actorSub,
+      );
+      res.json({ previews });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.delete(`${BASE}/workspaces/:id/brand-persona`, requireClientOwner, async (req, res, next) => {
-  try {
-    await personaService.deleteBrandPersona(req.params.id);
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.post(`${BASE}/workspaces/:id/brand-persona/training-images`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = AddTrainingImageSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const actorSub = getAuth0Sub(req);
-    const image = await personaService.addTrainingImage(
-      req.params.id,
-      parsed.data,
-      actorSub
+studioRouter.post(
+  `${BASE}/workspaces/:id/brand-persona/generate-frames`,
+  (req, _res, next) => {
+    req.log?.info(
+      {
+        route: "generate-frames",
+        clientId: req.params.id,
+        hasSub: !!getAuth0Sub(req),
+      },
+      "generate_frames_hit",
     );
-    res.status(201).json({ image });
-  } catch (err) {
-    next(err);
-  }
-});
+    next();
+  },
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = GeneratePersonaFramesSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
 
-studioRouter.delete(`${BASE}/workspaces/:id/brand-persona/training-images/:imageId`, requireClientOwner, async (req, res, next) => {
-  try {
-    const actorSub = getAuth0Sub(req);
-    await personaService.removeTrainingImage(
-      req.params.id,
-      req.params.imageId,
-      actorSub
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
+      if ((await getServiceStatus("fal")) === "down") {
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "AI image generation temporarily unavailable",
+        );
+      }
+      if (await isProviderBudgetExceeded("fal")) {
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI budget limits exceeded. Try again later",
+        );
+      }
 
-studioRouter.post(`${BASE}/workspaces/:id/brand-persona/consent`, requireClientOwner, async (req, res, next) => {
-  try {
-    const actorSub = getAuth0Sub(req);
-    const persona = await personaService.recordConsent(req.params.id, actorSub);
-    res.json({ persona: personaService.formatBrandPersona(persona) });
-  } catch (err) {
-    next(err);
-  }
-});
+      const frames = await personaService.generatePersonaFrames(
+        req.params.id,
+        parsed.data.frames,
+      );
 
-studioRouter.post(`${BASE}/workspaces/:id/brand-persona/train`, requireClientOwner, async (req, res, next) => {
-  try {
-    const actorSub = getAuth0Sub(req);
+      recordActivity({
+        userId: req.user.id,
+        clientId: req.params.id,
+        eventType: "PERSONA_USED_IN_SMART_VIDEO",
+        payload: {
+          personaName: null,
+          frameCount: frames.length,
+          clientId: req.params.id,
+        },
+        resourceType: "persona",
+        resourceId: req.params.id,
+      }).catch(() => {});
 
-    // Check fal service health before starting expensive training
-    if (await getServiceStatus("fal") === "down") {
-      return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI training temporarily unavailable");
+      res.json({ frames });
+    } catch (err) {
+      next(err);
     }
-    if (await isProviderBudgetExceeded("fal")) {
-      return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded. Try again later");
-    }
-
-    const result = await personaService.startTraining(req.params.id, actorSub);
-
-    recordActivity({
-      userId: req.user.id,
-      clientId: req.params.id,
-      eventType: "PERSONA_TRAINING_STARTED",
-      payload: { personaName: result.personaName ?? null, clientId: req.params.id },
-      resourceType: "persona",
-      resourceId: req.params.id,
-    }).catch(() => {});
-
-    res.status(202).json({ ok: true, ...result });
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.post(`${BASE}/workspaces/:id/brand-persona/previews`, requireClientOwner, async (req, res, next) => {
-  try {
-    const actorSub = getAuth0Sub(req);
-    const previews = await personaService.requestPreviews(req.params.id, actorSub);
-    res.json({ previews });
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.post(`${BASE}/workspaces/:id/brand-persona/generate-frames`, (req, _res, next) => {
-  req.log?.info({ route: "generate-frames", clientId: req.params.id, hasSub: !!getAuth0Sub(req) }, "generate_frames_hit");
-  next();
-}, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = GeneratePersonaFramesSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-
-    if (await getServiceStatus("fal") === "down") {
-      return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI image generation temporarily unavailable");
-    }
-    if (await isProviderBudgetExceeded("fal")) {
-      return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded. Try again later");
-    }
-
-    const frames = await personaService.generatePersonaFrames(req.params.id, parsed.data.frames);
-
-    recordActivity({
-      userId: req.user.id,
-      clientId: req.params.id,
-      eventType: "PERSONA_USED_IN_SMART_VIDEO",
-      payload: { personaName: null, frameCount: frames.length, clientId: req.params.id },
-      resourceType: "persona",
-      resourceId: req.params.id,
-    }).catch(() => {});
-
-    res.json({ frames });
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 // ── Persona Compose (Add Me to Photo) ──────────────────────────────────
 
@@ -530,12 +753,28 @@ studioRouter.post(`${BASE}/persona/compose`, async (req, res, next) => {
     const parsed = PersonaComposeSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
-    const { clientId, sourceImageUrl, sourceAssetId, pose, sceneType, lightingStyle, outfit, vibe, personaLayer, folderId, draftId } = parsed.data;
+    const {
+      clientId,
+      sourceImageUrl,
+      sourceAssetId,
+      pose,
+      sceneType,
+      lightingStyle,
+      outfit,
+      vibe,
+      personaLayer,
+      folderId,
+      draftId,
+    } = parsed.data;
 
     // Ownership check
-    const client = await prisma.client.findUnique({ where: { id: clientId }, select: { createdBy: true } });
+    const client = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { createdBy: true },
+    });
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
-    if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
+    if (client.createdBy !== getAuth0Sub(req))
+      return sendError(res, 403, "FORBIDDEN", "Forbidden");
 
     // Cross-workspace checks for any optional id references in the body.
     try {
@@ -547,24 +786,70 @@ studioRouter.post(`${BASE}/persona/compose`, async (req, res, next) => {
     }
 
     // Service health pre-flight
-    if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily unavailable.");
-    if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded. Try again later.");
+    if ((await getServiceStatus("fal")) === "down")
+      return sendError(
+        res,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Image generation temporarily unavailable.",
+      );
+    if (await isProviderBudgetExceeded("fal"))
+      return sendError(
+        res,
+        503,
+        "BUDGET_EXCEEDED",
+        "AI budget limits exceeded. Try again later.",
+      );
 
     // Usage limit checks
-    const genQuotaErr = await enforceUsageLimit(req.user.id, "imageGenerations");
-    if (genQuotaErr) return sendError(res, 402, genQuotaErr.code, "Image generation limit reached. Upgrade for more.", genQuotaErr);
+    const genQuotaErr = await enforceUsageLimit(
+      req.user.id,
+      "imageGenerations",
+    );
+    if (genQuotaErr)
+      return sendError(
+        res,
+        402,
+        genQuotaErr.code,
+        "Image generation limit reached. Upgrade for more.",
+        genQuotaErr,
+      );
     const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
-    if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Image limit reached. Upgrade for more.", imgQuotaErr);
+    if (imgQuotaErr)
+      return sendError(
+        res,
+        402,
+        imgQuotaErr.code,
+        "Image limit reached. Upgrade for more.",
+        imgQuotaErr,
+      );
 
     // Check persona is COMPLETED with LoRA
     const persona = await personaService.getBrandPersona(clientId);
-    if (!persona || persona.status !== "COMPLETED" || !persona.providerModelId || !persona.triggerPhrase) {
-      return sendError(res, 400, "PERSONA_NOT_READY", "Brand persona must be fully trained before compositing.");
+    if (
+      !persona ||
+      persona.status !== "COMPLETED" ||
+      !persona.providerModelId ||
+      !persona.triggerPhrase
+    ) {
+      return sendError(
+        res,
+        400,
+        "PERSONA_NOT_READY",
+        "Brand persona must be fully trained before compositing.",
+      );
     }
 
     // Build compose prompt — use framingPreset for prompt generation
-    const framingPreset = personaLayer?.framingPreset ?? 'full_body';
-    const guidance = service.buildComposePrompt(persona, { pose, sceneType, lightingStyle, outfit, vibe, framing: framingPreset });
+    const framingPreset = personaLayer?.framingPreset ?? "full_body";
+    const guidance = service.buildComposePrompt(persona, {
+      pose,
+      sceneType,
+      lightingStyle,
+      outfit,
+      vibe,
+      framing: framingPreset,
+    });
 
     // Enqueue generation with reference image
     const actorSub = getAuth0Sub(req);
@@ -572,10 +857,15 @@ studioRouter.post(`${BASE}/persona/compose`, async (req, res, next) => {
       clientId,
       guidance,
       draftId,
-      folderId: folderId ?? (sourceAssetId ? (await service.getAsset(sourceAssetId))?.folderId : null) ?? undefined,
+      folderId:
+        folderId ??
+        (sourceAssetId
+          ? (await service.getAsset(sourceAssetId))?.folderId
+          : null) ??
+        undefined,
       usePersona: true,
       referenceImageUrl: sourceImageUrl,
-      composePlacement: 'auto',
+      composePlacement: "auto",
       composePersonaLayer: personaLayer,
       createdBy: actorSub,
       userId: req.user.id,
@@ -596,19 +886,46 @@ studioRouter.post(`${BASE}/persona/compose`, async (req, res, next) => {
       taskName: "image_generation",
       provider: "fal",
       source: "persona_image_compose",
-      artifactIds: { assetId: asset.id, draftId: draftId ?? null, sourceAssetId: sourceAssetId ?? null },
+      artifactIds: {
+        assetId: asset.id,
+        draftId: draftId ?? null,
+        sourceAssetId: sourceAssetId ?? null,
+      },
     });
 
     recordActivity({
       userId: req.user.id,
       clientId,
       eventType: "PERSONA_USED_IN_IMAGE",
-      payload: { personaName: persona.name, compose: true, pose, sceneType, lightingStyle, outfit, vibe, framingPreset, clientId },
+      payload: {
+        personaName: persona.name,
+        compose: true,
+        pose,
+        sceneType,
+        lightingStyle,
+        outfit,
+        vibe,
+        framingPreset,
+        clientId,
+      },
       resourceType: "asset",
       resourceId: asset.id,
     }).catch(() => {});
 
-    res.status(201).json({ asset: service.formatAsset(asset), metadata: { pose, sceneType, lightingStyle, outfit, vibe, framingPreset, personaLayer } });
+    res
+      .status(201)
+      .json({
+        asset: service.formatAsset(asset),
+        metadata: {
+          pose,
+          sceneType,
+          lightingStyle,
+          outfit,
+          vibe,
+          framingPreset,
+          personaLayer,
+        },
+      });
   } catch (err) {
     next(err);
   }
@@ -621,11 +938,24 @@ studioRouter.post(`${BASE}/persona/cutout`, async (req, res, next) => {
     const parsed = PersonaCutoutSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
-    const { clientId, pose, outfit, vibe, sceneType, lightingStyle, framingPreset, folderId } = parsed.data;
+    const {
+      clientId,
+      pose,
+      outfit,
+      vibe,
+      sceneType,
+      lightingStyle,
+      framingPreset,
+      folderId,
+    } = parsed.data;
 
-    const client = await prisma.client.findUnique({ where: { id: clientId }, select: { createdBy: true } });
+    const client = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { createdBy: true },
+    });
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
-    if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
+    if (client.createdBy !== getAuth0Sub(req))
+      return sendError(res, 403, "FORBIDDEN", "Forbidden");
 
     try {
       await assertFolderInClient(folderId, clientId);
@@ -633,35 +963,91 @@ studioRouter.post(`${BASE}/persona/cutout`, async (req, res, next) => {
       return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
     }
 
-    if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily unavailable.");
-    if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limits exceeded.");
+    if ((await getServiceStatus("fal")) === "down")
+      return sendError(
+        res,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Image generation temporarily unavailable.",
+      );
+    if (await isProviderBudgetExceeded("fal"))
+      return sendError(
+        res,
+        503,
+        "BUDGET_EXCEEDED",
+        "AI budget limits exceeded.",
+      );
 
-    const genQuotaErr = await enforceUsageLimit(req.user.id, "imageGenerations");
-    if (genQuotaErr) return sendError(res, 402, genQuotaErr.code, "Image generation limit reached.", genQuotaErr);
+    const genQuotaErr = await enforceUsageLimit(
+      req.user.id,
+      "imageGenerations",
+    );
+    if (genQuotaErr)
+      return sendError(
+        res,
+        402,
+        genQuotaErr.code,
+        "Image generation limit reached.",
+        genQuotaErr,
+      );
 
     const persona = await personaService.getBrandPersona(clientId);
-    if (!persona || persona.status !== "COMPLETED" || !persona.providerModelId || !persona.triggerPhrase) {
-      return sendError(res, 400, "PERSONA_NOT_READY", "Brand persona must be fully trained.");
+    if (
+      !persona ||
+      persona.status !== "COMPLETED" ||
+      !persona.providerModelId ||
+      !persona.triggerPhrase
+    ) {
+      return sendError(
+        res,
+        400,
+        "PERSONA_NOT_READY",
+        "Brand persona must be fully trained.",
+      );
     }
 
     const actorSub = getAuth0Sub(req);
     const asset = await service.enqueueCutout({
-      clientId, pose, outfit, vibe, sceneType, lightingStyle, framingPreset,
-      folderId, createdBy: actorSub, userId: req.user.id,
+      clientId,
+      pose,
+      outfit,
+      vibe,
+      sceneType,
+      lightingStyle,
+      framingPreset,
+      folderId,
+      createdBy: actorSub,
+      userId: req.user.id,
     });
 
     await incrementUsage(req.user.id, "imageGenerations");
 
     trackAiUsage({
-      userId: req.user.id, clientId, actionType: "IMAGE",
-      model: "fal-ai/flux-lora", promptTokens: 0, completionTokens: 0,
+      userId: req.user.id,
+      clientId,
+      actionType: "IMAGE",
+      model: "fal-ai/flux-lora",
+      promptTokens: 0,
+      completionTokens: 0,
       taskName: "image_generation",
       provider: "fal",
       source: "persona_cutout",
       artifactIds: { assetId: asset.id },
     });
 
-    res.status(201).json({ asset: service.formatAsset(asset), metadata: { pose, outfit, vibe, sceneType, lightingStyle, framingPreset } });
+    res
+      .status(201)
+      .json({
+        asset: service.formatAsset(asset),
+        metadata: {
+          pose,
+          outfit,
+          vibe,
+          sceneType,
+          lightingStyle,
+          framingPreset,
+        },
+      });
   } catch (err) {
     next(err);
   }
@@ -674,11 +1060,27 @@ studioRouter.post(`${BASE}/persona/blend`, async (req, res, next) => {
     const parsed = PersonaBlendSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
-    const { clientId, backgroundImageUrl, backgroundAssetId, cutoutImageUrl, cutoutAssetId, transform, sceneType, lightingStyle, advanced, folderId, draftId } = parsed.data;
+    const {
+      clientId,
+      backgroundImageUrl,
+      backgroundAssetId,
+      cutoutImageUrl,
+      cutoutAssetId,
+      transform,
+      sceneType,
+      lightingStyle,
+      advanced,
+      folderId,
+      draftId,
+    } = parsed.data;
 
-    const client = await prisma.client.findUnique({ where: { id: clientId }, select: { createdBy: true } });
+    const client = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { createdBy: true },
+    });
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
-    if (client.createdBy !== getAuth0Sub(req)) return sendError(res, 403, "FORBIDDEN", "Forbidden");
+    if (client.createdBy !== getAuth0Sub(req))
+      return sendError(res, 403, "FORBIDDEN", "Forbidden");
 
     try {
       await assertAssetInClient(backgroundAssetId, clientId);
@@ -690,18 +1092,40 @@ studioRouter.post(`${BASE}/persona/blend`, async (req, res, next) => {
     }
 
     const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
-    if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Image limit reached.", imgQuotaErr);
+    if (imgQuotaErr)
+      return sendError(
+        res,
+        402,
+        imgQuotaErr.code,
+        "Image limit reached.",
+        imgQuotaErr,
+      );
 
     const actorSub = getAuth0Sub(req);
     const asset = await service.enqueueBlend({
-      clientId, backgroundImageUrl, backgroundAssetId, cutoutImageUrl, cutoutAssetId,
-      transform, sceneType, lightingStyle, advanced, folderId, draftId,
-      createdBy: actorSub, userId: req.user.id,
+      clientId,
+      backgroundImageUrl,
+      backgroundAssetId,
+      cutoutImageUrl,
+      cutoutAssetId,
+      transform,
+      sceneType,
+      lightingStyle,
+      advanced,
+      folderId,
+      draftId,
+      createdBy: actorSub,
+      userId: req.user.id,
     });
 
     await incrementUsage(req.user.id, "images");
 
-    res.status(201).json({ asset: service.formatAsset(asset), metadata: { transform, sceneType, lightingStyle } });
+    res
+      .status(201)
+      .json({
+        asset: service.formatAsset(asset),
+        metadata: { transform, sceneType, lightingStyle },
+      });
   } catch (err) {
     next(err);
   }
@@ -709,28 +1133,36 @@ studioRouter.post(`${BASE}/persona/blend`, async (req, res, next) => {
 
 // ── Channel settings ────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/workspaces/:id/channels`, requireClientOwner, async (req, res, next) => {
-  try {
-    const channels = await service.listChannelSettings(req.params.id);
-    res.json({ channels: channels.map(service.formatChannelSettings) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/channels`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const channels = await service.listChannelSettings(req.params.id);
+      res.json({ channels: channels.map(service.formatChannelSettings) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.put(`${BASE}/workspaces/:id/channels`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = UpsertChannelSettingsSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const channels = await service.upsertChannelSettings(
-      req.params.id,
-      parsed.data.items
-    );
-    res.json({ channels: channels.map(service.formatChannelSettings) });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.put(
+  `${BASE}/workspaces/:id/channels`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpsertChannelSettingsSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const channels = await service.upsertChannelSettings(
+        req.params.id,
+        parsed.data.items,
+      );
+      res.json({ channels: channels.map(service.formatChannelSettings) });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Business Data ──────────────────────────────────────────────────────
 
@@ -744,7 +1176,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -754,12 +1186,15 @@ studioRouter.post(
     try {
       const parsed = CreateDataSourceSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const source = await dataService.createDataSource(req.params.id, parsed.data);
+      const source = await dataService.createDataSource(
+        req.params.id,
+        parsed.data,
+      );
       res.status(201).json(dataService.formatDataSource(source));
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -774,7 +1209,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -789,7 +1224,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // Workspace-scoped business-data item routes. Replaces the legacy
@@ -810,16 +1245,21 @@ studioRouter.get(
       // These are collection endpoints registered later in this router.
       // Without skipping this dynamic route, Express treats the static
       // path segment as an item ID and returns a misleading 404.
-      if (["top-performing", "unused", "suggestions"].includes(req.params.itemId)) {
+      if (
+        ["top-performing", "unused", "suggestions"].includes(req.params.itemId)
+      ) {
         return next("route");
       }
-      const item = await dataService.getDataItem(req.params.id, req.params.itemId);
+      const item = await dataService.getDataItem(
+        req.params.id,
+        req.params.itemId,
+      );
       if (!item) return sendError(res, 404, "NOT_FOUND", "Data item not found");
       res.json(dataService.formatDataItem(item));
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.patch(
@@ -839,7 +1279,7 @@ studioRouter.patch(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -856,7 +1296,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.delete(
@@ -873,7 +1313,7 @@ studioRouter.delete(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Content Blueprints ─────────────────────────────────────────────────
@@ -910,13 +1350,13 @@ studioRouter.get(
       if (!parsed.success) return validationError(res, parsed.error.issues);
       const opportunities = await opportunityService.getContentOpportunities(
         req.params.id,
-        parsed.data
+        parsed.data,
       );
       res.json({ opportunities });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // Workspace-scoped — replaces the legacy unscoped variant.
@@ -931,13 +1371,13 @@ studioRouter.get(
       const opportunities = await opportunityService.getOpportunitiesForItem(
         req.params.id,
         req.params.itemId,
-        { channel }
+        { channel },
       );
       res.json({ opportunities });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Bulk Generate ──────────────────────────────────────────────────────
@@ -951,9 +1391,21 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       // Service health pre-flight
-      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+      if ((await getServiceStatus("openai")) === "down")
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Content generation temporarily unavailable. Please try again in a few minutes.",
+        );
       const throttle = await getThrottlePolicy();
-      if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
+      if (throttle.adminPaused)
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "AI generation is temporarily paused by the administrator.",
+        );
 
       // Batch size cap based on throttle policy
       const originalCount = parsed.data.items.length;
@@ -961,7 +1413,13 @@ studioRouter.post(
       const maxBatchApplied = items.length < originalCount;
 
       // Global budget check
-      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+      if (await isProviderBudgetExceeded("openai"))
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI text generation is temporarily unavailable due to budget limits. Please try again later.",
+        );
 
       const actorSub = getAuth0Sub(req);
       const results = [];
@@ -970,7 +1428,10 @@ studioRouter.post(
         try {
           const allowed = await checkUsageLimit(req.user.id, "posts");
           if (!allowed) {
-            results.push({ dataItemId: item.dataItemId, status: "limit_reached" });
+            results.push({
+              dataItemId: item.dataItemId,
+              status: "limit_reached",
+            });
             continue;
           }
 
@@ -986,7 +1447,11 @@ studioRouter.post(
           });
 
           await incrementUsage(req.user.id, "posts");
-          results.push({ dataItemId: item.dataItemId, status: "success", draftId: draft.id });
+          results.push({
+            dataItemId: item.dataItemId,
+            status: "success",
+            draftId: draft.id,
+          });
         } catch {
           results.push({ dataItemId: item.dataItemId, status: "error" });
         }
@@ -1001,7 +1466,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Data Performance ─────────────────────────────────────────────────────
@@ -1015,13 +1480,13 @@ studioRouter.get(
       if (!parsed.success) return validationError(res, parsed.error.issues);
       const items = await dataAnalyticsService.getTopPerformingDataItems(
         req.params.id,
-        parsed.data
+        parsed.data,
       );
       res.json({ items });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -1033,13 +1498,13 @@ studioRouter.get(
       if (!parsed.success) return validationError(res, parsed.error.issues);
       const blueprints = await dataAnalyticsService.getBestBlueprints(
         req.params.id,
-        parsed.data
+        parsed.data,
       );
       res.json({ blueprints });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -1049,13 +1514,13 @@ studioRouter.get(
     try {
       const result = await dataAnalyticsService.getBestPlatformForDataType(
         req.params.id,
-        req.params.dataType
+        req.params.dataType,
       );
       res.json({ bestPlatform: result });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -1063,12 +1528,14 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const result = await dataAnalyticsService.recalculateAllPerformance(req.params.id);
+      const result = await dataAnalyticsService.recalculateAllPerformance(
+        req.params.id,
+      );
       res.json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Data Usage & Suggestions ─────────────────────────────────────────
@@ -1083,7 +1550,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -1102,7 +1569,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Onboarding ──────────────────────────────────────────────────────
@@ -1134,8 +1601,11 @@ studioRouter.post(`${BASE}/onboarding/upload-documents`, (req, res, next) => {
       }
       const documents = await Promise.all(
         files.map((f) =>
-          parseDocument(f.buffer, { filename: f.originalname, mimetype: f.mimetype })
-        )
+          parseDocument(f.buffer, {
+            filename: f.originalname,
+            mimetype: f.mimetype,
+          }),
+        ),
       );
       res.json({ documents });
     } catch (err) {
@@ -1163,11 +1633,12 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
 
     // Multi-source: combine crawled pages + documents + text
     if (hasUrl || hasDocs || hasText) {
-      const { combinedText, images: crawledImages } = await onboardingService.crawlAndCombine({
-        url: hasUrl ? input : null,
-        text: hasText ? input : null,
-        documentTexts,
-      });
+      const { combinedText, images: crawledImages } =
+        await onboardingService.crawlAndCombine({
+          url: hasUrl ? input : null,
+          text: hasText ? input : null,
+          documentTexts,
+        });
       images = crawledImages;
 
       // Extract sequentially: brand first, then data.
@@ -1184,11 +1655,16 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
           industryKey,
         });
       } catch (err) {
-        console.error("[onboarding] Data extraction failed:", err.message || err);
+        console.error(
+          "[onboarding] Data extraction failed:",
+          err.message || err,
+        );
         dataItems = [];
       }
     } else {
-      brandData = await onboardingService.extractBrandFromText(input, { industryKey });
+      brandData = await onboardingService.extractBrandFromText(input, {
+        industryKey,
+      });
     }
 
     // Fire-and-forget: track onboarding AI usage
@@ -1216,12 +1692,19 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
         return (aNeeds ? 1 : 0) - (bNeeds ? 1 : 0);
       })
       .slice(0, 3)
-      .map(({ type, title, guidance, conditions }) => ({ type, title, guidance, conditions }));
+      .map(({ type, title, guidance, conditions }) => ({
+        type,
+        title,
+        guidance,
+        conditions,
+      }));
 
     // Compute real estate capabilities summary for Phase B readiness
     let realEstateCapabilities;
     if (industryKey === "real_estate") {
-      const liveItems = getIndustryTechStack("real_estate").filter((i) => i.status === "live");
+      const liveItems = getIndustryTechStack("real_estate").filter(
+        (i) => i.status === "live",
+      );
       const capSet = new Set();
       for (const item of liveItems) {
         const mapped = RE_CAPABILITY_MAP[item.providerKey];
@@ -1262,7 +1745,12 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
       return sendError(res, 502, "SCRAPE_FAILED", err.message);
     }
     if (err.code?.startsWith("OPENAI_")) {
-      return sendError(res, 503, "AI_EXTRACTION_FAILED", "AI analysis failed. Please try again.");
+      return sendError(
+        res,
+        503,
+        "AI_EXTRACTION_FAILED",
+        "AI analysis failed. Please try again.",
+      );
     }
     next(err);
   }
@@ -1270,31 +1758,42 @@ studioRouter.post(`${BASE}/onboarding/analyze`, async (req, res, next) => {
 
 // ── Agent Onboarding Sources ─────────────────────────────────────────
 
-studioRouter.post(`${BASE}/onboarding/zillow-extract`, async (req, res, next) => {
-  try {
-    const parsed = ZillowExtractSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
+studioRouter.post(
+  `${BASE}/onboarding/zillow-extract`,
+  async (req, res, next) => {
+    try {
+      const parsed = ZillowExtractSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
 
-    const draft = await agentOnboarding.extractFromZillow(parsed.data.url);
-    res.json(draft);
-  } catch (err) {
-    if (err.status === 400) return sendError(res, 400, "EXTRACTION_ERROR", err.message);
-    next(err);
-  }
-});
+      const draft = await agentOnboarding.extractFromZillow(parsed.data.url);
+      res.json(draft);
+    } catch (err) {
+      if (err.status === 400)
+        return sendError(res, 400, "EXTRACTION_ERROR", err.message);
+      next(err);
+    }
+  },
+);
 
-studioRouter.post(`${BASE}/onboarding/license-lookup`, async (req, res, next) => {
-  try {
-    const parsed = LicenseLookupSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
+studioRouter.post(
+  `${BASE}/onboarding/license-lookup`,
+  async (req, res, next) => {
+    try {
+      const parsed = LicenseLookupSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
 
-    const draft = await agentOnboarding.extractFromLicense(parsed.data.state, parsed.data.licenseNumber);
-    res.json(draft);
-  } catch (err) {
-    if (err.status === 400) return sendError(res, 400, "LOOKUP_ERROR", err.message);
-    next(err);
-  }
-});
+      const draft = await agentOnboarding.extractFromLicense(
+        parsed.data.state,
+        parsed.data.licenseNumber,
+      );
+      res.json(draft);
+    } catch (err) {
+      if (err.status === 400)
+        return sendError(res, 400, "LOOKUP_ERROR", err.message);
+      next(err);
+    }
+  },
+);
 
 studioRouter.post(`${BASE}/onboarding/crm-analyze`, async (req, res, next) => {
   try {
@@ -1304,7 +1803,8 @@ studioRouter.post(`${BASE}/onboarding/crm-analyze`, async (req, res, next) => {
     const draft = await agentOnboarding.extractFromCrm(parsed.data.csvText);
     res.json(draft);
   } catch (err) {
-    if (err.status === 400) return sendError(res, 400, "CRM_ANALYZE_ERROR", err.message);
+    if (err.status === 400)
+      return sendError(res, 400, "CRM_ANALYZE_ERROR", err.message);
     next(err);
   }
 });
@@ -1331,7 +1831,13 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       return res.end();
     }
 
-    const { input, inputType, documentTexts = [], industryKey, agentProfileDraft } = parsed.data;
+    const {
+      input,
+      inputType,
+      documentTexts = [],
+      industryKey,
+      agentProfileDraft,
+    } = parsed.data;
     const hasUrl = inputType === "url" && input.length >= 3;
     const hasText = inputType === "text" && input.length >= 3;
     const hasDocs = documentTexts.length > 0;
@@ -1363,7 +1869,8 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
         crawledImages = result.images;
         crawledLogo = result.logoUrl;
       } catch (crawlErr) {
-        const isBlocked = crawlErr.status === 422 || /block/i.test(crawlErr.message);
+        const isBlocked =
+          crawlErr.status === 422 || /block/i.test(crawlErr.message);
         sendEvent({
           event: "error",
           code: isBlocked ? "BLOCKED" : "CRAWL_FAILED",
@@ -1390,7 +1897,13 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
       sendEvent({ event: "extract:start" });
 
       const extractionText = primaryPageText || combinedText;
-      console.log("[onboarding-stream] Data extraction input:", extractionText.length, "chars (primary page:", !!primaryPageText, ")");
+      console.log(
+        "[onboarding-stream] Data extraction input:",
+        extractionText.length,
+        "chars (primary page:",
+        !!primaryPageText,
+        ")",
+      );
 
       const [brandResult, dataResult] = await Promise.allSettled([
         onboardingService.extractBrandData(combinedText, {
@@ -1417,14 +1930,29 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
 
       if (dataResult.status === "fulfilled") {
         dataItems = dataResult.value;
-        console.log("[onboarding-stream] Data extraction result:", dataItems.length, "items", dataItems.map(d => `${d.type}:${d.title}`));
+        console.log(
+          "[onboarding-stream] Data extraction result:",
+          dataItems.length,
+          "items",
+          dataItems.map((d) => `${d.type}:${d.title}`),
+        );
       } else {
-        console.error("[onboarding-stream] Data extraction failed:", dataResult.reason?.message || dataResult.reason);
+        console.error(
+          "[onboarding-stream] Data extraction failed:",
+          dataResult.reason?.message || dataResult.reason,
+        );
       }
-      sendEvent({ event: "data:done", items: dataItems, count: dataItems.length });
+      sendEvent({
+        event: "data:done",
+        items: dataItems,
+        count: dataItems.length,
+      });
     } else {
       sendEvent({ event: "crawl:start", url: null });
-      brandData = await onboardingService.extractBrandFromText(input, { industryKey, agentContext });
+      brandData = await onboardingService.extractBrandFromText(input, {
+        industryKey,
+        agentContext,
+      });
       sendEvent({ event: "brand:done", brandData });
       sendEvent({ event: "data:done", items: [], count: 0 });
     }
@@ -1452,12 +1980,19 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
         return (aNeeds ? 1 : 0) - (bNeeds ? 1 : 0);
       })
       .slice(0, 3)
-      .map(({ type, title, guidance, conditions }) => ({ type, title, guidance, conditions }));
+      .map(({ type, title, guidance, conditions }) => ({
+        type,
+        title,
+        guidance,
+        conditions,
+      }));
 
     // Compute real estate capabilities summary for Phase B readiness
     let realEstateCapabilities;
     if (industryKey === "real_estate") {
-      const liveItems = getIndustryTechStack("real_estate").filter((i) => i.status === "live");
+      const liveItems = getIndustryTechStack("real_estate").filter(
+        (i) => i.status === "live",
+      );
       const capSet = new Set();
       for (const item of liveItems) {
         const mapped = RE_CAPABILITY_MAP[item.providerKey];
@@ -1495,7 +2030,10 @@ studioRouter.post(`${BASE}/onboarding/analyze-stream`, async (req, res) => {
     });
   } catch (err) {
     console.error("[onboarding-stream] Error:", err.message || err);
-    sendEvent({ event: "error", message: "Analysis failed. Please try again." });
+    sendEvent({
+      event: "error",
+      message: "Analysis failed. Please try again.",
+    });
   }
 
   res.end();
@@ -1510,7 +2048,9 @@ studioRouter.post(
     try {
       const parsed = ImportFromUrlSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const result = await importService.extractFromUrl(parsed.data.url, { hint: parsed.data.hint });
+      const result = await importService.extractFromUrl(parsed.data.url, {
+        hint: parsed.data.hint,
+      });
       res.json(result);
     } catch (err) {
       if (err.status) {
@@ -1520,13 +2060,21 @@ studioRouter.post(
         // set status. Also forward industry-error extras so the FE
         // can render "this requires real-estate" messaging.
         const extras = {};
-        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
-        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
-        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+        if (err.actualIndustry !== undefined)
+          extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined)
+          extras.requiredIndustry = err.requiredIndustry;
+        return sendError(
+          res,
+          err.status,
+          err.code || "IMPORT_ERROR",
+          err.message,
+          extras,
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -1536,7 +2084,9 @@ studioRouter.post(
     try {
       const parsed = ImportFromTextSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const result = await importService.extractFromText(parsed.data.text, { hint: parsed.data.hint });
+      const result = await importService.extractFromText(parsed.data.text, {
+        hint: parsed.data.hint,
+      });
       res.json(result);
     } catch (err) {
       if (err.status) {
@@ -1546,13 +2096,21 @@ studioRouter.post(
         // set status. Also forward industry-error extras so the FE
         // can render "this requires real-estate" messaging.
         const extras = {};
-        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
-        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
-        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+        if (err.actualIndustry !== undefined)
+          extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined)
+          extras.requiredIndustry = err.requiredIndustry;
+        return sendError(
+          res,
+          err.status,
+          err.code || "IMPORT_ERROR",
+          err.message,
+          extras,
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -1572,13 +2130,21 @@ studioRouter.post(
         // set status. Also forward industry-error extras so the FE
         // can render "this requires real-estate" messaging.
         const extras = {};
-        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
-        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
-        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+        if (err.actualIndustry !== undefined)
+          extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined)
+          extras.requiredIndustry = err.requiredIndustry;
+        return sendError(
+          res,
+          err.status,
+          err.code || "IMPORT_ERROR",
+          err.message,
+          extras,
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -1601,13 +2167,21 @@ studioRouter.post(
         // set status. Also forward industry-error extras so the FE
         // can render "this requires real-estate" messaging.
         const extras = {};
-        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
-        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
-        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+        if (err.actualIndustry !== undefined)
+          extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined)
+          extras.requiredIndustry = err.requiredIndustry;
+        return sendError(
+          res,
+          err.status,
+          err.code || "IMPORT_ERROR",
+          err.message,
+          extras,
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -1617,11 +2191,14 @@ studioRouter.post(
     try {
       const parsed = ImportFromSheetsSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const result = await importService.extractFromGoogleSheets(parsed.data.integrationId, {
-        spreadsheetId: parsed.data.spreadsheetId,
-        sheetName: parsed.data.sheetName,
-        hint: parsed.data.hint,
-      });
+      const result = await importService.extractFromGoogleSheets(
+        parsed.data.integrationId,
+        {
+          spreadsheetId: parsed.data.spreadsheetId,
+          sheetName: parsed.data.sheetName,
+          hint: parsed.data.hint,
+        },
+      );
       res.json(result);
     } catch (err) {
       if (err.status) {
@@ -1631,13 +2208,21 @@ studioRouter.post(
         // set status. Also forward industry-error extras so the FE
         // can render "this requires real-estate" messaging.
         const extras = {};
-        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
-        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
-        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+        if (err.actualIndustry !== undefined)
+          extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined)
+          extras.requiredIndustry = err.requiredIndustry;
+        return sendError(
+          res,
+          err.status,
+          err.code || "IMPORT_ERROR",
+          err.message,
+          extras,
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -1647,9 +2232,12 @@ studioRouter.post(
     try {
       const parsed = ImportFromNotionSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const result = await importService.extractFromNotion(parsed.data.integrationId, {
-        hint: parsed.data.hint,
-      });
+      const result = await importService.extractFromNotion(
+        parsed.data.integrationId,
+        {
+          hint: parsed.data.hint,
+        },
+      );
       res.json(result);
     } catch (err) {
       if (err.status) {
@@ -1659,13 +2247,21 @@ studioRouter.post(
         // set status. Also forward industry-error extras so the FE
         // can render "this requires real-estate" messaging.
         const extras = {};
-        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
-        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
-        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+        if (err.actualIndustry !== undefined)
+          extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined)
+          extras.requiredIndustry = err.requiredIndustry;
+        return sendError(
+          res,
+          err.status,
+          err.code || "IMPORT_ERROR",
+          err.message,
+          extras,
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -1689,229 +2285,328 @@ studioRouter.post(
         // set status. Also forward industry-error extras so the FE
         // can render "this requires real-estate" messaging.
         const extras = {};
-        if (err.actualIndustry !== undefined) extras.actualIndustry = err.actualIndustry;
-        if (err.requiredIndustry !== undefined) extras.requiredIndustry = err.requiredIndustry;
-        return sendError(res, err.status, err.code || "IMPORT_ERROR", err.message, extras);
+        if (err.actualIndustry !== undefined)
+          extras.actualIndustry = err.actualIndustry;
+        if (err.requiredIndustry !== undefined)
+          extras.requiredIndustry = err.requiredIndustry;
+        return sendError(
+          res,
+          err.status,
+          err.code || "IMPORT_ERROR",
+          err.message,
+          extras,
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 // ── Dashboard ──────────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/workspaces/:id/dashboard/recommendations`, requireClientOwner, async (req, res, next) => {
-  try {
-    const result = await getDashboardRecommendations(req.params.id);
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/dashboard/recommendations`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await getDashboardRecommendations(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.get(`${BASE}/workspaces/:id/dashboard/actions`, requireClientOwner, async (req, res, next) => {
-  try {
-    const result = await getDashboardActions(req.params.id);
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/dashboard/actions`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const result = await getDashboardActions(req.params.id);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 /**
  * GET /api/v1/workspaces/:id/recommendations?surface=dashboard|create_content|listing_campaign
  * Unified recommendation engine endpoint. Returns recommendations in the
  * shared format with actionPayload, reasons, and surface filtering.
  */
-studioRouter.get(`${BASE}/workspaces/:id/recommendations`, requireClientOwner, async (req, res, next) => {
-  try {
-    const surface = req.query.surface || undefined;
-    const limit = req.query.limit ? Number(req.query.limit) : 6;
-    const validSurfaces = ["dashboard", "create_content", "listing_campaign", "planner"];
-    if (surface && !validSurfaces.includes(surface)) {
-      return validationError(res, [{ path: ["surface"], message: `Must be one of: ${validSurfaces.join(", ")}` }]);
+studioRouter.get(
+  `${BASE}/workspaces/:id/recommendations`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const surface = req.query.surface || undefined;
+      const limit = req.query.limit ? Number(req.query.limit) : 6;
+      const validSurfaces = [
+        "dashboard",
+        "create_content",
+        "listing_campaign",
+        "planner",
+      ];
+      if (surface && !validSurfaces.includes(surface)) {
+        return validationError(res, [
+          {
+            path: ["surface"],
+            message: `Must be one of: ${validSurfaces.join(", ")}`,
+          },
+        ]);
+      }
+      const result = await getRecommendations(req.params.id, {
+        surface,
+        limit,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
     }
-    const result = await getRecommendations(req.params.id, { surface, limit });
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 /**
  * POST /api/v1/workspaces/:id/recommendations/:recId/accept
  * Track that a recommendation was acted on. Lightweight Redis tracking.
  */
-studioRouter.post(`${BASE}/workspaces/:id/recommendations/:recId/accept`, requireClientOwner, async (req, res, next) => {
-  try {
-    const { redisSet: rSet, redisGet: rGet } = await import("../../redis.js");
-    const trackKey = `sp:rec:accepted:${req.params.id}`;
-    let existing = [];
+studioRouter.post(
+  `${BASE}/workspaces/:id/recommendations/:recId/accept`,
+  requireClientOwner,
+  async (req, res, next) => {
     try {
-      const raw = await rGet(trackKey);
-      if (raw) existing = JSON.parse(raw);
-    } catch { /* ignore */ }
-    existing.push({ id: req.params.recId, at: new Date().toISOString() });
-    if (existing.length > 50) existing = existing.slice(-50);
-    await rSet(trackKey, JSON.stringify(existing), 172800); // 48h
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
+      const { redisSet: rSet, redisGet: rGet } = await import("../../redis.js");
+      const trackKey = `sp:rec:accepted:${req.params.id}`;
+      let existing = [];
+      try {
+        const raw = await rGet(trackKey);
+        if (raw) existing = JSON.parse(raw);
+      } catch {
+        /* ignore */
+      }
+      existing.push({ id: req.params.recId, at: new Date().toISOString() });
+      if (existing.length > 50) existing = existing.slice(-50);
+      await rSet(trackKey, JSON.stringify(existing), 172800); // 48h
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 /**
  * POST /api/v1/workspaces/:id/recommendations/:recId/dismiss
  * Track that a recommendation was dismissed. Redis-backed, 7-day TTL.
  */
-studioRouter.post(`${BASE}/workspaces/:id/recommendations/:recId/dismiss`, requireClientOwner, async (req, res, next) => {
-  try {
-    const { redisSet: rSet, redisGet: rGet } = await import("../../redis.js");
-    const trackKey = `sp:rec:dismissed:${req.params.id}`;
-    let existing = [];
+studioRouter.post(
+  `${BASE}/workspaces/:id/recommendations/:recId/dismiss`,
+  requireClientOwner,
+  async (req, res, next) => {
     try {
-      const raw = await rGet(trackKey);
-      if (raw) existing = JSON.parse(raw);
-    } catch { /* ignore */ }
-    existing.push({ id: req.params.recId, at: new Date().toISOString(), reason: req.body?.reason ?? null });
-    if (existing.length > 50) existing = existing.slice(-50);
-    await rSet(trackKey, JSON.stringify(existing), 604800); // 7 days
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
+      const { redisSet: rSet, redisGet: rGet } = await import("../../redis.js");
+      const trackKey = `sp:rec:dismissed:${req.params.id}`;
+      let existing = [];
+      try {
+        const raw = await rGet(trackKey);
+        if (raw) existing = JSON.parse(raw);
+      } catch {
+        /* ignore */
+      }
+      existing.push({
+        id: req.params.recId,
+        at: new Date().toISOString(),
+        reason: req.body?.reason ?? null,
+      });
+      if (existing.length > 50) existing = existing.slice(-50);
+      await rSet(trackKey, JSON.stringify(existing), 604800); // 7 days
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Analytics ───────────────────────────────────────────────────────────
 
-studioRouter.get(`${BASE}/workspaces/:id/analytics`, requireClientOwner, async (req, res, next) => {
-  try {
-    const analytics = await service.getClientAnalytics(req.params.id);
-    res.json(analytics);
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/analytics`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const analytics = await service.getClientAnalytics(req.params.id);
+      res.json(analytics);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.get(`${BASE}/workspaces/:id/analytics/overview`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = AnalyticsOverviewQuerySchema.safeParse(req.query);
-    if (!parsed.success) return validationError(res, parsed.error);
-    const overview = await getAnalyticsOverview({ clientId: req.params.id, range: parsed.data.range });
-    res.json(overview);
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/analytics/overview`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = AnalyticsOverviewQuerySchema.safeParse(req.query);
+      if (!parsed.success) return validationError(res, parsed.error);
+      const overview = await getAnalyticsOverview({
+        clientId: req.params.id,
+        range: parsed.data.range,
+      });
+      res.json(overview);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.get(`${BASE}/workspaces/:id/analytics/posts/:postId`, requireClientOwner, async (req, res, next) => {
-  try {
-    const detail = await getPostDetail(req.params.id, req.params.postId);
-    if (!detail) return sendError(res, 404, "NOT_FOUND", "Post not found");
-    res.json(detail);
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/analytics/posts/:postId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const detail = await getPostDetail(req.params.id, req.params.postId);
+      if (!detail) return sendError(res, 404, "NOT_FOUND", "Post not found");
+      res.json(detail);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.get(`${BASE}/workspaces/:id/analytics/posts/:postId/history`, requireClientOwner, async (req, res, next) => {
-  try {
-    const [history, growth] = await Promise.all([
-      getPostMetricHistory(req.params.postId),
-      getPostMetricGrowth(req.params.postId),
-    ]);
-    res.json({ history, growth });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/analytics/posts/:postId/history`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const [history, growth] = await Promise.all([
+        getPostMetricHistory(req.params.postId),
+        getPostMetricGrowth(req.params.postId),
+      ]);
+      res.json({ history, growth });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.get(`${BASE}/workspaces/:id/analytics/insights`, requireClientOwner, async (req, res, next) => {
-  try {
-    const range = req.query.range || '30d';
-    const [insights, recResult] = await Promise.all([
-      generateInsights({ clientId: req.params.id, range }),
-      generateRecommendations({ clientId: req.params.id, range }),
-    ]);
-    res.json({ insights, recommendations: recResult.recommendations, meta: recResult.meta ?? null });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/analytics/insights`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const range = req.query.range || "30d";
+      const [insights, recResult] = await Promise.all([
+        generateInsights({ clientId: req.params.id, range }),
+        generateRecommendations({ clientId: req.params.id, range }),
+      ]);
+      res.json({
+        insights,
+        recommendations: recResult.recommendations,
+        meta: recResult.meta ?? null,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Trackable Links & Conversions ────────────────────────────────────
 
-studioRouter.post(`${BASE}/workspaces/:id/links`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = CreateTrackableLinkSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error);
-    const link = await trackableLinkService.createTrackableLink({
-      ...parsed.data,
-      clientId: req.params.id,
-      createdBy: getAuth0Sub(req),
-    });
-    res.status(201).json(link);
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.get(`${BASE}/workspaces/:id/links`, requireClientOwner, async (req, res, next) => {
-  try {
-    const links = await trackableLinkService.listTrackableLinks(req.params.id, {
-      draftId: req.query.draftId || undefined,
-    });
-    res.json({ links });
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.delete(`${BASE}/workspaces/:id/links/:linkId`, requireClientOwner, async (req, res, next) => {
-  try {
-    // Cross-workspace guard: requireClientOwner verified :id is owned,
-    // but the link may belong to some other workspace. Scope the delete.
-    const result = await trackableLinkService.deleteLinkInClient(
-      req.params.linkId,
-      req.params.id
-    );
-    if (!result || result.count === 0) {
-      return sendError(res, 404, "NOT_FOUND", "Link not found");
+studioRouter.post(
+  `${BASE}/workspaces/:id/links`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = CreateTrackableLinkSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error);
+      const link = await trackableLinkService.createTrackableLink({
+        ...parsed.data,
+        clientId: req.params.id,
+        createdBy: getAuth0Sub(req),
+      });
+      res.status(201).json(link);
+    } catch (err) {
+      next(err);
     }
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
-studioRouter.post(`${BASE}/workspaces/:id/conversions`, requireClientOwner, async (req, res, next) => {
-  try {
-    const parsed = LogConversionEventSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error);
-    const event = await logConversionEvent({
-      ...parsed.data,
-      clientId: req.params.id,
-    });
-    res.status(201).json(event);
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/workspaces/:id/links`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const links = await trackableLinkService.listTrackableLinks(
+        req.params.id,
+        {
+          draftId: req.query.draftId || undefined,
+        },
+      );
+      res.json({ links });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.get(`${BASE}/workspaces/:id/conversions`, requireClientOwner, async (req, res, next) => {
-  try {
-    const where = { clientId: req.params.id };
-    if (req.query.since) where.createdAt = { gte: new Date(req.query.since) };
-    const events = await prisma.conversionEvent.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: 200,
-    });
-    res.json({ events });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.delete(
+  `${BASE}/workspaces/:id/links/:linkId`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      // Cross-workspace guard: requireClientOwner verified :id is owned,
+      // but the link may belong to some other workspace. Scope the delete.
+      const result = await trackableLinkService.deleteLinkInClient(
+        req.params.linkId,
+        req.params.id,
+      );
+      if (!result || result.count === 0) {
+        return sendError(res, 404, "NOT_FOUND", "Link not found");
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.post(
+  `${BASE}/workspaces/:id/conversions`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = LogConversionEventSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error);
+      const event = await logConversionEvent({
+        ...parsed.data,
+        clientId: req.params.id,
+      });
+      res.status(201).json(event);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+studioRouter.get(
+  `${BASE}/workspaces/:id/conversions`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const where = { clientId: req.params.id };
+      if (req.query.since) where.createdAt = { gte: new Date(req.query.since) };
+      const events = await prisma.conversionEvent.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: 200,
+      });
+      res.json({ events });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Generation ──────────────────────────────────────────────────────────
 
@@ -1923,33 +2618,84 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     // Tenant isolation: every body-supplied resource ID must belong to
     // a workspace the requester owns. We check before doing any
     // expensive AI work so a probe attack returns instantly.
-    const ownerCheck = await assertClientOwnedByCurrentUser(parsed.data.clientId, req);
-    if (ownerCheck) return sendError(res, ownerCheck.status, ownerCheck.code, ownerCheck.message);
+    const ownerCheck = await assertClientOwnedByCurrentUser(
+      parsed.data.clientId,
+      req,
+    );
+    if (ownerCheck)
+      return sendError(
+        res,
+        ownerCheck.status,
+        ownerCheck.code,
+        ownerCheck.message,
+      );
     try {
-      await assertDataItemInClient(parsed.data.dataItemId, parsed.data.clientId);
+      await assertDataItemInClient(
+        parsed.data.dataItemId,
+        parsed.data.clientId,
+      );
     } catch (e) {
       return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
     }
 
     // Service health pre-flight
-    if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
+    if ((await getServiceStatus("openai")) === "down")
+      return sendError(
+        res,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Content generation temporarily unavailable. Please try again in a few minutes.",
+      );
     const throttle = await getThrottlePolicy();
-    if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
+    if (throttle.adminPaused)
+      return sendError(
+        res,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "AI generation is temporarily paused by the administrator.",
+      );
 
     // Global budget check
-    if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+    if (await isProviderBudgetExceeded("openai"))
+      return sendError(
+        res,
+        503,
+        "BUDGET_EXCEEDED",
+        "AI text generation is temporarily unavailable due to budget limits. Please try again later.",
+      );
 
     // Idempotency: reject duplicate requests within 10s window
     const dedupKey = await acquireDedup(req.user.id, "generate", parsed.data);
-    if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A generation is already in progress. Please wait.");
+    if (!dedupKey)
+      return sendError(
+        res,
+        429,
+        "DUPLICATE_REQUEST",
+        "A generation is already in progress. Please wait.",
+      );
 
     // Usage limit check
     const allowed = await checkUsageLimit(req.user.id, "posts");
-    if (!allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more."); }
+    if (!allowed) {
+      await releaseDedup(dedupKey);
+      return sendError(
+        res,
+        402,
+        "USAGE_LIMIT",
+        "You have reached your monthly generation limit. Upgrade your plan for more.",
+      );
+    }
 
     const actorSub = getAuth0Sub(req);
     const { dataItemId, blueprintId, ...genData } = parsed.data;
-    req.log?.info({ clientId: parsed.data.clientId, userId: req.user?.id, channel: parsed.data.channel }, "generation_started");
+    req.log?.info(
+      {
+        clientId: parsed.data.clientId,
+        userId: req.user?.id,
+        channel: parsed.data.channel,
+      },
+      "generation_started",
+    );
     const draft = await service.generateDraft({
       ...genData,
       createdBy: actorSub,
@@ -1960,7 +2706,14 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
 
     await releaseDedup(dedupKey);
     await incrementUsage(req.user.id, "posts");
-    req.log?.info({ draftId: draft.id, clientId: parsed.data.clientId, channel: draft.channel }, "generation_succeeded");
+    req.log?.info(
+      {
+        draftId: draft.id,
+        clientId: parsed.data.clientId,
+        channel: draft.channel,
+      },
+      "generation_succeeded",
+    );
 
     // Fire-and-forget: record activity
     recordActivity({
@@ -1973,76 +2726,129 @@ studioRouter.post(`${BASE}/generate`, async (req, res, next) => {
     }).catch(() => {});
 
     // Fire-and-forget: check if usage is nearing limit
-    checkUsageNearing(req.user.id, "posts").then((info) => {
-      if (info) enqueueNotification({
-        userId: req.user.id,
-        eventType: "USAGE_LIMIT_NEARING",
-        payload: info,
-        resourceType: "usage",
-        resourceId: `${req.user.id}:posts`,
-      });
-    }).catch(() => {});
+    checkUsageNearing(req.user.id, "posts")
+      .then((info) => {
+        if (info)
+          enqueueNotification({
+            userId: req.user.id,
+            eventType: "USAGE_LIMIT_NEARING",
+            payload: info,
+            resourceType: "usage",
+            resourceId: `${req.user.id}:posts`,
+          });
+      })
+      .catch(() => {});
 
     res.status(201).json(draft);
   } catch (err) {
-    req.log?.error({ clientId: parsed.data.clientId, userId: req.user?.id, err: err?.message, code: err?.code }, "generation_failed");
+    req.log?.error(
+      {
+        clientId: parsed.data.clientId,
+        userId: req.user?.id,
+        err: err?.message,
+        code: err?.code,
+      },
+      "generation_failed",
+    );
     next(err);
   }
 });
 
 // ── Content Remix ────────────────────────────────────────────────────
 
-studioRouter.post(`${BASE}/workspaces/:id/remix`, requireClientOwner, async (req, res, next) => {
-  try {
-    const { draftId, language } = req.body;
-    if (!draftId || typeof draftId !== "string") return sendError(res, 400, "VALIDATION_ERROR", "draftId is required.");
-
-    // Cross-workspace check: requireClientOwner verified :id, but the
-    // body draftId could be smuggled in from another workspace.
+studioRouter.post(
+  `${BASE}/workspaces/:id/remix`,
+  requireClientOwner,
+  async (req, res, next) => {
     try {
-      await assertDraftInClient(draftId, req.params.id);
-    } catch (e) {
-      return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+      const { draftId, language } = req.body;
+      if (!draftId || typeof draftId !== "string")
+        return sendError(res, 400, "VALIDATION_ERROR", "draftId is required.");
+
+      // Cross-workspace check: requireClientOwner verified :id, but the
+      // body draftId could be smuggled in from another workspace.
+      try {
+        await assertDraftInClient(draftId, req.params.id);
+      } catch (e) {
+        return sendError(
+          res,
+          e.status ?? 404,
+          e.code ?? "NOT_FOUND",
+          e.message,
+        );
+      }
+
+      // Service health pre-flight
+      if ((await getServiceStatus("openai")) === "down")
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Content generation temporarily unavailable. Please try again in a few minutes.",
+        );
+      const throttle = await getThrottlePolicy();
+      if (throttle.adminPaused)
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "AI generation is temporarily paused by the administrator.",
+        );
+      if (await isProviderBudgetExceeded("openai"))
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI text generation is temporarily unavailable due to budget limits. Please try again later.",
+        );
+
+      const dedupKey = await acquireDedup(req.user.id, "remix", { draftId });
+      if (!dedupKey)
+        return sendError(
+          res,
+          429,
+          "DUPLICATE_REQUEST",
+          "A remix is already in progress. Please wait.",
+        );
+
+      const allowed = await checkUsageLimit(req.user.id, "posts");
+      if (!allowed) {
+        await releaseDedup(dedupKey);
+        return sendError(
+          res,
+          402,
+          "USAGE_LIMIT",
+          "You have reached your monthly generation limit.",
+        );
+      }
+
+      const actorSub = getAuth0Sub(req);
+      const drafts = await service.remixDraft({
+        clientId: req.params.id,
+        draftId,
+        createdBy: actorSub,
+        userId: req.user.id,
+        language,
+      });
+
+      await releaseDedup(dedupKey);
+      await incrementUsage(req.user.id, "posts");
+
+      recordActivity({
+        userId: req.user.id,
+        clientId: req.params.id,
+        eventType: "CONTENT_REMIXED",
+        payload: { draftId, formats: drafts.length },
+        resourceType: "draft",
+        resourceId: draftId,
+      }).catch(() => {});
+
+      res.status(201).json({ drafts });
+    } catch (err) {
+      next(err);
     }
-
-    // Service health pre-flight
-    if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
-    const throttle = await getThrottlePolicy();
-    if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
-    if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
-
-    const dedupKey = await acquireDedup(req.user.id, "remix", { draftId });
-    if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A remix is already in progress. Please wait.");
-
-    const allowed = await checkUsageLimit(req.user.id, "posts");
-    if (!allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit."); }
-
-    const actorSub = getAuth0Sub(req);
-    const drafts = await service.remixDraft({
-      clientId: req.params.id,
-      draftId,
-      createdBy: actorSub,
-      userId: req.user.id,
-      language,
-    });
-
-    await releaseDedup(dedupKey);
-    await incrementUsage(req.user.id, "posts");
-
-    recordActivity({
-      userId: req.user.id,
-      clientId: req.params.id,
-      eventType: "CONTENT_REMIXED",
-      payload: { draftId, formats: drafts.length },
-      resourceType: "draft",
-      resourceId: draftId,
-    }).catch(() => {});
-
-    res.status(201).json({ drafts });
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 // ── Post Timing ──────────────────────────────────────────────────────
 
@@ -2053,13 +2859,15 @@ studioRouter.get(`${BASE}/timing-suggestions`, (req, res) => {
 // ── Series Builder ───────────────────────────────────────────────────
 
 studioRouter.get(`${BASE}/series-templates`, (req, res) => {
-  res.json({ templates: service.SERIES_TEMPLATES.map((t) => ({
-    id: t.id,
-    name: t.name,
-    description: t.description,
-    defaultParts: t.defaultParts,
-    maxParts: t.maxParts,
-  }))});
+  res.json({
+    templates: service.SERIES_TEMPLATES.map((t) => ({
+      id: t.id,
+      name: t.name,
+      description: t.description,
+      defaultParts: t.defaultParts,
+      maxParts: t.maxParts,
+    })),
+  });
 });
 
 studioRouter.post(
@@ -2071,14 +2879,38 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       // Service health pre-flight
-      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable.");
-      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI generation temporarily unavailable due to budget limits.");
+      if ((await getServiceStatus("openai")) === "down")
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Content generation temporarily unavailable.",
+        );
+      if (await isProviderBudgetExceeded("openai"))
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI generation temporarily unavailable due to budget limits.",
+        );
 
       const dedupKey = await acquireDedup(req.user.id, "series", parsed.data);
-      if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A series is already being generated. Please wait.");
+      if (!dedupKey)
+        return sendError(
+          res,
+          429,
+          "DUPLICATE_REQUEST",
+          "A series is already being generated. Please wait.",
+        );
 
       const allowed = await checkUsageLimit(req.user.id, "posts");
-      if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "Post limit reached for this billing period.");
+      if (!allowed)
+        return sendError(
+          res,
+          403,
+          "USAGE_LIMIT",
+          "Post limit reached for this billing period.",
+        );
 
       const actorSub = getAuth0Sub(req);
       const result = await service.generateSeries(req.params.id, actorSub, {
@@ -2089,7 +2921,9 @@ studioRouter.post(
       await releaseDedup(dedupKey);
 
       // Track usage for each generated draft
-      const successCount = result.drafts.filter((d) => d.status !== "FAILED").length;
+      const successCount = result.drafts.filter(
+        (d) => d.status !== "FAILED",
+      ).length;
       if (successCount > 0) {
         incrementUsage(req.user.id, "posts", successCount).catch(() => {});
       }
@@ -2109,7 +2943,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Performance Feedback ──────────────────────────────────────────────
@@ -2127,7 +2961,12 @@ studioRouter.post(
       try {
         await assertDraftInClient(req.params.draftId, req.params.id);
       } catch (e) {
-        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+        return sendError(
+          res,
+          e.status ?? 404,
+          e.code ?? "NOT_FOUND",
+          e.message,
+        );
       }
 
       const draft = await service.ratePerformance(req.params.draftId, {
@@ -2137,7 +2976,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -2150,7 +2989,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -2163,50 +3002,89 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Content Ideas ──────────────────────────────────────────────────────
 
-studioRouter.post(`${BASE}/workspaces/:id/ideas`, requireClientOwner, async (req, res, next) => {
-  try {
-    // Service health pre-flight
-    if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
-    { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
+studioRouter.post(
+  `${BASE}/workspaces/:id/ideas`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      // Service health pre-flight
+      if ((await getServiceStatus("openai")) === "down")
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Content generation temporarily unavailable. Please try again in a few minutes.",
+        );
+      {
+        const throttle = await getThrottlePolicy();
+        if (throttle.adminPaused)
+          return sendError(
+            res,
+            503,
+            "SERVICE_UNAVAILABLE",
+            "AI generation is temporarily paused by the administrator.",
+          );
+      }
 
-    // Global budget check
-    if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+      // Global budget check
+      if (await isProviderBudgetExceeded("openai"))
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI text generation is temporarily unavailable due to budget limits. Please try again later.",
+        );
 
-    const dedupKey = await acquireDedup(req.user.id, "ideas", { clientId: req.params.id });
-    if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "Idea generation is already in progress. Please wait.");
+      const dedupKey = await acquireDedup(req.user.id, "ideas", {
+        clientId: req.params.id,
+      });
+      if (!dedupKey)
+        return sendError(
+          res,
+          429,
+          "DUPLICATE_REQUEST",
+          "Idea generation is already in progress. Please wait.",
+        );
 
-    const ideas = await service.generateContentIdeas(req.params.id, { userId: req.user.id });
-    await releaseDedup(dedupKey);
-    res.json({ ideas });
-  } catch (err) {
-    next(err);
-  }
-});
+      const ideas = await service.generateContentIdeas(req.params.id, {
+        userId: req.user.id,
+      });
+      await releaseDedup(dedupKey);
+      res.json({ ideas });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Batch-complete notification ──────────────────────────────────────────
 
-studioRouter.post(`${BASE}/workspaces/:id/batch-complete`, requireClientOwner, async (req, res, next) => {
-  try {
-    const count = parseInt(req.body.count) || 0;
-    if (count > 0) {
-      enqueueNotification({
-        userId: req.user.id,
-        eventType: "BATCH_COMPLETE",
-        payload: { count, clientId: req.params.id },
-        resourceType: "client",
-        resourceId: req.params.id,
-      }).catch(() => {});
+studioRouter.post(
+  `${BASE}/workspaces/:id/batch-complete`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const count = parseInt(req.body.count) || 0;
+      if (count > 0) {
+        enqueueNotification({
+          userId: req.user.id,
+          eventType: "BATCH_COMPLETE",
+          payload: { count, clientId: req.params.id },
+          resourceType: "client",
+          resourceId: req.params.id,
+        }).catch(() => {});
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
     }
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 // ── Autopilot ──────────────────────────────────────────────────────────
 
@@ -2222,7 +3100,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -2234,11 +3112,32 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       // Service health pre-flight
-      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
-      { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
+      if ((await getServiceStatus("openai")) === "down")
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Content generation temporarily unavailable. Please try again in a few minutes.",
+        );
+      {
+        const throttle = await getThrottlePolicy();
+        if (throttle.adminPaused)
+          return sendError(
+            res,
+            503,
+            "SERVICE_UNAVAILABLE",
+            "AI generation is temporarily paused by the administrator.",
+          );
+      }
 
       // Global budget check
-      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+      if (await isProviderBudgetExceeded("openai"))
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI text generation is temporarily unavailable due to budget limits. Please try again later.",
+        );
 
       const actorSub = getAuth0Sub(req);
       const result = await executeAutopilot(req.params.id, actorSub, {
@@ -2257,7 +3156,11 @@ studioRouter.post(
         enqueueNotification({
           userId: req.user.id,
           eventType: "BATCH_COMPLETE",
-          payload: { count: result.generated, clientId: req.params.id, source: "autopilot" },
+          payload: {
+            count: result.generated,
+            clientId: req.params.id,
+            source: "autopilot",
+          },
           resourceType: "client",
           resourceId: req.params.id,
         }).catch(() => {});
@@ -2280,7 +3183,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Drafts ──────────────────────────────────────────────────────────────
@@ -2325,35 +3228,47 @@ studioRouter.get(`${BASE}/drafts`, async (req, res, next) => {
   }
 });
 
-studioRouter.get(`${BASE}/drafts/:id`, requireDraftOwner, async (req, res, next) => {
-  try {
-    const draft = await service.getDraft(req.params.id);
-    if (!draft) return sendError(res, 404, "NOT_FOUND", "Draft not found");
-    res.json(service.formatDraft(draft));
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/drafts/:id`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const draft = await service.getDraft(req.params.id);
+      if (!draft) return sendError(res, 404, "NOT_FOUND", "Draft not found");
+      res.json(service.formatDraft(draft));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.patch(`${BASE}/drafts/:id`, requireDraftOwner, async (req, res, next) => {
-  try {
-    const parsed = UpdateDraftSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const draft = await service.updateDraft(req.params.id, parsed.data);
-    res.json(service.formatDraft(draft));
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.patch(
+  `${BASE}/drafts/:id`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = UpdateDraftSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const draft = await service.updateDraft(req.params.id, parsed.data);
+      res.json(service.formatDraft(draft));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.delete(`${BASE}/drafts/:id`, requireDraftOwner, async (req, res, next) => {
-  try {
-    await service.deleteDraft(req.params.id);
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.delete(
+  `${BASE}/drafts/:id`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      await service.deleteDraft(req.params.id);
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 studioRouter.delete(
   `${BASE}/workspaces/:id/drafts`,
@@ -2365,345 +3280,492 @@ studioRouter.delete(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
-studioRouter.post(`${BASE}/drafts/:id/duplicate`, requireDraftOwner, async (req, res, next) => {
-  try {
-    const actorSub = getAuth0Sub(req);
-    const draft = await service.duplicateDraft(req.params.id, actorSub);
-    res.json(service.formatDraft(draft));
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.post(
+  `${BASE}/drafts/:id/duplicate`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const actorSub = getAuth0Sub(req);
+      const draft = await service.duplicateDraft(req.params.id, actorSub);
+      res.json(service.formatDraft(draft));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-studioRouter.post(`${BASE}/drafts/:id/approve`, requireDraftOwner, async (req, res, next) => {
-  try {
-    const actorSub = getAuth0Sub(req);
-    const draft = await service.approveDraft(req.params.id, actorSub);
+studioRouter.post(
+  `${BASE}/drafts/:id/approve`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const actorSub = getAuth0Sub(req);
+      const draft = await service.approveDraft(req.params.id, actorSub);
 
-    recordActivity({
-      userId: req.user.id,
-      clientId: draft.clientId,
-      eventType: "DRAFT_APPROVED",
-      payload: { channel: draft.channel, clientId: draft.clientId },
-      resourceType: "draft",
-      resourceId: draft.id,
-    }).catch(() => {});
-
-    // Check if approved draft has persona-generated media
-    const linkedAssets = await prisma.draftAsset.findMany({
-      where: { draftId: req.params.id },
-      include: { asset: { select: { personaSnapshot: true } } },
-    });
-    const personaAsset = linkedAssets.find(da => da.asset?.personaSnapshot);
-    if (personaAsset) {
       recordActivity({
         userId: req.user.id,
         clientId: draft.clientId,
-        eventType: "PERSONA_IMAGE_APPROVED",
-        payload: { personaSnapshot: personaAsset.asset.personaSnapshot, postId: req.params.id, clientId: draft.clientId },
+        eventType: "DRAFT_APPROVED",
+        payload: { channel: draft.channel, clientId: draft.clientId },
         resourceType: "draft",
-        resourceId: req.params.id,
+        resourceId: draft.id,
       }).catch(() => {});
-    }
 
-    res.json(service.formatDraft(draft));
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.post(`${BASE}/drafts/:id/reject`, requireDraftOwner, async (req, res, next) => {
-  try {
-    const parsed = RejectDraftSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-    const actorSub = getAuth0Sub(req);
-    const draft = await service.rejectDraft(
-      req.params.id,
-      parsed.data.reason,
-      actorSub
-    );
-
-    recordActivity({
-      userId: req.user.id,
-      clientId: draft.clientId,
-      eventType: "DRAFT_REJECTED",
-      payload: { channel: draft.channel, reason: parsed.data.reason, clientId: draft.clientId },
-      resourceType: "draft",
-      resourceId: draft.id,
-    }).catch(() => {});
-
-    res.json(service.formatDraft(draft));
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.post(`${BASE}/drafts/:id/schedule`, requireDraftOwner, async (req, res, next) => {
-  try {
-    const parsed = ScheduleDraftSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
-
-    // Pre-validate: ensure the draft's channel has an active connection
-    const draftRecord = await prisma.draft.findUnique({
-      where: { id: req.params.id },
-      select: { channel: true, clientId: true, mediaUrl: true, mediaType: true },
-    });
-    if (draftRecord) {
-      const conn = await prisma.channelConnection.findUnique({
-        where: { clientId_channel: { clientId: draftRecord.clientId, channel: draftRecord.channel } },
+      // Check if approved draft has persona-generated media
+      const linkedAssets = await prisma.draftAsset.findMany({
+        where: { draftId: req.params.id },
+        include: { asset: { select: { personaSnapshot: true } } },
       });
-      if (!conn || conn.status !== 'CONNECTED') {
-        return sendError(
-          res,
-          422,
-          'SCHEDULE_NO_CONNECTION',
-          `Cannot schedule: your ${draftRecord.channel} account is not connected. Please connect it in Settings → Channels before scheduling.`
-        );
+      const personaAsset = linkedAssets.find((da) => da.asset?.personaSnapshot);
+      if (personaAsset) {
+        recordActivity({
+          userId: req.user.id,
+          clientId: draft.clientId,
+          eventType: "PERSONA_IMAGE_APPROVED",
+          payload: {
+            personaSnapshot: personaAsset.asset.personaSnapshot,
+            postId: req.params.id,
+            clientId: draft.clientId,
+          },
+          resourceType: "draft",
+          resourceId: req.params.id,
+        }).catch(() => {});
       }
 
-      // Pre-validate media requirements
-      const mediaValidation = validateDraftMedia(draftRecord);
-      if (mediaValidation.errors.length > 0) {
-        return sendError(
-          res,
-          422,
-          'MEDIA_VALIDATION_FAILED',
-          mediaValidation.errors.join("; ")
-        );
-      }
+      res.json(service.formatDraft(draft));
+    } catch (err) {
+      next(err);
     }
+  },
+);
 
-    const actorSub = getAuth0Sub(req);
-    req.log?.info({ draftId: req.params.id, channel: draftRecord?.channel, clientId: draftRecord?.clientId, scheduledFor: parsed.data.scheduledFor }, "schedule_started");
-    const draft = await service.scheduleDraft(
-      req.params.id,
-      parsed.data.scheduledFor,
-      actorSub
-    );
+studioRouter.post(
+  `${BASE}/drafts/:id/reject`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = RejectDraftSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+      const actorSub = getAuth0Sub(req);
+      const draft = await service.rejectDraft(
+        req.params.id,
+        parsed.data.reason,
+        actorSub,
+      );
 
-    req.log?.info({ draftId: req.params.id, channel: draft.channel, clientId: draft.clientId, scheduledFor: parsed.data.scheduledFor }, "schedule_succeeded");
+      recordActivity({
+        userId: req.user.id,
+        clientId: draft.clientId,
+        eventType: "DRAFT_REJECTED",
+        payload: {
+          channel: draft.channel,
+          reason: parsed.data.reason,
+          clientId: draft.clientId,
+        },
+        resourceType: "draft",
+        resourceId: draft.id,
+      }).catch(() => {});
 
-    recordActivity({
-      userId: req.user.id,
-      clientId: draft.clientId,
-      eventType: "DRAFT_SCHEDULED",
-      payload: { channel: draft.channel, scheduledFor: parsed.data.scheduledFor, clientId: draft.clientId },
-      resourceType: "draft",
-      resourceId: draft.id,
-    }).catch(() => {});
+      res.json(service.formatDraft(draft));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
-    res.json(service.formatDraft(draft));
-  } catch (err) {
-    req.log?.error({ draftId: req.params.id, err: err?.message, code: err?.code }, "schedule_failed");
-    next(err);
-  }
-});
+studioRouter.post(
+  `${BASE}/drafts/:id/schedule`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = ScheduleDraftSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
+
+      // Pre-validate: ensure the draft's channel has an active connection
+      const draftRecord = await prisma.draft.findUnique({
+        where: { id: req.params.id },
+        select: {
+          channel: true,
+          clientId: true,
+          mediaUrl: true,
+          mediaType: true,
+        },
+      });
+      if (draftRecord) {
+        const conn = await prisma.channelConnection.findUnique({
+          where: {
+            clientId_channel: {
+              clientId: draftRecord.clientId,
+              channel: draftRecord.channel,
+            },
+          },
+        });
+        if (!conn || conn.status !== "CONNECTED") {
+          return sendError(
+            res,
+            422,
+            "SCHEDULE_NO_CONNECTION",
+            `Cannot schedule: your ${draftRecord.channel} account is not connected. Please connect it in Settings → Channels before scheduling.`,
+          );
+        }
+
+        // Pre-validate media requirements
+        const mediaValidation = validateDraftMedia(draftRecord);
+        if (mediaValidation.errors.length > 0) {
+          return sendError(
+            res,
+            422,
+            "MEDIA_VALIDATION_FAILED",
+            mediaValidation.errors.join("; "),
+          );
+        }
+      }
+
+      const actorSub = getAuth0Sub(req);
+      req.log?.info(
+        {
+          draftId: req.params.id,
+          channel: draftRecord?.channel,
+          clientId: draftRecord?.clientId,
+          scheduledFor: parsed.data.scheduledFor,
+        },
+        "schedule_started",
+      );
+      const draft = await service.scheduleDraft(
+        req.params.id,
+        parsed.data.scheduledFor,
+        actorSub,
+      );
+
+      req.log?.info(
+        {
+          draftId: req.params.id,
+          channel: draft.channel,
+          clientId: draft.clientId,
+          scheduledFor: parsed.data.scheduledFor,
+        },
+        "schedule_succeeded",
+      );
+
+      recordActivity({
+        userId: req.user.id,
+        clientId: draft.clientId,
+        eventType: "DRAFT_SCHEDULED",
+        payload: {
+          channel: draft.channel,
+          scheduledFor: parsed.data.scheduledFor,
+          clientId: draft.clientId,
+        },
+        resourceType: "draft",
+        resourceId: draft.id,
+      }).catch(() => {});
+
+      res.json(service.formatDraft(draft));
+    } catch (err) {
+      req.log?.error(
+        { draftId: req.params.id, err: err?.message, code: err?.code },
+        "schedule_failed",
+      );
+      next(err);
+    }
+  },
+);
 
 // Auto-schedule: distribute drafts across upcoming days at 9/12/15/18
 // LOCAL time in the workspace's `Client.timezone`. Falls back to a safe
 // default if the timezone is missing or invalid (logged so we can spot
 // it). Never produces a past `scheduledFor`.
-studioRouter.post(`${BASE}/workspaces/:id/auto-schedule`, requireClientOwner, async (req, res, next) => {
-  try {
-    const { draftIds } = req.body;
-    if (!Array.isArray(draftIds) || draftIds.length === 0) {
-      return sendError(res, 400, "VALIDATION", "draftIds array is required");
-    }
-    const actorSub = getAuth0Sub(req);
-
-    const client = await prisma.client.findUnique({
-      where: { id: req.params.id },
-      select: { timezone: true },
-    });
-    const { timezone, fellBack } = resolveClientTimezone(client?.timezone);
-    if (fellBack) {
-      req.log?.warn(
-        { clientId: req.params.id, raw: client?.timezone, fallback: timezone },
-        "auto_schedule_timezone_fallback"
-      );
-    }
-
-    // Tenant isolation: filter draftIds down to those that actually
-    // belong to :id. requireClientOwner verified the workspace, but the
-    // body draftIds[] could include drafts from other workspaces.
-    // We deliberately do NOT distinguish "wrong workspace" from
-    // "doesn't exist" in the response — exposing that would let an
-    // attacker probe ownership by ID. The internal log line records
-    // the count so on-call can investigate without leaking to clients.
-    const ownedDrafts = await prisma.draft.findMany({
-      where: { id: { in: draftIds }, clientId: req.params.id },
-      select: { id: true },
-    });
-    const ownedIdSet = new Set(ownedDrafts.map((d) => d.id));
-    const ownedIds = draftIds.filter((id) => ownedIdSet.has(id));
-
-    const slots = computeAutoScheduleSlots({
-      count: ownedIds.length,
-      timeZone: timezone,
-    });
-    const scheduled = [];
-
-    for (let i = 0; i < ownedIds.length; i++) {
-      try {
-        const draft = await service.scheduleDraft(ownedIds[i], slots[i].toISOString(), actorSub);
-        scheduled.push(service.formatDraft(draft));
-      } catch {
-        // Drafts that exist in this workspace but can't be scheduled
-        // (e.g. wrong status, already published) — counted as state-
-        // rejected by the classifier below.
+studioRouter.post(
+  `${BASE}/workspaces/:id/auto-schedule`,
+  requireClientOwner,
+  async (req, res, next) => {
+    try {
+      const { draftIds } = req.body;
+      if (!Array.isArray(draftIds) || draftIds.length === 0) {
+        return sendError(res, 400, "VALIDATION", "draftIds array is required");
       }
-    }
+      const actorSub = getAuth0Sub(req);
 
-    const breakdown = classifyAutoScheduleResult({
-      submittedIds: draftIds,
-      ownedIdSet,
-      scheduledCount: scheduled.length,
-    });
-
-    if (breakdown.rejectedCount > 0) {
-      req.log?.warn(
-        {
-          clientId: req.params.id,
-          submitted: draftIds.length,
-          scheduledCount: scheduled.length,
-          rejectedCount: breakdown.rejectedCount,
-          ownershipRejected: breakdown.ownershipRejected,
-          stateRejected: breakdown.stateRejected,
-        },
-        "auto_schedule_rejected_drafts"
-      );
-    }
-
-    res.json({
-      scheduled,
-      scheduledCount: scheduled.length,
-      rejectedCount: breakdown.rejectedCount,
-      rejectedReason: breakdown.rejectedReason,
-      timezone,
-      // Legacy field — kept so existing clients keep rendering.
-      count: scheduled.length,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-studioRouter.post(`${BASE}/drafts/:id/publish`, requireDraftOwner, async (req, res, next) => {
-  // Hoisted so the catch block at the bottom of the handler can log
-  // channel/clientId. Without this, a publish failure throws before
-  // the inner const is hit, and the catch's reference becomes a
-  // ReferenceError that masks the real provider error with a 500.
-  let draftRecord = null;
-  try {
-    // Usage limit check
-    const allowed = await checkUsageLimit(req.user.id, "posts");
-    if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly publish limit. Upgrade your plan for more.");
-
-    // Pre-validate: ensure the draft's channel has an active connection
-    draftRecord = await prisma.draft.findUnique({
-      where: { id: req.params.id },
-      select: { channel: true, clientId: true, mediaUrl: true, mediaType: true },
-    });
-    if (draftRecord) {
-      const conn = await prisma.channelConnection.findUnique({
-        where: { clientId_channel: { clientId: draftRecord.clientId, channel: draftRecord.channel } },
+      const client = await prisma.client.findUnique({
+        where: { id: req.params.id },
+        select: { timezone: true },
       });
-      if (!conn || conn.status !== 'CONNECTED') {
-        return sendError(
-          res,
-          422,
-          'PUBLISH_NO_CONNECTION',
-          `Cannot publish: your ${draftRecord.channel} account is not connected. Please connect it in Settings → Channels before publishing.`
+      const { timezone, fellBack } = resolveClientTimezone(client?.timezone);
+      if (fellBack) {
+        req.log?.warn(
+          {
+            clientId: req.params.id,
+            raw: client?.timezone,
+            fallback: timezone,
+          },
+          "auto_schedule_timezone_fallback",
         );
       }
 
-      // Pre-validate media requirements
-      const mediaValidation = validateDraftMedia(draftRecord);
-      if (mediaValidation.errors.length > 0) {
-        return sendError(
-          res,
-          422,
-          'MEDIA_VALIDATION_FAILED',
-          mediaValidation.errors.join("; ")
+      // Tenant isolation: filter draftIds down to those that actually
+      // belong to :id. requireClientOwner verified the workspace, but the
+      // body draftIds[] could include drafts from other workspaces.
+      // We deliberately do NOT distinguish "wrong workspace" from
+      // "doesn't exist" in the response — exposing that would let an
+      // attacker probe ownership by ID. The internal log line records
+      // the count so on-call can investigate without leaking to clients.
+      const ownedDrafts = await prisma.draft.findMany({
+        where: { id: { in: draftIds }, clientId: req.params.id },
+        select: { id: true },
+      });
+      const ownedIdSet = new Set(ownedDrafts.map((d) => d.id));
+      const ownedIds = draftIds.filter((id) => ownedIdSet.has(id));
+
+      const slots = computeAutoScheduleSlots({
+        count: ownedIds.length,
+        timeZone: timezone,
+      });
+      const scheduled = [];
+
+      for (let i = 0; i < ownedIds.length; i++) {
+        try {
+          const draft = await service.scheduleDraft(
+            ownedIds[i],
+            slots[i].toISOString(),
+            actorSub,
+          );
+          scheduled.push(service.formatDraft(draft));
+        } catch {
+          // Drafts that exist in this workspace but can't be scheduled
+          // (e.g. wrong status, already published) — counted as state-
+          // rejected by the classifier below.
+        }
+      }
+
+      const breakdown = classifyAutoScheduleResult({
+        submittedIds: draftIds,
+        ownedIdSet,
+        scheduledCount: scheduled.length,
+      });
+
+      if (breakdown.rejectedCount > 0) {
+        req.log?.warn(
+          {
+            clientId: req.params.id,
+            submitted: draftIds.length,
+            scheduledCount: scheduled.length,
+            rejectedCount: breakdown.rejectedCount,
+            ownershipRejected: breakdown.ownershipRejected,
+            stateRejected: breakdown.stateRejected,
+          },
+          "auto_schedule_rejected_drafts",
         );
       }
+
+      res.json({
+        scheduled,
+        scheduledCount: scheduled.length,
+        rejectedCount: breakdown.rejectedCount,
+        rejectedReason: breakdown.rejectedReason,
+        timezone,
+        // Legacy field — kept so existing clients keep rendering.
+        count: scheduled.length,
+      });
+    } catch (err) {
+      next(err);
     }
+  },
+);
 
-    const actorSub = getAuth0Sub(req);
-    req.log?.info({ draftId: req.params.id, channel: draftRecord?.channel, clientId: draftRecord?.clientId, userId: req.user?.id }, "publish_started");
-    const draft = await service.publishDraft({
-      draftId: req.params.id,
-      actorSub,
-      source: "manual",
-    });
+studioRouter.post(
+  `${BASE}/drafts/:id/publish`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    // Hoisted so the catch block at the bottom of the handler can log
+    // channel/clientId. Without this, a publish failure throws before
+    // the inner const is hit, and the catch's reference becomes a
+    // ReferenceError that masks the real provider error with a 500.
+    let draftRecord = null;
+    try {
+      // Usage limit check
+      const allowed = await checkUsageLimit(req.user.id, "posts");
+      if (!allowed)
+        return sendError(
+          res,
+          402,
+          "USAGE_LIMIT",
+          "You have reached your monthly publish limit. Upgrade your plan for more.",
+        );
 
-    await incrementUsage(req.user.id, "posts");
-    req.log?.info({ draftId: req.params.id, channel: draftRecord?.channel, clientId: draftRecord?.clientId }, "publish_succeeded");
-
-    checkUsageNearing(req.user.id, "posts").then((info) => {
-      if (info) {
-        req.log?.info({ userId: req.user.id, metric: info.metric, used: info.used, limit: info.limit, status: info.status }, "billing_limit_nearing");
-        enqueueNotification({
-          userId: req.user.id,
-          eventType: "USAGE_LIMIT_NEARING",
-          payload: info,
-          resourceType: "usage",
-          resourceId: `${req.user.id}:posts`,
+      // Pre-validate: ensure the draft's channel has an active connection
+      draftRecord = await prisma.draft.findUnique({
+        where: { id: req.params.id },
+        select: {
+          channel: true,
+          clientId: true,
+          mediaUrl: true,
+          mediaType: true,
+        },
+      });
+      if (draftRecord) {
+        const conn = await prisma.channelConnection.findUnique({
+          where: {
+            clientId_channel: {
+              clientId: draftRecord.clientId,
+              channel: draftRecord.channel,
+            },
+          },
         });
-      }
-    }).catch(() => {});
+        if (!conn || conn.status !== "CONNECTED") {
+          return sendError(
+            res,
+            422,
+            "PUBLISH_NO_CONNECTION",
+            `Cannot publish: your ${draftRecord.channel} account is not connected. Please connect it in Settings → Channels before publishing.`,
+          );
+        }
 
-    res.json(draft);
-  } catch (err) {
-    req.log?.error({ draftId: req.params.id, channel: draftRecord?.channel, clientId: draftRecord?.clientId, err: err?.message, code: err?.code }, "publish_failed");
-    next(err);
-  }
-});
+        // Pre-validate media requirements
+        const mediaValidation = validateDraftMedia(draftRecord);
+        if (mediaValidation.errors.length > 0) {
+          return sendError(
+            res,
+            422,
+            "MEDIA_VALIDATION_FAILED",
+            mediaValidation.errors.join("; "),
+          );
+        }
+      }
+
+      const actorSub = getAuth0Sub(req);
+      req.log?.info(
+        {
+          draftId: req.params.id,
+          channel: draftRecord?.channel,
+          clientId: draftRecord?.clientId,
+          userId: req.user?.id,
+        },
+        "publish_started",
+      );
+      const draft = await service.publishDraft({
+        draftId: req.params.id,
+        actorSub,
+        source: "manual",
+      });
+
+      await incrementUsage(req.user.id, "posts");
+      req.log?.info(
+        {
+          draftId: req.params.id,
+          channel: draftRecord?.channel,
+          clientId: draftRecord?.clientId,
+        },
+        "publish_succeeded",
+      );
+
+      checkUsageNearing(req.user.id, "posts")
+        .then((info) => {
+          if (info) {
+            req.log?.info(
+              {
+                userId: req.user.id,
+                metric: info.metric,
+                used: info.used,
+                limit: info.limit,
+                status: info.status,
+              },
+              "billing_limit_nearing",
+            );
+            enqueueNotification({
+              userId: req.user.id,
+              eventType: "USAGE_LIMIT_NEARING",
+              payload: info,
+              resourceType: "usage",
+              resourceId: `${req.user.id}:posts`,
+            });
+          }
+        })
+        .catch(() => {});
+
+      res.json(draft);
+    } catch (err) {
+      req.log?.error(
+        {
+          draftId: req.params.id,
+          channel: draftRecord?.channel,
+          clientId: draftRecord?.clientId,
+          err: err?.message,
+          code: err?.code,
+        },
+        "publish_failed",
+      );
+      next(err);
+    }
+  },
+);
 
 // ── Inline AI Actions ───────────────────────────────────────────────────
 
-studioRouter.post(`${BASE}/drafts/:id/inline-action`, requireDraftOwner, async (req, res, next) => {
-  try {
-    const parsed = InlineActionSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed.error.issues);
+studioRouter.post(
+  `${BASE}/drafts/:id/inline-action`,
+  requireDraftOwner,
+  async (req, res, next) => {
+    try {
+      const parsed = InlineActionSchema.safeParse(req.body);
+      if (!parsed.success) return validationError(res, parsed.error.issues);
 
-    if (await getServiceStatus("openai") === "down") {
-      return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI temporarily unavailable.");
-    }
-    if (await isProviderBudgetExceeded("openai")) {
-      return sendError(res, 503, "BUDGET_EXCEEDED", "AI budget limit reached.");
-    }
+      if ((await getServiceStatus("openai")) === "down") {
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "AI temporarily unavailable.",
+        );
+      }
+      if (await isProviderBudgetExceeded("openai")) {
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI budget limit reached.",
+        );
+      }
 
-    const dedupKey = await acquireDedup(req.user.id, "inline_action", { draftId: req.params.id, ...parsed.data });
-    if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "Action already in progress.");
+      const dedupKey = await acquireDedup(req.user.id, "inline_action", {
+        draftId: req.params.id,
+        ...parsed.data,
+      });
+      if (!dedupKey)
+        return sendError(
+          res,
+          429,
+          "DUPLICATE_REQUEST",
+          "Action already in progress.",
+        );
 
-    const allowed = await checkUsageLimit(req.user.id, "posts");
-    if (!allowed) {
+      const allowed = await checkUsageLimit(req.user.id, "posts");
+      if (!allowed) {
+        await releaseDedup(dedupKey);
+        return sendError(res, 402, "USAGE_LIMIT", "Monthly limit reached.");
+      }
+
+      const { executeInlineAction } = await import("./inlineAction.service.js");
+      const result = await executeInlineAction({
+        draftId: req.params.id,
+        actionType: parsed.data.actionType,
+        params: parsed.data.params || {},
+        userId: getAuth0Sub(req),
+      });
+
       await releaseDedup(dedupKey);
-      return sendError(res, 402, "USAGE_LIMIT", "Monthly limit reached.");
+      if (parsed.data.actionType === "generate_variations") {
+        await incrementUsage(req.user.id, "posts");
+      }
+
+      res.json(result);
+    } catch (err) {
+      next(err);
     }
-
-    const { executeInlineAction } = await import("./inlineAction.service.js");
-    const result = await executeInlineAction({
-      draftId: req.params.id,
-      actionType: parsed.data.actionType,
-      params: parsed.data.params || {},
-      userId: getAuth0Sub(req),
-    });
-
-    await releaseDedup(dedupKey);
-    if (parsed.data.actionType === "generate_variations") {
-      await incrementUsage(req.user.id, "posts");
-    }
-
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 // ── Media assets ───────────────────────────────────────────────────────
 
@@ -2721,23 +3783,28 @@ studioRouter.get(
       const assets = await service.listAssets(parsed.data);
       const formatted = assets.map(service.formatAsset);
       const hasMore = assets.length === limit;
-      const nextCursor = assets.length > 0 ? assets[assets.length - 1].id : null;
+      const nextCursor =
+        assets.length > 0 ? assets[assets.length - 1].id : null;
       res.json({ assets: formatted, hasMore, nextCursor });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
-studioRouter.get(`${BASE}/assets/:assetId`, requireAssetOwner, async (req, res, next) => {
-  try {
-    const asset = await service.getAsset(req.params.assetId);
-    if (!asset) return sendError(res, 404, "NOT_FOUND", "Asset not found");
-    res.json(service.formatAsset(asset));
-  } catch (err) {
-    next(err);
-  }
-});
+studioRouter.get(
+  `${BASE}/assets/:assetId`,
+  requireAssetOwner,
+  async (req, res, next) => {
+    try {
+      const asset = await service.getAsset(req.params.assetId);
+      if (!asset) return sendError(res, 404, "NOT_FOUND", "Asset not found");
+      res.json(service.formatAsset(asset));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 studioRouter.post(
   `${BASE}/workspaces/:id/assets/upload`,
@@ -2769,7 +3836,7 @@ studioRouter.post(
           res,
           415,
           "UNSUPPORTED_MEDIA_TYPE",
-          "Unsupported file type. Allowed: JPEG, PNG, WebP, GIF, MP4, MOV, WebM."
+          "Unsupported file type. Allowed: JPEG, PNG, WebP, GIF, MP4, MOV, WebM.",
         );
       }
       const isVideo = Boolean(sniffedVideo);
@@ -2783,7 +3850,12 @@ studioRouter.post(
         await assertDraftInClient(req.query.draftId ?? null, req.params.id);
         await assertFolderInClient(req.query.folderId ?? null, req.params.id);
       } catch (e) {
-        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+        return sendError(
+          res,
+          e.status ?? 404,
+          e.code ?? "NOT_FOUND",
+          e.message,
+        );
       }
 
       // Usage + storage limit checks (skip quota for onboarding uploads)
@@ -2791,10 +3863,25 @@ studioRouter.post(
       const usageField = isVideo ? "videos" : "images";
       if (!isOnboarding) {
         const quotaErr = await enforceUsageLimit(req.user.id, usageField);
-        if (quotaErr) return sendError(res, 402, quotaErr.code, `Monthly ${usageField} upload limit reached. Upgrade your plan for more.`, quotaErr);
+        if (quotaErr)
+          return sendError(
+            res,
+            402,
+            quotaErr.code,
+            `Monthly ${usageField} upload limit reached. Upgrade your plan for more.`,
+            quotaErr,
+          );
       }
-      const storageOk = await checkStorageLimit(req.user.id, buffer.length, isVideo);
-      if (!storageOk.allowed) return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, { current: storageOk.current, limit: storageOk.limit });
+      const storageOk = await checkStorageLimit(
+        req.user.id,
+        buffer.length,
+        isVideo,
+      );
+      if (!storageOk.allowed)
+        return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, {
+          current: storageOk.current,
+          limit: storageOk.limit,
+        });
 
       let asset;
       if (isVideo) {
@@ -2825,7 +3912,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // Upload asset from external URL — fetches the image and rehosts on Cloudinary.
@@ -2846,7 +3933,12 @@ studioRouter.post(
       try {
         await assertFolderInClient(folderId ?? null, clientId);
       } catch (e) {
-        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+        return sendError(
+          res,
+          e.status ?? 404,
+          e.code ?? "NOT_FOUND",
+          e.message,
+        );
       }
 
       // Fetch the image with timeout and size limits
@@ -2856,12 +3948,15 @@ studioRouter.post(
       try {
         // Extract origin for Referer — many CDNs require it
         let referer = "";
-        try { referer = new URL(url).origin + "/"; } catch {}
+        try {
+          referer = new URL(url).origin + "/";
+        } catch {}
         resp = await fetch(url, {
           signal: controller.signal,
           redirect: "follow",
           headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             Accept: "image/*,*/*",
             ...(referer && { Referer: referer }),
           },
@@ -2870,7 +3965,12 @@ studioRouter.post(
         clearTimeout(timeout);
       }
       if (!resp.ok) {
-        return sendError(res, 400, "FETCH_FAILED", `Failed to fetch image (${resp.status})`);
+        return sendError(
+          res,
+          400,
+          "FETCH_FAILED",
+          `Failed to fetch image (${resp.status})`,
+        );
       }
 
       const buffer = Buffer.from(await resp.arrayBuffer());
@@ -2887,17 +3987,32 @@ studioRouter.post(
           res,
           415,
           "UNSUPPORTED_MEDIA_TYPE",
-          "URL did not return a supported image (JPEG, PNG, WebP, GIF)."
+          "URL did not return a supported image (JPEG, PNG, WebP, GIF).",
         );
       }
 
       // Usage + storage limit checks (skip quota for onboarding imports)
       if (!onboarding) {
         const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
-        if (imgQuotaErr) return sendError(res, 402, imgQuotaErr.code, "Monthly image upload limit reached. Upgrade your plan for more.", imgQuotaErr);
+        if (imgQuotaErr)
+          return sendError(
+            res,
+            402,
+            imgQuotaErr.code,
+            "Monthly image upload limit reached. Upgrade your plan for more.",
+            imgQuotaErr,
+          );
       }
-      const storageOk = await checkStorageLimit(req.user.id, buffer.length, false);
-      if (!storageOk.allowed) return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, { current: storageOk.current, limit: storageOk.limit });
+      const storageOk = await checkStorageLimit(
+        req.user.id,
+        buffer.length,
+        false,
+      );
+      if (!storageOk.allowed)
+        return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, {
+          current: storageOk.current,
+          limit: storageOk.limit,
+        });
 
       const asset = await service.uploadAsset({
         clientId,
@@ -2918,7 +4033,7 @@ studioRouter.post(
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.delete(
@@ -2932,7 +4047,7 @@ studioRouter.delete(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Asset folders ─────────────────────────────────────────────────────
@@ -2956,7 +4071,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -2966,7 +4081,9 @@ studioRouter.post(
     try {
       const { name } = req.body;
       if (!name || typeof name !== "string" || !name.trim()) {
-        return validationError(res, [{ path: ["name"], message: "Folder name is required" }]);
+        return validationError(res, [
+          { path: ["name"], message: "Folder name is required" },
+        ]);
       }
       const trimmed = name.trim();
       // Idempotent create: if a folder with this name already exists in
@@ -2987,7 +4104,10 @@ studioRouter.post(
           updatedAt: existing.updatedAt,
         });
       }
-      const folder = await service.createFolder({ clientId: req.params.id, name: trimmed });
+      const folder = await service.createFolder({
+        clientId: req.params.id,
+        name: trimmed,
+      });
       res.status(201).json({
         id: folder.id,
         clientId: folder.clientId,
@@ -3003,7 +4123,10 @@ studioRouter.post(
       // and return the winner.
       if (err?.code === "P2002") {
         const winner = await prisma.assetFolder.findFirst({
-          where: { clientId: req.params.id, name: req.body?.name?.trim?.() ?? "" },
+          where: {
+            clientId: req.params.id,
+            name: req.body?.name?.trim?.() ?? "",
+          },
           include: { _count: { select: { assets: true } } },
         });
         if (winner) {
@@ -3016,11 +4139,16 @@ studioRouter.post(
             updatedAt: winner.updatedAt,
           });
         }
-        return sendError(res, 409, "DUPLICATE_FOLDER", "A folder with that name already exists");
+        return sendError(
+          res,
+          409,
+          "DUPLICATE_FOLDER",
+          "A folder with that name already exists",
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.patch(
@@ -3030,7 +4158,9 @@ studioRouter.patch(
     try {
       const { name } = req.body;
       if (!name || typeof name !== "string" || !name.trim()) {
-        return validationError(res, [{ path: ["name"], message: "Folder name is required" }]);
+        return validationError(res, [
+          { path: ["name"], message: "Folder name is required" },
+        ]);
       }
       // requireClientOwner only proves the workspace is owned. Confirm
       // the folder actually lives inside that workspace, otherwise
@@ -3039,7 +4169,12 @@ studioRouter.patch(
       try {
         await assertFolderInClient(req.params.folderId, req.params.id);
       } catch (e) {
-        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+        return sendError(
+          res,
+          e.status ?? 404,
+          e.code ?? "NOT_FOUND",
+          e.message,
+        );
       }
       const folder = await service.renameFolder(req.params.folderId, name);
       res.json({
@@ -3052,14 +4187,19 @@ studioRouter.patch(
       });
     } catch (err) {
       if (err?.code === "P2002") {
-        return sendError(res, 409, "DUPLICATE_FOLDER", "A folder with that name already exists");
+        return sendError(
+          res,
+          409,
+          "DUPLICATE_FOLDER",
+          "A folder with that name already exists",
+        );
       }
       if (err?.code === "P2025") {
         return sendError(res, 404, "NOT_FOUND", "Folder not found");
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.delete(
@@ -3070,7 +4210,12 @@ studioRouter.delete(
       try {
         await assertFolderInClient(req.params.folderId, req.params.id);
       } catch (e) {
-        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+        return sendError(
+          res,
+          e.status ?? 404,
+          e.code ?? "NOT_FOUND",
+          e.message,
+        );
       }
       await service.deleteFolder(req.params.folderId);
       res.json({ ok: true });
@@ -3080,7 +4225,7 @@ studioRouter.delete(
       }
       next(err);
     }
-  }
+  },
 );
 
 // ── Asset folder / tag operations ─────────────────────────────────────
@@ -3099,10 +4244,18 @@ studioRouter.patch(
         try {
           await assertFolderInClient(folderId, req.asset.clientId);
         } catch (e) {
-          return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+          return sendError(
+            res,
+            e.status ?? 404,
+            e.code ?? "NOT_FOUND",
+            e.message,
+          );
         }
       }
-      const asset = await service.moveAssetToFolder(req.params.assetId, folderId ?? null);
+      const asset = await service.moveAssetToFolder(
+        req.params.assetId,
+        folderId ?? null,
+      );
       res.json(service.formatAsset(asset));
     } catch (err) {
       if (err?.code === "P2025") {
@@ -3110,7 +4263,7 @@ studioRouter.patch(
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.patch(
@@ -3120,7 +4273,9 @@ studioRouter.patch(
     try {
       const { tags } = req.body;
       if (!Array.isArray(tags)) {
-        return validationError(res, [{ path: ["tags"], message: "tags must be an array of strings" }]);
+        return validationError(res, [
+          { path: ["tags"], message: "tags must be an array of strings" },
+        ]);
       }
       const asset = await service.updateAssetTags(req.params.assetId, tags);
       res.json(service.formatAsset(asset));
@@ -3130,7 +4285,7 @@ studioRouter.patch(
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -3143,7 +4298,12 @@ studioRouter.post(
         return sendError(res, 404, "NOT_FOUND", "Asset not found");
       }
       if (!asset.url) {
-        return sendError(res, 422, "NO_URL", "Asset has no URL for classification");
+        return sendError(
+          res,
+          422,
+          "NO_URL",
+          "Asset has no URL for classification",
+        );
       }
 
       // Get industry tag defaults for the workspace
@@ -3152,16 +4312,20 @@ studioRouter.post(
         select: { industryKey: true },
       });
       const tagDefaults = getAssetTagDefaults(client?.industryKey);
-      const tagList = tagDefaults.length > 0
-        ? tagDefaults.join(", ")
-        : "exterior, kitchen, living_room, dining_room, bedroom, bathroom, backyard, garage, pool, office, laundry, floorplan, aerial, neighborhood, detail, other";
+      const tagList =
+        tagDefaults.length > 0
+          ? tagDefaults.join(", ")
+          : "exterior, kitchen, living_room, dining_room, bedroom, bathroom, backyard, garage, pool, office, laundry, floorplan, aerial, neighborhood, detail, other";
 
-      const { extractFromImage } = await import("./generation/openai.provider.js");
+      const { extractFromImage } =
+        await import("./generation/openai.provider.js");
       const prompt = `Classify this image. Return a JSON object with "tags" (array of strings) from ONLY these options: [${tagList}]. Pick 1-3 tags that best describe what's shown. If unsure, use "other".`;
 
       const startedAt = Date.now();
       const result = await extractFromImage({ base64: asset.url, prompt });
-      const suggestedTags = Array.isArray(result?.parsed?.tags) ? result.parsed.tags : [];
+      const suggestedTags = Array.isArray(result?.parsed?.tags)
+        ? result.parsed.tags
+        : [];
       trackAiUsage({
         userId: req.user.id,
         clientId: req.params.id,
@@ -3180,7 +4344,9 @@ studioRouter.post(
       // Merge with existing tags and save directly so callers don't need a
       // second round-trip.  This fixes the multi-upload race where only the
       // last mutation's onSuccess callback fired.
-      const merged = Array.from(new Set([...(asset.tags ?? []), ...suggestedTags]));
+      const merged = Array.from(
+        new Set([...(asset.tags ?? []), ...suggestedTags]),
+      );
       if (merged.length > 0) {
         await service.updateAssetTags(req.params.assetId, merged);
       }
@@ -3189,7 +4355,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Batch auto-tag: classify multiple assets in parallel ────────────
@@ -3200,7 +4366,9 @@ studioRouter.post(
     try {
       const { assetIds } = req.body;
       if (!Array.isArray(assetIds) || assetIds.length === 0) {
-        return validationError(res, [{ path: ["assetIds"], message: "assetIds must be a non-empty array" }]);
+        return validationError(res, [
+          { path: ["assetIds"], message: "assetIds must be a non-empty array" },
+        ]);
       }
       // Cap at 20 to prevent abuse
       const ids = assetIds.slice(0, 20);
@@ -3210,11 +4378,13 @@ studioRouter.post(
         select: { industryKey: true },
       });
       const tagDefaults = getAssetTagDefaults(client?.industryKey);
-      const tagList = tagDefaults.length > 0
-        ? tagDefaults.join(", ")
-        : "exterior, kitchen, living_room, dining_room, bedroom, bathroom, backyard, garage, pool, office, laundry, floorplan, aerial, neighborhood, detail, other";
+      const tagList =
+        tagDefaults.length > 0
+          ? tagDefaults.join(", ")
+          : "exterior, kitchen, living_room, dining_room, bedroom, bathroom, backyard, garage, pool, office, laundry, floorplan, aerial, neighborhood, detail, other";
 
-      const { extractFromImage } = await import("./generation/openai.provider.js");
+      const { extractFromImage } =
+        await import("./generation/openai.provider.js");
       const prompt = `Classify this image. Return a JSON object with "tags" (array of strings) from ONLY these options: [${tagList}]. Pick 1-3 tags that best describe what's shown. If unsure, use "other".`;
 
       // Process in parallel batches of 5
@@ -3229,8 +4399,13 @@ studioRouter.post(
             }
             try {
               const startedAt = Date.now();
-              const result = await extractFromImage({ base64: asset.url, prompt });
-              const suggestedTags = Array.isArray(result?.parsed?.tags) ? result.parsed.tags : [];
+              const result = await extractFromImage({
+                base64: asset.url,
+                prompt,
+              });
+              const suggestedTags = Array.isArray(result?.parsed?.tags)
+                ? result.parsed.tags
+                : [];
               trackAiUsage({
                 userId: req.user.id,
                 clientId: req.params.id,
@@ -3245,18 +4420,28 @@ studioRouter.post(
                 source: "asset_batch_auto_tag",
                 artifactIds: { assetId },
               });
-              const merged = Array.from(new Set([...(asset.tags ?? []), ...suggestedTags]));
+              const merged = Array.from(
+                new Set([...(asset.tags ?? []), ...suggestedTags]),
+              );
               if (merged.length > 0) {
                 await service.updateAssetTags(assetId, merged);
               }
               return { assetId, tags: merged };
             } catch {
-              return { assetId, tags: asset.tags ?? [], error: "classification_failed" };
+              return {
+                assetId,
+                tags: asset.tags ?? [],
+                error: "classification_failed",
+              };
             }
-          })
+          }),
         );
         for (const r of batchResults) {
-          results.push(r.status === "fulfilled" ? r.value : { assetId: "unknown", tags: [], error: "failed" });
+          results.push(
+            r.status === "fulfilled"
+              ? r.value
+              : { assetId: "unknown", tags: [], error: "failed" },
+          );
         }
       }
 
@@ -3264,7 +4449,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -3281,217 +4466,368 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
-studioRouter.post(
-  `${BASE}/assets/generate`,
-  async (req, res, next) => {
+studioRouter.post(`${BASE}/assets/generate`, async (req, res, next) => {
+  try {
+    const parsed = GenerateMediaSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    // Tenant isolation: clientId in body must be owned by the
+    // requester, and any draftId / folderId references must live
+    // inside the same workspace.
+    const ownerCheck = await assertClientOwnedByCurrentUser(
+      parsed.data.clientId,
+      req,
+    );
+    if (ownerCheck)
+      return sendError(
+        res,
+        ownerCheck.status,
+        ownerCheck.code,
+        ownerCheck.message,
+      );
     try {
-      const parsed = GenerateMediaSchema.safeParse(req.body);
-      if (!parsed.success) return validationError(res, parsed.error.issues);
-
-      // Tenant isolation: clientId in body must be owned by the
-      // requester, and any draftId / folderId references must live
-      // inside the same workspace.
-      const ownerCheck = await assertClientOwnedByCurrentUser(parsed.data.clientId, req);
-      if (ownerCheck) return sendError(res, ownerCheck.status, ownerCheck.code, ownerCheck.message);
-      try {
-        await assertDraftInClient(parsed.data.draftId, parsed.data.clientId);
-        await assertFolderInClient(parsed.data.folderId, parsed.data.clientId);
-      } catch (e) {
-        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
-      }
-
-      // Service health pre-flight
-      if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Image generation temporarily limited. Please try again in a few minutes.");
-      { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
-
-      // Global budget check
-      if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI image generation is temporarily unavailable due to budget limits. Please try again later.");
-
-      const dedupKey = await acquireDedup(req.user.id, "image", parsed.data);
-      if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "An image generation is already in progress. Please wait.");
-
-      // Usage limit check (generation-specific + total image count)
-      const genQuotaErr = await enforceUsageLimit(req.user.id, "imageGenerations");
-      if (genQuotaErr) { await releaseDedup(dedupKey); return sendError(res, 402, genQuotaErr.code, "You have reached your monthly image generation limit. Upgrade your plan for more.", genQuotaErr); }
-      const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
-      if (imgQuotaErr) { await releaseDedup(dedupKey); return sendError(res, 402, imgQuotaErr.code, "You have reached your monthly image limit. Upgrade your plan for more.", imgQuotaErr); }
-      // Storage check (~2 MB estimated per generated image)
-      const storageOk = await checkStorageLimit(req.user.id, 2 * 1024 * 1024, false);
-      if (!storageOk.allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, { current: storageOk.current, limit: storageOk.limit }); }
-
-      const actorSub = getAuth0Sub(req);
-      const asset = await service.enqueueGeneration({
-        ...parsed.data,
-        createdBy: actorSub,
-        userId: req.user.id,
-      });
-
-      await releaseDedup(dedupKey);
-      await Promise.all([
-        incrementUsage(req.user.id, "imageGenerations"),
-        incrementUsage(req.user.id, "images"),
-      ]);
-
-      trackAiUsage({
-        userId: req.user.id,
-        clientId: parsed.data.clientId,
-        actionType: "IMAGE",
-        model: parsed.data.model ?? "fal-ai/flux/dev",
-        promptTokens: 0,
-        completionTokens: 0,
-        taskName: "image_generation",
-        provider: "fal",
-        source: "image_generation",
-        artifactIds: { assetId: asset.id, draftId: parsed.data.draftId ?? null },
-      });
-
-      checkUsageNearing(req.user.id, "imageGenerations").then((info) => {
-        if (info) enqueueNotification({
-          userId: req.user.id,
-          eventType: "USAGE_LIMIT_NEARING",
-          payload: info,
-          resourceType: "usage",
-          resourceId: `${req.user.id}:imageGenerations`,
-        });
-      }).catch(() => {});
-
-      // Persona analytics
-      if (asset.personaUsed) {
-        recordActivity({
-          userId: req.user.id,
-          clientId: parsed.data.clientId,
-          eventType: "PERSONA_USED_IN_IMAGE",
-          payload: { personaType: asset.personaType, postId: parsed.data.draftId, clientId: parsed.data.clientId },
-          resourceType: "asset",
-          resourceId: asset.id,
-        }).catch(() => {});
-      } else if (asset.personaSkipped) {
-        recordActivity({
-          userId: req.user.id,
-          clientId: parsed.data.clientId,
-          eventType: "PERSONA_SKIPPED",
-          payload: { guidance: parsed.data.guidance?.slice(0, 100), clientId: parsed.data.clientId },
-          resourceType: "asset",
-          resourceId: asset.id,
-        }).catch(() => {});
-      }
-
-      const response = service.formatAsset(asset);
-      if (asset.queued === false) response.processingNote = "Processing delayed — your content is being generated";
-      res.status(201).json(response);
-    } catch (err) {
-      next(err);
+      await assertDraftInClient(parsed.data.draftId, parsed.data.clientId);
+      await assertFolderInClient(parsed.data.folderId, parsed.data.clientId);
+    } catch (e) {
+      return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
     }
-  }
-);
 
-studioRouter.get(
-  `${BASE}/video-presets`,
-  async (_req, res) => {
-    const presets = Object.entries(service.VIDEO_PRESETS).map(([key, p]) => ({
-      key,
-      label: p.label,
-      suggestedDuration: p.suggestedDuration,
-      defaultAspectRatio: p.defaultAspectRatio,
-    }));
-    res.json({ presets });
-  }
-);
-
-studioRouter.post(
-  `${BASE}/assets/generate-video`,
-  async (req, res, next) => {
-    try {
-      const parsed = GenerateVideoSchema.safeParse(req.body);
-      if (!parsed.success) return validationError(res, parsed.error.issues);
-
-      // Tenant isolation — same shape as image generation.
-      const ownerCheck = await assertClientOwnedByCurrentUser(parsed.data.clientId, req);
-      if (ownerCheck) return sendError(res, ownerCheck.status, ownerCheck.code, ownerCheck.message);
-      try {
-        await assertDraftInClient(parsed.data.draftId, parsed.data.clientId);
-        await assertFolderInClient(parsed.data.folderId, parsed.data.clientId);
-      } catch (e) {
-        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
-      }
-
-      // Service health pre-flight
-      if (await getServiceStatus("fal") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Video generation temporarily limited. Please try again in a few minutes.");
+    // Service health pre-flight
+    if ((await getServiceStatus("fal")) === "down")
+      return sendError(
+        res,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Image generation temporarily limited. Please try again in a few minutes.",
+      );
+    {
       const throttle = await getThrottlePolicy();
-      if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator.");
+      if (throttle.adminPaused)
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "AI generation is temporarily paused by the administrator.",
+        );
+    }
 
-      // Explicit tier gate — check if video generation is allowed on this plan.
-      // Use getEffectiveTier so a pre-checkout customer row never grants paid limits.
-      const sub = await getSubscription(req.user.id);
-      const tier = getEffectiveTier(sub);
-      const tierLimits = getLimitsForTier(tier);
-      if (tierLimits.videoGenerations === 0) return sendError(res, 402, "TIER_LIMIT", "Video generation is not available on your plan. Upgrade to a higher tier.");
+    // Global budget check
+    if (await isProviderBudgetExceeded("fal"))
+      return sendError(
+        res,
+        503,
+        "BUDGET_EXCEEDED",
+        "AI image generation is temporarily unavailable due to budget limits. Please try again later.",
+      );
 
-      // Video throttle — disabled when fal budget at warning+
-      if (throttle.videoDisabled) return sendError(res, 503, "FEATURE_THROTTLED", "Video generation is temporarily limited to manage costs. Please try again later.");
+    const dedupKey = await acquireDedup(req.user.id, "image", parsed.data);
+    if (!dedupKey)
+      return sendError(
+        res,
+        429,
+        "DUPLICATE_REQUEST",
+        "An image generation is already in progress. Please wait.",
+      );
 
-      // Global budget check
-      if (await isProviderBudgetExceeded("fal")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI video generation is temporarily unavailable due to budget limits. Please try again later.");
-
-      const dedupKey = await acquireDedup(req.user.id, "video", parsed.data);
-      if (!dedupKey) return sendError(res, 429, "DUPLICATE_REQUEST", "A video generation is already in progress. Please wait.");
-
-      // Usage limit check (generation-specific + total video count)
-      const vidGenQuotaErr = await enforceUsageLimit(req.user.id, "videoGenerations");
-      if (vidGenQuotaErr) { await releaseDedup(dedupKey); return sendError(res, 402, vidGenQuotaErr.code, "You have reached your monthly video generation limit. Upgrade your plan for more.", vidGenQuotaErr); }
-      const vidQuotaErr = await enforceUsageLimit(req.user.id, "videos");
-      if (vidQuotaErr) { await releaseDedup(dedupKey); return sendError(res, 402, vidQuotaErr.code, "You have reached your monthly video limit. Upgrade your plan for more.", vidQuotaErr); }
-      // Storage check (~10 MB estimated per generated video)
-      const vidStorageOk = await checkStorageLimit(req.user.id, 10 * 1024 * 1024, true);
-      if (!vidStorageOk.allowed) { await releaseDedup(dedupKey); return sendError(res, 402, "STORAGE_LIMIT", vidStorageOk.reason, { current: vidStorageOk.current, limit: vidStorageOk.limit }); }
-
-      const actorSub = getAuth0Sub(req);
-      const asset = await service.enqueueVideoGeneration({
-        ...parsed.data,
-        createdBy: actorSub,
-        userId: req.user.id,
-      });
-
+    // Usage limit check (generation-specific + total image count)
+    const genQuotaErr = await enforceUsageLimit(
+      req.user.id,
+      "imageGenerations",
+    );
+    if (genQuotaErr) {
       await releaseDedup(dedupKey);
-      await Promise.all([
-        incrementUsage(req.user.id, "videoGenerations"),
-        incrementUsage(req.user.id, "videos"),
-      ]);
+      return sendError(
+        res,
+        402,
+        genQuotaErr.code,
+        "You have reached your monthly image generation limit. Upgrade your plan for more.",
+        genQuotaErr,
+      );
+    }
+    const imgQuotaErr = await enforceUsageLimit(req.user.id, "images");
+    if (imgQuotaErr) {
+      await releaseDedup(dedupKey);
+      return sendError(
+        res,
+        402,
+        imgQuotaErr.code,
+        "You have reached your monthly image limit. Upgrade your plan for more.",
+        imgQuotaErr,
+      );
+    }
+    // Storage check (~2 MB estimated per generated image)
+    const storageOk = await checkStorageLimit(
+      req.user.id,
+      2 * 1024 * 1024,
+      false,
+    );
+    if (!storageOk.allowed) {
+      await releaseDedup(dedupKey);
+      return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, {
+        current: storageOk.current,
+        limit: storageOk.limit,
+      });
+    }
 
-      trackAiUsage({
+    const actorSub = getAuth0Sub(req);
+    const asset = await service.enqueueGeneration({
+      ...parsed.data,
+      createdBy: actorSub,
+      userId: req.user.id,
+    });
+
+    await releaseDedup(dedupKey);
+    await Promise.all([
+      incrementUsage(req.user.id, "imageGenerations"),
+      incrementUsage(req.user.id, "images"),
+    ]);
+
+    trackAiUsage({
+      userId: req.user.id,
+      clientId: parsed.data.clientId,
+      actionType: "IMAGE",
+      model: parsed.data.model ?? "fal-ai/flux/dev",
+      promptTokens: 0,
+      completionTokens: 0,
+      taskName: "image_generation",
+      provider: "fal",
+      source: "image_generation",
+      artifactIds: { assetId: asset.id, draftId: parsed.data.draftId ?? null },
+    });
+
+    checkUsageNearing(req.user.id, "imageGenerations")
+      .then((info) => {
+        if (info)
+          enqueueNotification({
+            userId: req.user.id,
+            eventType: "USAGE_LIMIT_NEARING",
+            payload: info,
+            resourceType: "usage",
+            resourceId: `${req.user.id}:imageGenerations`,
+          });
+      })
+      .catch(() => {});
+
+    // Persona analytics
+    if (asset.personaUsed) {
+      recordActivity({
         userId: req.user.id,
         clientId: parsed.data.clientId,
-        actionType: "VIDEO",
-        model: parsed.data.model ?? "fal-ai/minimax/video-01-live",
-        promptTokens: 0,
-        completionTokens: 0,
-        taskName: "video_generation",
-        provider: "fal",
-        source: "video_generation",
-        artifactIds: { assetId: asset.id, draftId: parsed.data.draftId ?? null },
-      });
-
-      checkUsageNearing(req.user.id, "videoGenerations").then((info) => {
-        if (info) enqueueNotification({
-          userId: req.user.id,
-          eventType: "USAGE_LIMIT_NEARING",
-          payload: info,
-          resourceType: "usage",
-          resourceId: `${req.user.id}:videoGenerations`,
-        });
+        eventType: "PERSONA_USED_IN_IMAGE",
+        payload: {
+          personaType: asset.personaType,
+          postId: parsed.data.draftId,
+          clientId: parsed.data.clientId,
+        },
+        resourceType: "asset",
+        resourceId: asset.id,
       }).catch(() => {});
-
-      const response = service.formatAsset(asset);
-      if (asset.queued === false) response.processingNote = "Processing delayed — your content is being generated";
-      res.status(201).json(response);
-    } catch (err) {
-      next(err);
+    } else if (asset.personaSkipped) {
+      recordActivity({
+        userId: req.user.id,
+        clientId: parsed.data.clientId,
+        eventType: "PERSONA_SKIPPED",
+        payload: {
+          guidance: parsed.data.guidance?.slice(0, 100),
+          clientId: parsed.data.clientId,
+        },
+        resourceType: "asset",
+        resourceId: asset.id,
+      }).catch(() => {});
     }
+
+    const response = service.formatAsset(asset);
+    if (asset.queued === false)
+      response.processingNote =
+        "Processing delayed — your content is being generated";
+    res.status(201).json(response);
+  } catch (err) {
+    next(err);
   }
-);
+});
+
+studioRouter.get(`${BASE}/video-presets`, async (_req, res) => {
+  const presets = Object.entries(service.VIDEO_PRESETS).map(([key, p]) => ({
+    key,
+    label: p.label,
+    suggestedDuration: p.suggestedDuration,
+    defaultAspectRatio: p.defaultAspectRatio,
+  }));
+  res.json({ presets });
+});
+
+studioRouter.post(`${BASE}/assets/generate-video`, async (req, res, next) => {
+  try {
+    const parsed = GenerateVideoSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+
+    // Tenant isolation — same shape as image generation.
+    const ownerCheck = await assertClientOwnedByCurrentUser(
+      parsed.data.clientId,
+      req,
+    );
+    if (ownerCheck)
+      return sendError(
+        res,
+        ownerCheck.status,
+        ownerCheck.code,
+        ownerCheck.message,
+      );
+    try {
+      await assertDraftInClient(parsed.data.draftId, parsed.data.clientId);
+      await assertFolderInClient(parsed.data.folderId, parsed.data.clientId);
+    } catch (e) {
+      return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+    }
+
+    // Service health pre-flight
+    if ((await getServiceStatus("fal")) === "down")
+      return sendError(
+        res,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Video generation temporarily limited. Please try again in a few minutes.",
+      );
+    const throttle = await getThrottlePolicy();
+    if (throttle.adminPaused)
+      return sendError(
+        res,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "AI generation is temporarily paused by the administrator.",
+      );
+
+    // Explicit tier gate — check if video generation is allowed on this plan.
+    // Use getEffectiveTier so a pre-checkout customer row never grants paid limits.
+    const sub = await getSubscription(req.user.id);
+    const tier = getEffectiveTier(sub);
+    const tierLimits = getLimitsForTier(tier);
+    if (tierLimits.videoGenerations === 0)
+      return sendError(
+        res,
+        402,
+        "TIER_LIMIT",
+        "Video generation is not available on your plan. Upgrade to a higher tier.",
+      );
+
+    // Video throttle — disabled when fal budget at warning+
+    if (throttle.videoDisabled)
+      return sendError(
+        res,
+        503,
+        "FEATURE_THROTTLED",
+        "Video generation is temporarily limited to manage costs. Please try again later.",
+      );
+
+    // Global budget check
+    if (await isProviderBudgetExceeded("fal"))
+      return sendError(
+        res,
+        503,
+        "BUDGET_EXCEEDED",
+        "AI video generation is temporarily unavailable due to budget limits. Please try again later.",
+      );
+
+    const dedupKey = await acquireDedup(req.user.id, "video", parsed.data);
+    if (!dedupKey)
+      return sendError(
+        res,
+        429,
+        "DUPLICATE_REQUEST",
+        "A video generation is already in progress. Please wait.",
+      );
+
+    // Usage limit check (generation-specific + total video count)
+    const vidGenQuotaErr = await enforceUsageLimit(
+      req.user.id,
+      "videoGenerations",
+    );
+    if (vidGenQuotaErr) {
+      await releaseDedup(dedupKey);
+      return sendError(
+        res,
+        402,
+        vidGenQuotaErr.code,
+        "You have reached your monthly video generation limit. Upgrade your plan for more.",
+        vidGenQuotaErr,
+      );
+    }
+    const vidQuotaErr = await enforceUsageLimit(req.user.id, "videos");
+    if (vidQuotaErr) {
+      await releaseDedup(dedupKey);
+      return sendError(
+        res,
+        402,
+        vidQuotaErr.code,
+        "You have reached your monthly video limit. Upgrade your plan for more.",
+        vidQuotaErr,
+      );
+    }
+    // Storage check (~10 MB estimated per generated video)
+    const vidStorageOk = await checkStorageLimit(
+      req.user.id,
+      10 * 1024 * 1024,
+      true,
+    );
+    if (!vidStorageOk.allowed) {
+      await releaseDedup(dedupKey);
+      return sendError(res, 402, "STORAGE_LIMIT", vidStorageOk.reason, {
+        current: vidStorageOk.current,
+        limit: vidStorageOk.limit,
+      });
+    }
+
+    const actorSub = getAuth0Sub(req);
+    const asset = await service.enqueueVideoGeneration({
+      ...parsed.data,
+      createdBy: actorSub,
+      userId: req.user.id,
+    });
+
+    await releaseDedup(dedupKey);
+    await Promise.all([
+      incrementUsage(req.user.id, "videoGenerations"),
+      incrementUsage(req.user.id, "videos"),
+    ]);
+
+    trackAiUsage({
+      userId: req.user.id,
+      clientId: parsed.data.clientId,
+      actionType: "VIDEO",
+      model: parsed.data.model ?? "fal-ai/minimax/video-01-live",
+      promptTokens: 0,
+      completionTokens: 0,
+      taskName: "video_generation",
+      provider: "fal",
+      source: "video_generation",
+      artifactIds: { assetId: asset.id, draftId: parsed.data.draftId ?? null },
+    });
+
+    checkUsageNearing(req.user.id, "videoGenerations")
+      .then((info) => {
+        if (info)
+          enqueueNotification({
+            userId: req.user.id,
+            eventType: "USAGE_LIMIT_NEARING",
+            payload: info,
+            resourceType: "usage",
+            resourceId: `${req.user.id}:videoGenerations`,
+          });
+      })
+      .catch(() => {});
+
+    const response = service.formatAsset(asset);
+    if (asset.queued === false)
+      response.processingNote =
+        "Processing delayed — your content is being generated";
+    res.status(201).json(response);
+  } catch (err) {
+    next(err);
+  }
+});
 
 studioRouter.post(
   `${BASE}/assets/:assetId/attach`,
@@ -3509,7 +4845,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -3522,7 +4858,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Asset link / unlink (many-to-many) ──────────────────────────────────
@@ -3536,13 +4872,18 @@ studioRouter.post(
       const parsed = LinkAssetSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
       const { draftId, role, orderIndex } = parsed.data;
-      await service.linkAssetToDraft(req.params.assetId, draftId, role, orderIndex);
+      await service.linkAssetToDraft(
+        req.params.assetId,
+        draftId,
+        role,
+        orderIndex,
+      );
       const asset = await service.getAsset(req.params.assetId);
       res.json(service.formatAsset(asset));
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.delete(
@@ -3553,14 +4894,21 @@ studioRouter.delete(
     try {
       // Check if the asset being unlinked has persona data
       const unlinkingAsset = await service.getAsset(req.params.assetId);
-      await service.unlinkAssetFromDraft(req.params.assetId, req.params.draftId);
+      await service.unlinkAssetFromDraft(
+        req.params.assetId,
+        req.params.draftId,
+      );
 
       if (unlinkingAsset?.personaSnapshot) {
         recordActivity({
           userId: req.user.id,
           clientId: unlinkingAsset.clientId,
           eventType: "PERSONA_MEDIA_REPLACED",
-          payload: { personaSnapshot: unlinkingAsset.personaSnapshot, draftId: req.params.draftId, clientId: unlinkingAsset.clientId },
+          payload: {
+            personaSnapshot: unlinkingAsset.personaSnapshot,
+            draftId: req.params.draftId,
+            clientId: unlinkingAsset.clientId,
+          },
           resourceType: "asset",
           resourceId: req.params.assetId,
         }).catch(() => {});
@@ -3570,7 +4918,7 @@ studioRouter.delete(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -3583,7 +4931,13 @@ studioRouter.post(
 
       const asset = await service.getAsset(req.params.assetId);
       if (!asset) return sendError(res, 404, "NOT_FOUND", "Asset not found");
-      if (!asset.personaSnapshot) return sendError(res, 422, "NOT_PERSONA_ASSET", "Asset was not generated with a persona");
+      if (!asset.personaSnapshot)
+        return sendError(
+          res,
+          422,
+          "NOT_PERSONA_ASSET",
+          "Asset was not generated with a persona",
+        );
 
       recordActivity({
         userId: req.user.id,
@@ -3603,7 +4957,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -3623,7 +4977,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -3639,10 +4993,17 @@ studioRouter.post(
 
       // Usage limit check
       const allowed = await checkUsageLimit(req.user.id, "posts");
-      if (!allowed) return sendError(res, 402, "USAGE_LIMIT", "You have reached your monthly generation limit. Upgrade your plan for more.");
+      if (!allowed)
+        return sendError(
+          res,
+          402,
+          "USAGE_LIMIT",
+          "You have reached your monthly generation limit. Upgrade your plan for more.",
+        );
 
       // Build guidance from the asset's context
-      const context = asset.renderedPrompt || asset.caption || asset.filename || "image";
+      const context =
+        asset.renderedPrompt || asset.caption || asset.filename || "image";
       const guidance = parsed.data.guidance
         ? `${parsed.data.guidance}\n\nAsset context: ${context}`
         : `Write a social media post inspired by this visual: ${context}`;
@@ -3666,7 +5027,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Post metrics ───────────────────────────────────────────────────────
@@ -3681,7 +5042,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -3699,7 +5060,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -3712,7 +5073,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.get(
@@ -3725,7 +5086,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // Admin/dev-only batch sync of Facebook + Instagram metrics for a
@@ -3746,7 +5107,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // TEMPORARY — Meta App Review API check tool. Hits one Page-level
@@ -3767,7 +5128,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Threads replies ────────────────────────────────────────────────────
@@ -3785,7 +5146,8 @@ studioRouter.get(
         where: { id: req.params.id },
         select: { clientId: true },
       });
-      if (!draft) return sendError(res, 404, "DRAFT_NOT_FOUND", "Draft not found");
+      if (!draft)
+        return sendError(res, 404, "DRAFT_NOT_FOUND", "Draft not found");
       const result = await service.listThreadsRepliesForDraft({
         draftId: req.params.id,
         clientId: draft.clientId,
@@ -3794,7 +5156,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -3805,14 +5167,19 @@ studioRouter.post(
       const hide = req.body?.hide;
       if (typeof hide !== "boolean") {
         return validationError(res, [
-          { code: "invalid_type", path: ["hide"], message: "hide must be a boolean" },
+          {
+            code: "invalid_type",
+            path: ["hide"],
+            message: "hide must be a boolean",
+          },
         ]);
       }
       const draft = await prisma.draft.findUnique({
         where: { id: req.params.id },
         select: { clientId: true },
       });
-      if (!draft) return sendError(res, 404, "DRAFT_NOT_FOUND", "Draft not found");
+      if (!draft)
+        return sendError(res, 404, "DRAFT_NOT_FOUND", "Draft not found");
       const result = await service.setThreadsReplyHidden({
         draftId: req.params.id,
         clientId: draft.clientId,
@@ -3824,7 +5191,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Connection validation ──────────────────────────────────────────────
@@ -3841,13 +5208,13 @@ studioRouter.post(
         return validationError(res, paramCheck.error.issues);
       const result = await service.validateConnection(
         req.params.id,
-        paramCheck.data.channel
+        paramCheck.data.channel,
       );
       res.json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Channel connections ─────────────────────────────────────────────────
@@ -3862,7 +5229,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -3873,7 +5240,8 @@ studioRouter.post(
       const paramCheck = ChannelParamSchema.safeParse({
         channel: req.params.channel,
       });
-      if (!paramCheck.success) return validationError(res, paramCheck.error.issues);
+      if (!paramCheck.success)
+        return validationError(res, paramCheck.error.issues);
       const { channel } = paramCheck.data;
       const clientId = req.params.id;
 
@@ -3885,61 +5253,67 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
-studioRouter.post(
-  `${BASE}/oauth/complete`,
-  async (req, res, next) => {
-    try {
-      const parsed = OAuthCompleteSchema.safeParse(req.body);
-      if (!parsed.success) return validationError(res, parsed.error.issues);
+studioRouter.post(`${BASE}/oauth/complete`, async (req, res, next) => {
+  try {
+    const parsed = OAuthCompleteSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
 
-      const { code, state } = parsed.data;
-      const payload = await verifyState(state);
-      const { clientId, channel } = payload;
+    const { code, state } = parsed.data;
+    const payload = await verifyState(state);
+    const { clientId, channel } = payload;
 
-      // The state JWT carries clientId, but verify the completing
-      // user actually owns that workspace. Without this, anyone who
-      // intercepts the state token (e.g. via shared device, log
-      // leak) could finalize a connection in someone else's account.
-      const ownerCheck = await assertClientOwnedByCurrentUser(clientId, req);
-      if (ownerCheck) return sendError(res, ownerCheck.status, ownerCheck.code, ownerCheck.message);
+    // The state JWT carries clientId, but verify the completing
+    // user actually owns that workspace. Without this, anyone who
+    // intercepts the state token (e.g. via shared device, log
+    // leak) could finalize a connection in someone else's account.
+    const ownerCheck = await assertClientOwnedByCurrentUser(clientId, req);
+    if (ownerCheck)
+      return sendError(
+        res,
+        ownerCheck.status,
+        ownerCheck.code,
+        ownerCheck.message,
+      );
 
-      const oauth = getOAuthForChannel(channel);
-      const tokenBundle = await oauth.exchangeCode({ code, state });
+    const oauth = getOAuthForChannel(channel);
+    const tokenBundle = await oauth.exchangeCode({ code, state });
 
-      const actorSub = getAuth0Sub(req);
-      const row = await service.upsertConnection({
-        clientId,
-        channel,
-        accessToken: tokenBundle.accessToken,
-        refreshToken: tokenBundle.refreshToken,
-        tokenExpiresAt: tokenBundle.tokenExpiresAt,
-        scopes: tokenBundle.scopes,
-        externalAccountId: tokenBundle.externalAccountId,
-        displayName: tokenBundle.displayName,
-        createdBy: actorSub,
-      });
+    const actorSub = getAuth0Sub(req);
+    const row = await service.upsertConnection({
+      clientId,
+      channel,
+      accessToken: tokenBundle.accessToken,
+      refreshToken: tokenBundle.refreshToken,
+      tokenExpiresAt: tokenBundle.tokenExpiresAt,
+      scopes: tokenBundle.scopes,
+      externalAccountId: tokenBundle.externalAccountId,
+      displayName: tokenBundle.displayName,
+      createdBy: actorSub,
+    });
 
-      req.log?.info({ clientId, channel, userId: req.user?.id }, "oauth_connected");
+    req.log?.info(
+      { clientId, channel, userId: req.user?.id },
+      "oauth_connected",
+    );
 
-      recordActivity({
-        userId: req.user.id,
-        clientId,
-        eventType: "CONNECTION_CONNECTED",
-        payload: { channel, clientId },
-        resourceType: "connection",
-        resourceId: row.id,
-      }).catch(() => {});
+    recordActivity({
+      userId: req.user.id,
+      clientId,
+      eventType: "CONNECTION_CONNECTED",
+      payload: { channel, clientId },
+      resourceType: "connection",
+      resourceId: row.id,
+    }).catch(() => {});
 
-      res.json({ connection: service.formatConnection(row) });
-    } catch (err) {
-      req.log?.error({ err: err?.message, code: err?.code }, "oauth_failed");
-      next(err);
-    }
+    res.json({ connection: service.formatConnection(row) });
+  } catch (err) {
+    req.log?.error({ err: err?.message, code: err?.code }, "oauth_failed");
+    next(err);
   }
-);
+});
 
 studioRouter.delete(
   `${BASE}/workspaces/:id/connections/:channel`,
@@ -3952,11 +5326,20 @@ studioRouter.delete(
       if (!paramCheck.success)
         return validationError(res, paramCheck.error.issues);
       await service.deleteConnection(req.params.id, paramCheck.data.channel);
+      await writeAudit(req, {
+        action: "integration.disconnected",
+        resourceType: "ChannelConnection",
+        resourceId: `${req.params.id}:${paramCheck.data.channel}`,
+        metadata: {
+          workspaceId: req.params.id,
+          channel: paramCheck.data.channel,
+        },
+      });
       res.json({ ok: true });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── LinkedIn Organization Page picker ────────────────────────────────
@@ -3992,12 +5375,11 @@ studioRouter.get(
           res,
           404,
           "NO_CONNECTION",
-          "Connect a LinkedIn Organization Page first, then choose which Page to publish to."
+          "Connect a LinkedIn Organization Page first, then choose which Page to publish to.",
         );
       }
-      const { listManageableOrganizations } = await import(
-        "./linkedinOrgPages.service.js"
-      );
+      const { listManageableOrganizations } =
+        await import("./linkedinOrgPages.service.js");
       const orgs = await listManageableOrganizations({ connectionId: conn.id });
       if (orgs.length === 0) {
         return res.json({
@@ -4015,7 +5397,7 @@ studioRouter.get(
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -4039,11 +5421,15 @@ studioRouter.post(
         select: { id: true },
       });
       if (!conn) {
-        return sendError(res, 404, "NO_CONNECTION", "No LinkedIn Organization Page connection.");
+        return sendError(
+          res,
+          404,
+          "NO_CONNECTION",
+          "No LinkedIn Organization Page connection.",
+        );
       }
-      const { saveSelectedOrganization } = await import(
-        "./linkedinOrgPages.service.js"
-      );
+      const { saveSelectedOrganization } =
+        await import("./linkedinOrgPages.service.js");
       const updated = await saveSelectedOrganization({
         connectionId: conn.id,
         organizationId,
@@ -4056,7 +5442,7 @@ studioRouter.post(
       }
       next(err);
     }
-  }
+  },
 );
 
 // ── Pinterest board picker ───────────────────────────────────────────
@@ -4085,7 +5471,7 @@ studioRouter.get(
           res,
           404,
           "NO_CONNECTION",
-          "Connect Pinterest first, then choose which board to publish to."
+          "Connect Pinterest first, then choose which board to publish to.",
         );
       }
       const { listBoards } = await import("./pinterestBoards.service.js");
@@ -4104,7 +5490,7 @@ studioRouter.get(
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -4143,7 +5529,7 @@ studioRouter.post(
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -4169,7 +5555,8 @@ studioRouter.post(
       if (!conn) {
         return sendError(res, 404, "NO_CONNECTION", "No Pinterest connection.");
       }
-      const { saveSelectedBoard } = await import("./pinterestBoards.service.js");
+      const { saveSelectedBoard } =
+        await import("./pinterestBoards.service.js");
       const updated = await saveSelectedBoard({
         connectionId: conn.id,
         boardId,
@@ -4182,7 +5569,7 @@ studioRouter.post(
       }
       next(err);
     }
-  }
+  },
 );
 
 // ── Instagram comment ingestion ─────────────────────────────────────
@@ -4268,9 +5655,8 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { checkGbpReviewAccess } = await import(
-        "./gbpReviewAccessCheck.service.js"
-      );
+      const { checkGbpReviewAccess } =
+        await import("./gbpReviewAccessCheck.service.js");
       const result = await checkGbpReviewAccess({ clientId: req.params.id });
       res.json(result);
     } catch (err) {
@@ -4310,7 +5696,8 @@ studioRouter.post(
           "No Google Business Profile connection.",
         );
       }
-      const { saveSelectedLocation } = await import("./gbpLocations.service.js");
+      const { saveSelectedLocation } =
+        await import("./gbpLocations.service.js");
       const updated = await saveSelectedLocation({
         connectionId: conn.id,
         locationName,
@@ -4379,9 +5766,8 @@ studioRouter.post(
           "YouTube connection is missing a channel id; reconnect to refresh it.",
         );
       }
-      const { enqueueYouTubeCommentPollForConnection } = await import(
-        "../../workers/youtubeCommentPollerWorker.js"
-      );
+      const { enqueueYouTubeCommentPollForConnection } =
+        await import("../../workers/youtubeCommentPollerWorker.js");
       try {
         await enqueueYouTubeCommentPollForConnection(conn.id);
       } catch (err) {
@@ -4390,9 +5776,8 @@ studioRouter.post(
         // works without a queue. In prod (Fly), Redis is configured
         // so this branch is rarely hit.
         if (err?.code === "QUEUE_UNAVAILABLE") {
-          const { pollYouTubeCommentsForConnection } = await import(
-            "../inbox/youtubeCommentPoller.service.js"
-          );
+          const { pollYouTubeCommentsForConnection } =
+            await import("../inbox/youtubeCommentPoller.service.js");
           const full = await prisma.channelConnection.findUnique({
             where: { id: conn.id },
           });
@@ -4460,9 +5845,8 @@ studioRouter.post(
           "Threads connection is missing a user id; reconnect to refresh it.",
         );
       }
-      const { enqueueThreadsReplyPollForConnection } = await import(
-        "../../workers/threadsReplyPollerWorker.js"
-      );
+      const { enqueueThreadsReplyPollForConnection } =
+        await import("../../workers/threadsReplyPollerWorker.js");
       try {
         await enqueueThreadsReplyPollForConnection(conn.id);
       } catch (err) {
@@ -4470,9 +5854,8 @@ studioRouter.post(
         // dev environments without Redis still get a working
         // sync via inline execution.
         if (err?.code === "QUEUE_UNAVAILABLE") {
-          const { pollThreadsRepliesForConnection } = await import(
-            "../inbox/threadsReplyPoller.service.js"
-          );
+          const { pollThreadsRepliesForConnection } =
+            await import("../inbox/threadsReplyPoller.service.js");
           const full = await prisma.channelConnection.findUnique({
             where: { id: conn.id },
           });
@@ -4544,9 +5927,8 @@ studioRouter.post(
           "Facebook connection is missing a Page id; reconnect to refresh it.",
         );
       }
-      const { enqueueFacebookCommentPollForConnection } = await import(
-        "../../workers/facebookCommentPollerWorker.js"
-      );
+      const { enqueueFacebookCommentPollForConnection } =
+        await import("../../workers/facebookCommentPollerWorker.js");
       try {
         await enqueueFacebookCommentPollForConnection(conn.id);
       } catch (err) {
@@ -4555,9 +5937,8 @@ studioRouter.post(
         // works without a queue. In prod (Fly), Redis is configured
         // so this branch is rarely hit.
         if (err?.code === "QUEUE_UNAVAILABLE") {
-          const { pollFacebookCommentsForConnection } = await import(
-            "../inbox/inbox.facebookCommentPoller.service.js"
-          );
+          const { pollFacebookCommentsForConnection } =
+            await import("../inbox/inbox.facebookCommentPoller.service.js");
           const full = await prisma.channelConnection.findUnique({
             where: { id: conn.id },
           });
@@ -4629,16 +6010,14 @@ studioRouter.post(
           "Instagram connection is missing a user id; reconnect to refresh it.",
         );
       }
-      const { enqueueInstagramCommentPollForConnection } = await import(
-        "../../workers/instagramCommentPollerWorker.js"
-      );
+      const { enqueueInstagramCommentPollForConnection } =
+        await import("../../workers/instagramCommentPollerWorker.js");
       try {
         await enqueueInstagramCommentPollForConnection(conn.id);
       } catch (err) {
         if (err?.code === "QUEUE_UNAVAILABLE") {
-          const { pollInstagramCommentsForConnection } = await import(
-            "../inbox/inbox.instagramCommentPoller.service.js"
-          );
+          const { pollInstagramCommentsForConnection } =
+            await import("../inbox/inbox.instagramCommentPoller.service.js");
           const full = await prisma.channelConnection.findUnique({
             where: { id: conn.id },
           });
@@ -4678,7 +6057,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -4704,13 +6083,28 @@ studioRouter.put(
       const items = getIndustryTechStack(client.industryKey);
       const item = items.find((i) => i.providerKey === providerKey);
       if (!item) {
-        return sendError(res, 404, "NOT_FOUND", `Tech stack item "${providerKey}" not found.`);
+        return sendError(
+          res,
+          404,
+          "NOT_FOUND",
+          `Tech stack item "${providerKey}" not found.`,
+        );
       }
       if (item.connectionMode !== "manual") {
-        return sendError(res, 400, "NOT_MANUAL", "This item does not support manual setup.");
+        return sendError(
+          res,
+          400,
+          "NOT_MANUAL",
+          "This item does not support manual setup.",
+        );
       }
       if (!item.manualSetup?.fields?.length) {
-        return sendError(res, 400, "NO_SETUP_CONFIG", "This item has no manual setup config.");
+        return sendError(
+          res,
+          400,
+          "NO_SETUP_CONFIG",
+          "This item has no manual setup config.",
+        );
       }
 
       const parsed = ManualSetupSchema.safeParse(req.body);
@@ -4722,7 +6116,12 @@ studioRouter.put(
         let value = (metadata[field.key] ?? "").trim();
 
         if (field.required && !value) {
-          return sendError(res, 400, "VALIDATION", `${field.label} is required.`);
+          return sendError(
+            res,
+            400,
+            "VALIDATION",
+            `${field.label} is required.`,
+          );
         }
 
         // URL normalization for url-type fields
@@ -4733,7 +6132,12 @@ studioRouter.put(
           try {
             new URL(value);
           } catch {
-            return sendError(res, 400, "INVALID_URL", `${field.label}: please enter a valid URL.`);
+            return sendError(
+              res,
+              400,
+              "INVALID_URL",
+              `${field.label}: please enter a valid URL.`,
+            );
           }
         }
 
@@ -4759,7 +6163,7 @@ studioRouter.put(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -4779,7 +6183,12 @@ studioRouter.post(
         select: { industryKey: true },
       });
       if (!client || client.industryKey !== "real_estate") {
-        return sendError(res, 400, "WRONG_INDUSTRY", "Listing feeds are only available for real estate workspaces.");
+        return sendError(
+          res,
+          400,
+          "WRONG_INDUSTRY",
+          "Listing feeds are only available for real estate workspaces.",
+        );
       }
 
       // Parse optional body override
@@ -4788,17 +6197,29 @@ studioRouter.post(
 
       // Get stored connection for sourceUrl
       const existing = await prisma.workspaceTechStackConnection.findUnique({
-        where: { workspaceId_providerKey: { workspaceId, providerKey: "listing_feed" } },
+        where: {
+          workspaceId_providerKey: { workspaceId, providerKey: "listing_feed" },
+        },
       });
 
-      const sourceUrl = parsed.data?.sourceUrl || existing?.metadataJson?.sourceUrl;
+      const sourceUrl =
+        parsed.data?.sourceUrl || existing?.metadataJson?.sourceUrl;
       if (!sourceUrl) {
-        return sendError(res, 400, "NO_SOURCE_URL", "No listings page URL configured. Set one up first via tech stack.");
+        return sendError(
+          res,
+          400,
+          "NO_SOURCE_URL",
+          "No listings page URL configured. Set one up first via tech stack.",
+        );
       }
 
       // Extract listings using existing AI pipeline
-      const hint = "Extract property listings from this page. For each listing, extract: title/address, price, bedrooms, bathrooms, square footage, and image URL. Focus only on real estate property listings.";
-      const { items: allItems } = await importService.extractFromUrl(sourceUrl, { hint });
+      const hint =
+        "Extract property listings from this page. For each listing, extract: title/address, price, bedrooms, bathrooms, square footage, and image URL. Focus only on real estate property listings.";
+      const { items: allItems } = await importService.extractFromUrl(
+        sourceUrl,
+        { hint },
+      );
 
       // Filter to CUSTOM type (listings) and cap at 10
       const listings = allItems.filter((i) => i.type === "CUSTOM").slice(0, 10);
@@ -4806,7 +6227,11 @@ studioRouter.post(
       // Stamp source attribution for provenance tracking
       const stampedListings = listings.map((item) => ({
         ...item,
-        dataJson: stampSourceAttribution(item.dataJson || {}, RE_SOURCE_TYPES.LISTING_FEED, { sourceUrl }),
+        dataJson: stampSourceAttribution(
+          item.dataJson || {},
+          RE_SOURCE_TYPES.LISTING_FEED,
+          { sourceUrl },
+        ),
       }));
 
       // Persist via existing saveImportedItems
@@ -4820,14 +6245,19 @@ studioRouter.post(
 
       // Update connection metadata with sync info
       const lastSyncedAt = new Date().toISOString();
-      await upsertWorkspaceTechStackConnection(workspaceId, "listing_feed", "connected", {
-        metadataJson: {
-          ...(existing?.metadataJson ?? {}),
-          sourceUrl,
-          lastSyncedAt,
-          listingCount: listings.length,
+      await upsertWorkspaceTechStackConnection(
+        workspaceId,
+        "listing_feed",
+        "connected",
+        {
+          metadataJson: {
+            ...(existing?.metadataJson ?? {}),
+            sourceUrl,
+            lastSyncedAt,
+            listingCount: listings.length,
+          },
         },
-      });
+      );
 
       // Invalidate context cache
       invalidateClientContext(workspaceId).catch(() => {});
@@ -4843,7 +6273,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -4858,24 +6288,36 @@ studioRouter.post(
       const workspaceId = req.params.id;
 
       const existing = await prisma.workspaceTechStackConnection.findUnique({
-        where: { workspaceId_providerKey: { workspaceId, providerKey: "idx_website" } },
+        where: {
+          workspaceId_providerKey: { workspaceId, providerKey: "idx_website" },
+        },
       });
 
       const url = existing?.metadataJson?.url;
       if (!url) {
-        return sendError(res, 400, "NO_URL", "No website URL configured. Set one up first via tech stack.");
+        return sendError(
+          res,
+          400,
+          "NO_URL",
+          "No website URL configured. Set one up first via tech stack.",
+        );
       }
 
       const crawled = await crawlWebsite(url, { maxPages: 20 });
       const lastSyncedAt = new Date().toISOString();
 
-      await upsertWorkspaceTechStackConnection(workspaceId, "idx_website", "connected", {
-        metadataJson: {
-          ...(existing.metadataJson ?? {}),
-          lastSyncedAt,
-          pageCount: crawled.pages.length,
+      await upsertWorkspaceTechStackConnection(
+        workspaceId,
+        "idx_website",
+        "connected",
+        {
+          metadataJson: {
+            ...(existing.metadataJson ?? {}),
+            lastSyncedAt,
+            pageCount: crawled.pages.length,
+          },
         },
-      });
+      );
 
       invalidateClientContext(workspaceId).catch(() => {});
 
@@ -4883,7 +6325,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -4900,24 +6342,38 @@ studioRouter.patch(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       const existing = await prisma.workspaceTechStackConnection.findUnique({
-        where: { workspaceId_providerKey: { workspaceId, providerKey: "listing_feed" } },
-      });
-      if (!existing) {
-        return sendError(res, 404, "NOT_FOUND", "Listing feeds not configured yet.");
-      }
-
-      const updated = await upsertWorkspaceTechStackConnection(workspaceId, "listing_feed", existing.connectionStatus, {
-        metadataJson: {
-          ...(existing.metadataJson ?? {}),
-          autoGenerateOnImport: parsed.data.autoGenerateOnImport,
+        where: {
+          workspaceId_providerKey: { workspaceId, providerKey: "listing_feed" },
         },
       });
+      if (!existing) {
+        return sendError(
+          res,
+          404,
+          "NOT_FOUND",
+          "Listing feeds not configured yet.",
+        );
+      }
 
-      res.json({ settings: { autoGenerateOnImport: parsed.data.autoGenerateOnImport } });
+      const updated = await upsertWorkspaceTechStackConnection(
+        workspaceId,
+        "listing_feed",
+        existing.connectionStatus,
+        {
+          metadataJson: {
+            ...(existing.metadataJson ?? {}),
+            autoGenerateOnImport: parsed.data.autoGenerateOnImport,
+          },
+        },
+      );
+
+      res.json({
+        settings: { autoGenerateOnImport: parsed.data.autoGenerateOnImport },
+      });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Campaigns ─────────────────────────────────────────────────────────
@@ -4952,7 +6408,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -4963,33 +6419,35 @@ studioRouter.get(
  * serialized Campaign. 404 when missing; 403 when the campaign
  * belongs to another workspace.
  */
-studioRouter.get(
-  `${BASE}/campaigns/:id`,
-  async (req, res, next) => {
-    try {
-      const row = await prisma.campaign.findUnique({
-        where: { id: req.params.id },
-      });
-      if (!row) {
-        return sendError(res, 404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
-      }
-      // Manual ownership check — the requireClientOwner middleware
-      // keys off :id meaning workspace id, not campaign id, so we
-      // load the row first and check clientId against the user's
-      // owned workspaces.
-      const client = await prisma.client.findUnique({
-        where: { id: row.clientId },
-        select: { createdBy: true },
-      });
-      if (!client || client.createdBy !== req.user.id) {
-        return sendError(res, 403, "FORBIDDEN", "You don't have access to this campaign");
-      }
-      res.json({ campaign: formatCampaign(row) });
-    } catch (err) {
-      next(err);
+studioRouter.get(`${BASE}/campaigns/:id`, async (req, res, next) => {
+  try {
+    const row = await prisma.campaign.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!row) {
+      return sendError(res, 404, "CAMPAIGN_NOT_FOUND", "Campaign not found");
     }
+    // Manual ownership check — the requireClientOwner middleware
+    // keys off :id meaning workspace id, not campaign id, so we
+    // load the row first and check clientId against the user's
+    // owned workspaces.
+    const client = await prisma.client.findUnique({
+      where: { id: row.clientId },
+      select: { createdBy: true },
+    });
+    if (!client || client.createdBy !== getAuth0Sub(req)) {
+      return sendError(
+        res,
+        403,
+        "FORBIDDEN",
+        "You don't have access to this campaign",
+      );
+    }
+    res.json({ campaign: formatCampaign(row) });
+  } catch (err) {
+    next(err);
   }
-);
+});
 
 // ── Suite Feature Flags ───────────────────────────────────────────────
 //
@@ -5018,7 +6476,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Content Preferences ───────────────────────────────────────────────
@@ -5042,7 +6500,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5063,7 +6521,7 @@ studioRouter.put(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Autopilot (Real Estate v2) ─────────────────────────────────────────
@@ -5081,7 +6539,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5095,12 +6553,15 @@ studioRouter.put(
     try {
       const parsed = AutopilotSettingsSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const settings = await updateAutopilotSettings(req.params.id, parsed.data);
+      const settings = await updateAutopilotSettings(
+        req.params.id,
+        parsed.data,
+      );
       res.json({ settings });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5119,7 +6580,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5136,7 +6597,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5155,7 +6616,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5175,7 +6636,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5217,7 +6678,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5235,7 +6696,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Autopilot Campaign Recommendations (Phase 2) ─────────────────────
@@ -5251,9 +6712,8 @@ studioRouter.get(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { listRecommendations, getStats } = await import(
-        "./autopilotCampaignRecommendation.service.js"
-      );
+      const { listRecommendations, getStats } =
+        await import("./autopilotCampaignRecommendation.service.js");
       const limit = Math.min(Math.max(parseInt(req.query.limit) || 50, 1), 100);
       const offset = Math.max(parseInt(req.query.offset) || 0, 0);
       // Optional status filter — accepts comma-separated FE-style
@@ -5284,9 +6744,8 @@ studioRouter.get(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { getStats } = await import(
-        "./autopilotCampaignRecommendation.service.js"
-      );
+      const { getStats } =
+        await import("./autopilotCampaignRecommendation.service.js");
       const stats = await getStats(req.params.id);
       res.json(stats);
     } catch (err) {
@@ -5301,9 +6760,8 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { approveRecommendation, auditRecommendationEvent } = await import(
-        "./autopilotCampaignRecommendation.service.js"
-      );
+      const { approveRecommendation, auditRecommendationEvent } =
+        await import("./autopilotCampaignRecommendation.service.js");
       const scheduleAt =
         typeof req.body?.scheduleAt === "string" ? req.body.scheduleAt : null;
       const result = await approveRecommendation({
@@ -5343,10 +6801,8 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const {
-        generateDraftsForRecommendation,
-        auditRecommendationEvent,
-      } = await import("./autopilotCampaignRecommendation.service.js");
+      const { generateDraftsForRecommendation, auditRecommendationEvent } =
+        await import("./autopilotCampaignRecommendation.service.js");
       const result = await generateDraftsForRecommendation({
         clientId: req.params.id,
         recommendationId: req.params.recommendationId,
@@ -5364,7 +6820,9 @@ studioRouter.post(
         },
       );
       const code =
-        result.status === "success" || result.status === "partial_success" ? 201 : 200;
+        result.status === "success" || result.status === "partial_success"
+          ? 201
+          : 200;
       res.status(code).json(result);
     } catch (err) {
       if (err?.code && err?.status) {
@@ -5380,11 +6838,12 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { dismissRecommendation, auditRecommendationEvent } = await import(
-        "./autopilotCampaignRecommendation.service.js"
-      );
+      const { dismissRecommendation, auditRecommendationEvent } =
+        await import("./autopilotCampaignRecommendation.service.js");
       const reason =
-        typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : null;
+        typeof req.body?.reason === "string"
+          ? req.body.reason.trim().slice(0, 500)
+          : null;
       const recommendation = await dismissRecommendation({
         clientId: req.params.id,
         recommendationId: req.params.recommendationId,
@@ -5446,7 +6905,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -5476,7 +6935,7 @@ studioRouter.post(
       }
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -5488,18 +6947,55 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       // Service health pre-flight
-      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
-      { const throttle = await getThrottlePolicy(); if (throttle.adminPaused) return sendError(res, 503, "SERVICE_UNAVAILABLE", "AI generation is temporarily paused by the administrator."); }
+      if ((await getServiceStatus("openai")) === "down")
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Content generation temporarily unavailable. Please try again in a few minutes.",
+        );
+      {
+        const throttle = await getThrottlePolicy();
+        if (throttle.adminPaused)
+          return sendError(
+            res,
+            503,
+            "SERVICE_UNAVAILABLE",
+            "AI generation is temporarily paused by the administrator.",
+          );
+      }
 
       // Global budget check
-      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+      if (await isProviderBudgetExceeded("openai"))
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI text generation is temporarily unavailable due to budget limits. Please try again later.",
+        );
 
       // Default to current week if not provided
       const now = new Date();
       const dayOfWeek = now.getDay();
       const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-      const weekStart = parsed.data.weekStart ?? new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset).toISOString().slice(0, 10);
-      const weekEnd = parsed.data.weekEnd ?? new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset + 6).toISOString().slice(0, 10);
+      const weekStart =
+        parsed.data.weekStart ??
+        new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() + mondayOffset,
+        )
+          .toISOString()
+          .slice(0, 10);
+      const weekEnd =
+        parsed.data.weekEnd ??
+        new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() + mondayOffset + 6,
+        )
+          .toISOString()
+          .slice(0, 10);
 
       const actorSub = getAuth0Sub(req);
       const result = await planMyWeek(req.params.id, actorSub, {
@@ -5517,7 +7013,11 @@ studioRouter.post(
         enqueueNotification({
           userId: req.user.id,
           eventType: "BATCH_COMPLETE",
-          payload: { count: result.generated, clientId: req.params.id, source: "plan_week" },
+          payload: {
+            count: result.generated,
+            clientId: req.params.id,
+            source: "plan_week",
+          },
           resourceType: "client",
           resourceId: req.params.id,
         }).catch(() => {});
@@ -5540,7 +7040,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 studioRouter.post(
@@ -5560,7 +7060,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Listing Ingestion ─────────────────────────────────────────────────────
@@ -5579,13 +7079,13 @@ studioRouter.post(
 
       const result = await listingIngestion.ingestManualListing(
         req.params.id,
-        parsed.data
+        parsed.data,
       );
       res.status(result.created ? 201 : 200).json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5605,7 +7105,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5623,13 +7123,13 @@ studioRouter.post(
       const result = await listingIngestion.ingestCsvListings(
         req.params.id,
         parsed.data.csvContent,
-        { columnMapping: parsed.data.columnMapping }
+        { columnMapping: parsed.data.columnMapping },
       );
       res.status(201).json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5646,13 +7146,13 @@ studioRouter.post(
 
       const result = await listingIngestion.ingestUrlListing(
         req.params.id,
-        parsed.data.url
+        parsed.data.url,
       );
       res.json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -5669,13 +7169,13 @@ studioRouter.post(
 
       const result = await listingIngestion.confirmUrlListing(
         req.params.id,
-        parsed.data
+        parsed.data,
       );
       res.status(result.created ? 201 : 200).json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Campaign URL Intake (URL-01) ─────────────────────────────────────
@@ -5694,11 +7194,16 @@ studioRouter.post(
     try {
       const parsed = UrlIntakeAnalyzeSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const result = await urlCampaignIntake.analyzeUrl(req.params.id, parsed.data);
+      const result = await urlCampaignIntake.analyzeUrl(
+        req.params.id,
+        parsed.data,
+      );
       res.json(result);
     } catch (err) {
       if (err?.code === "UNSAFE_URL") {
-        return sendError(res, 400, "UNSAFE_URL", err.message, { reason: err.reason });
+        return sendError(res, 400, "UNSAFE_URL", err.message, {
+          reason: err.reason,
+        });
       }
       next(err);
     }
@@ -5712,11 +7217,16 @@ studioRouter.post(
     try {
       const parsed = UrlIntakeConfirmSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const result = await urlCampaignIntake.confirmUrl(req.params.id, parsed.data);
+      const result = await urlCampaignIntake.confirmUrl(
+        req.params.id,
+        parsed.data,
+      );
       res.status(result.created ? 201 : 200).json(result);
     } catch (err) {
       if (err?.code === "UNSAFE_URL") {
-        return sendError(res, 400, "UNSAFE_URL", err.message, { reason: err.reason });
+        return sendError(res, 400, "UNSAFE_URL", err.message, {
+          reason: err.reason,
+        });
       }
       next(err);
     }
@@ -5735,33 +7245,77 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { propertyData, campaignType, imageContext, slots, dataItemId, sourceType: rawSourceType, language: requestedLanguage, campaignId } = req.body;
+      const {
+        propertyData,
+        campaignType,
+        imageContext,
+        slots,
+        dataItemId,
+        sourceType: rawSourceType,
+        language: requestedLanguage,
+        campaignId,
+      } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
-        return validationError(res, [{ path: ["propertyData"], message: "Property data is required" }]);
+        return validationError(res, [
+          { path: ["propertyData"], message: "Property data is required" },
+        ]);
       }
       // Legacy clients (and the regenerate-post endpoint) don't send
       // sourceType — default to 'property' so existing real-estate
       // flows behave identically.
-      const sourceType = ["property", "data_item", "idea"].includes(rawSourceType)
+      const sourceType = ["property", "data_item", "idea"].includes(
+        rawSourceType,
+      )
         ? rawSourceType
         : "property";
 
       // Service health pre-flight
-      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
-      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+      if ((await getServiceStatus("openai")) === "down")
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Content generation temporarily unavailable. Please try again in a few minutes.",
+        );
+      if (await isProviderBudgetExceeded("openai"))
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI text generation is temporarily unavailable due to budget limits. Please try again later.",
+        );
 
       // Usage limit check
       const allowed = await checkUsageLimit(req.user.id, "posts");
-      if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "You've reached your generation limit. Upgrade to generate more.");
+      if (!allowed)
+        return sendError(
+          res,
+          403,
+          "USAGE_LIMIT",
+          "You've reached your generation limit. Upgrade to generate more.",
+        );
 
       // Dedup
-      const dedupKey = await acquireDedup(req.user.id, "listing-campaign", propertyData);
-      if (!dedupKey) return sendError(res, 409, "DUPLICATE_REQUEST", "Campaign generation already in progress.");
+      const dedupKey = await acquireDedup(
+        req.user.id,
+        "listing-campaign",
+        propertyData,
+      );
+      if (!dedupKey)
+        return sendError(
+          res,
+          409,
+          "DUPLICATE_REQUEST",
+          "Campaign generation already in progress.",
+        );
 
       try {
         const clientId = req.params.id;
         const actorSub = getAuth0Sub(req);
-        req.log?.info({ clientId, userId: req.user?.id, campaignType }, "campaign_extraction_started");
+        req.log?.info(
+          { clientId, userId: req.user?.id, campaignType },
+          "campaign_extraction_started",
+        );
 
         // Resolve / record the source data item.
         //
@@ -5781,25 +7335,38 @@ studioRouter.post(
           if (existing) resolvedDataItemId = existing.id;
         }
         if (sourceType === "property" && !resolvedDataItemId) {
-          const derivedTitle = propertyData.title
-            || propertyData.name
-            || (propertyData.year && propertyData.make && propertyData.model
-                ? `${propertyData.year} ${propertyData.make} ${propertyData.model}`
-                : null)
-            || propertyData.address
-            || "Campaign Item";
+          const derivedTitle =
+            propertyData.title ||
+            propertyData.name ||
+            (propertyData.year && propertyData.make && propertyData.model
+              ? `${propertyData.year} ${propertyData.make} ${propertyData.model}`
+              : null) ||
+            propertyData.address ||
+            "Campaign Item";
 
-          const listingResult = await listingIngestion.ingestManualListing(clientId, {
-            title: derivedTitle,
-            address: propertyData.address || "",
-            price: propertyData.price ? Number(propertyData.price) : undefined,
-            beds: propertyData.beds ? Number(propertyData.beds) : undefined,
-            baths: propertyData.baths ? Number(propertyData.baths) : undefined,
-            sqft: propertyData.sqft ? Number(propertyData.sqft) : undefined,
-            description: propertyData.description || "",
-            highlights: propertyData.highlights ? propertyData.highlights.split(",").map((s) => s.trim()).filter(Boolean) : [],
-            propertyType: propertyData.propertyType || undefined,
-          });
+          const listingResult = await listingIngestion.ingestManualListing(
+            clientId,
+            {
+              title: derivedTitle,
+              address: propertyData.address || "",
+              price: propertyData.price
+                ? Number(propertyData.price)
+                : undefined,
+              beds: propertyData.beds ? Number(propertyData.beds) : undefined,
+              baths: propertyData.baths
+                ? Number(propertyData.baths)
+                : undefined,
+              sqft: propertyData.sqft ? Number(propertyData.sqft) : undefined,
+              description: propertyData.description || "",
+              highlights: propertyData.highlights
+                ? propertyData.highlights
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                : [],
+              propertyType: propertyData.propertyType || undefined,
+            },
+          );
           // URL-01 fix: ingestManualListing returns
           // { listing, created, existingId? } — never .dataItem.
           // The previous `.dataItem?.id ?? null` silently always
@@ -5811,12 +7378,21 @@ studioRouter.post(
         }
 
         // Load generation context + RE assets
-        const { loadClientGenerationContext } = await import("./generation/clientOrchestrator.js");
-        const { buildSystemPrompt, buildCampaignUserPrompt, buildCampaignResponseFormat } = await import("./generation/promptBuilder.js");
-        const { generateStructuredContent } = await import("./generation/openai.provider.js");
-        const { loadRealEstateGenerationAssets } = await import("../industry/realEstateGeneration.js");
-        const { findBestBlueprintForItem } = await import("./blueprint.service.js");
-        const { resolveLanguage } = await import("./generation/resolveLanguage.js");
+        const { loadClientGenerationContext } =
+          await import("./generation/clientOrchestrator.js");
+        const {
+          buildSystemPrompt,
+          buildCampaignUserPrompt,
+          buildCampaignResponseFormat,
+        } = await import("./generation/promptBuilder.js");
+        const { generateStructuredContent } =
+          await import("./generation/openai.provider.js");
+        const { loadRealEstateGenerationAssets } =
+          await import("../industry/realEstateGeneration.js");
+        const { findBestBlueprintForItem } =
+          await import("./blueprint.service.js");
+        const { resolveLanguage } =
+          await import("./generation/resolveLanguage.js");
 
         const ctx = await loadClientGenerationContext(clientId);
 
@@ -5840,7 +7416,12 @@ studioRouter.post(
 
         let realEstateAssets = null;
         if (ctx.realEstateContext) {
-          try { realEstateAssets = await loadRealEstateGenerationAssets(clientId, ctx.realEstateContext); } catch {}
+          try {
+            realEstateAssets = await loadRealEstateGenerationAssets(
+              clientId,
+              ctx.realEstateContext,
+            );
+          } catch {}
         }
 
         // ContentBlueprint injection — only for content-asset
@@ -5851,16 +7432,19 @@ studioRouter.post(
         // path stays intact).
         let blueprint = null;
         if (sourceType === "data_item") {
-          const dataItemType = typeof propertyData?._dataItemType === "string"
-            ? propertyData._dataItemType
-            : null;
+          const dataItemType =
+            typeof propertyData?._dataItemType === "string"
+              ? propertyData._dataItemType
+              : null;
           const slotChannels = Array.isArray(slots)
             ? Array.from(
                 new Set(
                   slots
-                    .map((s) => (typeof s?.channel === "string" ? s.channel : null))
-                    .filter(Boolean)
-                )
+                    .map((s) =>
+                      typeof s?.channel === "string" ? s.channel : null,
+                    )
+                    .filter(Boolean),
+                ),
               )
             : [];
           if (dataItemType) {
@@ -5874,7 +7458,7 @@ studioRouter.post(
               // lookup error — log + continue without it.
               req.log?.warn(
                 { err: err?.message, dataItemType },
-                "blueprint_lookup_failed"
+                "blueprint_lookup_failed",
               );
             }
           }
@@ -5883,8 +7467,14 @@ studioRouter.post(
         const systemPrompt = buildSystemPrompt(ctx);
         const safeImageContext = Array.isArray(imageContext)
           ? imageContext.slice(0, 8).map((img) => ({
-              label: typeof img?.label === "string" ? img.label.slice(0, 30) : "other",
-              description: typeof img?.description === "string" ? img.description.slice(0, 100) : "",
+              label:
+                typeof img?.label === "string"
+                  ? img.label.slice(0, 30)
+                  : "other",
+              description:
+                typeof img?.description === "string"
+                  ? img.description.slice(0, 100)
+                  : "",
             }))
           : null;
         const userPrompt = buildCampaignUserPrompt(
@@ -5902,7 +7492,7 @@ studioRouter.post(
                   promptTemplate: blueprint.promptTemplate,
                 }
               : null,
-          }
+          },
         );
         const responseFormat = buildCampaignResponseFormat();
 
@@ -5936,14 +7526,21 @@ studioRouter.post(
 
         const campaignData = result.parsed;
         if (ctx.brandPersona?.status === "COMPLETED") {
-          const { evaluateCampaignPostRecommendation } = await import("./personaRecommendation.service.js");
+          const { evaluateCampaignPostRecommendation } =
+            await import("./personaRecommendation.service.js");
           campaignData.posts = campaignData.posts.map((post) => ({
             ...post,
-            personaRecommendation: evaluateCampaignPostRecommendation(ctx.brandPersona, post),
+            personaRecommendation: evaluateCampaignPostRecommendation(
+              ctx.brandPersona,
+              post,
+            ),
           }));
         }
 
-        req.log?.info({ clientId, postCount: campaignData?.posts?.length, campaignType }, "campaign_extraction_succeeded");
+        req.log?.info(
+          { clientId, postCount: campaignData?.posts?.length, campaignType },
+          "campaign_extraction_succeeded",
+        );
         res.json({
           dataItemId: resolvedDataItemId,
           campaign: campaignData,
@@ -5952,10 +7549,19 @@ studioRouter.post(
         await releaseDedup(dedupKey);
       }
     } catch (err) {
-      req.log?.error({ clientId: req.params.id, userId: req.user?.id, campaignType, err: err?.message, code: err?.code }, "campaign_extraction_failed");
+      req.log?.error(
+        {
+          clientId: req.params.id,
+          userId: req.user?.id,
+          campaignType,
+          err: err?.message,
+          code: err?.code,
+        },
+        "campaign_extraction_failed",
+      );
       next(err);
     }
-  }
+  },
 );
 
 // ── Listing Campaign — Regenerate Single Post ─────────────────────────────
@@ -5991,42 +7597,95 @@ studioRouter.post(
         campaignId: requestedCampaignId,
       } = req.body;
       if (!propertyData || typeof propertyData !== "object") {
-        return validationError(res, [{ path: ["propertyData"], message: "Property data / post context is required" }]);
+        return validationError(res, [
+          {
+            path: ["propertyData"],
+            message: "Property data / post context is required",
+          },
+        ]);
       }
-      if (!slot || typeof slot !== "object" || !slot.channel || !slot.day || !slot.label) {
-        return validationError(res, [{ path: ["slot"], message: "Slot with channel, day, and label is required" }]);
+      if (
+        !slot ||
+        typeof slot !== "object" ||
+        !slot.channel ||
+        !slot.day ||
+        !slot.label
+      ) {
+        return validationError(res, [
+          {
+            path: ["slot"],
+            message: "Slot with channel, day, and label is required",
+          },
+        ]);
       }
       // Frontend synthesizes propertyData for non-property sources
       // (mirroring the save-drafts contract) so the existence check
       // above passes. sourceType tells the prompt builder how to
       // frame the context.
-      const sourceType = ["property", "data_item", "idea"].includes(rawSourceType)
+      const sourceType = ["property", "data_item", "idea"].includes(
+        rawSourceType,
+      )
         ? rawSourceType
         : "property";
       void sourceTitle; // currently unused server-side; reserved for prompt enrichment
       void campaignIdea; // already carried inside propertyData.idea by the frontend
 
       // Service health pre-flight
-      if (await getServiceStatus("openai") === "down") return sendError(res, 503, "SERVICE_UNAVAILABLE", "Content generation temporarily unavailable. Please try again in a few minutes.");
-      if (await isProviderBudgetExceeded("openai")) return sendError(res, 503, "BUDGET_EXCEEDED", "AI text generation is temporarily unavailable due to budget limits. Please try again later.");
+      if ((await getServiceStatus("openai")) === "down")
+        return sendError(
+          res,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Content generation temporarily unavailable. Please try again in a few minutes.",
+        );
+      if (await isProviderBudgetExceeded("openai"))
+        return sendError(
+          res,
+          503,
+          "BUDGET_EXCEEDED",
+          "AI text generation is temporarily unavailable due to budget limits. Please try again later.",
+        );
 
       // Usage limit check
       const allowed = await checkUsageLimit(req.user.id, "posts");
-      if (!allowed) return sendError(res, 403, "USAGE_LIMIT", "You've reached your generation limit. Upgrade to generate more.");
+      if (!allowed)
+        return sendError(
+          res,
+          403,
+          "USAGE_LIMIT",
+          "You've reached your generation limit. Upgrade to generate more.",
+        );
 
       // Dedup
-      const dedupKey = await acquireDedup(req.user.id, "regenerate-post", { ...propertyData, slot });
-      if (!dedupKey) return sendError(res, 409, "DUPLICATE_REQUEST", "Post regeneration already in progress.");
+      const dedupKey = await acquireDedup(req.user.id, "regenerate-post", {
+        ...propertyData,
+        slot,
+      });
+      if (!dedupKey)
+        return sendError(
+          res,
+          409,
+          "DUPLICATE_REQUEST",
+          "Post regeneration already in progress.",
+        );
 
       try {
         const clientId = req.params.id;
 
         // Load generation context
-        const { loadClientGenerationContext } = await import("./generation/clientOrchestrator.js");
-        const { buildSystemPrompt, buildRegeneratePostUserPrompt, buildRegeneratePostResponseFormat } = await import("./generation/promptBuilder.js");
-        const { generateStructuredContent } = await import("./generation/openai.provider.js");
-        const { findBestBlueprintForItem } = await import("./blueprint.service.js");
-        const { resolveLanguage } = await import("./generation/resolveLanguage.js");
+        const { loadClientGenerationContext } =
+          await import("./generation/clientOrchestrator.js");
+        const {
+          buildSystemPrompt,
+          buildRegeneratePostUserPrompt,
+          buildRegeneratePostResponseFormat,
+        } = await import("./generation/promptBuilder.js");
+        const { generateStructuredContent } =
+          await import("./generation/openai.provider.js");
+        const { findBestBlueprintForItem } =
+          await import("./blueprint.service.js");
+        const { resolveLanguage } =
+          await import("./generation/resolveLanguage.js");
 
         const ctx = await loadClientGenerationContext(clientId);
 
@@ -6056,7 +7715,9 @@ studioRouter.post(
         if (sourceType === "data_item") {
           const dataItemType =
             (typeof sourceDataItemType === "string" && sourceDataItemType) ||
-            (typeof propertyData?._dataItemType === "string" ? propertyData._dataItemType : null);
+            (typeof propertyData?._dataItemType === "string"
+              ? propertyData._dataItemType
+              : null);
           if (dataItemType) {
             try {
               blueprint = await findBestBlueprintForItem({
@@ -6066,7 +7727,7 @@ studioRouter.post(
             } catch (err) {
               req.log?.warn(
                 { err: err?.message, dataItemType },
-                "blueprint_lookup_failed_in_regenerate"
+                "blueprint_lookup_failed_in_regenerate",
               );
             }
           }
@@ -6075,8 +7736,14 @@ studioRouter.post(
         const systemPrompt = buildSystemPrompt(ctx);
         const safeImageContext = Array.isArray(imageContext)
           ? imageContext.slice(0, 8).map((img) => ({
-              label: typeof img?.label === "string" ? img.label.slice(0, 30) : "other",
-              description: typeof img?.description === "string" ? img.description.slice(0, 100) : "",
+              label:
+                typeof img?.label === "string"
+                  ? img.label.slice(0, 30)
+                  : "other",
+              description:
+                typeof img?.description === "string"
+                  ? img.description.slice(0, 100)
+                  : "",
             }))
           : null;
         const userPrompt = buildRegeneratePostUserPrompt(
@@ -6095,7 +7762,7 @@ studioRouter.post(
                   promptTemplate: blueprint.promptTemplate,
                 }
               : null,
-          }
+          },
         );
         const responseFormat = buildRegeneratePostResponseFormat();
 
@@ -6129,8 +7796,12 @@ studioRouter.post(
 
         const postData = result.parsed?.post ?? result.parsed;
         if (ctx.brandPersona?.status === "COMPLETED") {
-          const { evaluateCampaignPostRecommendation } = await import("./personaRecommendation.service.js");
-          postData.personaRecommendation = evaluateCampaignPostRecommendation(ctx.brandPersona, postData);
+          const { evaluateCampaignPostRecommendation } =
+            await import("./personaRecommendation.service.js");
+          postData.personaRecommendation = evaluateCampaignPostRecommendation(
+            ctx.brandPersona,
+            postData,
+          );
         }
 
         res.json({ post: postData });
@@ -6140,7 +7811,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Listing Campaign — Image Extraction ────────────────────────────────────
@@ -6167,29 +7838,45 @@ studioRouter.post(
     try {
       const { image } = req.body;
       if (!image || typeof image !== "string") {
-        return validationError(res, [{ path: ["image"], message: "Base64 image data URL is required" }]);
+        return validationError(res, [
+          { path: ["image"], message: "Base64 image data URL is required" },
+        ]);
       }
 
       // Enhancement run usage limit check
-      const enhQuotaErr = await enforceUsageLimit(req.user.id, "enhancementRuns");
-      if (enhQuotaErr) return sendError(res, 402, enhQuotaErr.code, "Monthly enhancement limit reached. Upgrade your plan for more.", enhQuotaErr);
+      const enhQuotaErr = await enforceUsageLimit(
+        req.user.id,
+        "enhancementRuns",
+      );
+      if (enhQuotaErr)
+        return sendError(
+          res,
+          402,
+          enhQuotaErr.code,
+          "Monthly enhancement limit reached. Upgrade your plan for more.",
+          enhQuotaErr,
+        );
 
       const debug = String(req.query.debug ?? "") === "1";
 
       // Budget / health guards. OpenAI is gated for the text extractor; the
       // SAM 2 path only runs if Replicate is reachable.
-      const openaiDown = (await getServiceStatus("openai")) === "down" || (await isProviderBudgetExceeded("openai"));
-      const { extractListingScreenshot, emptyExtraction } = await import(
-        "./segmentation/listingScreenshotExtraction.service.js"
-      );
-      const { extractFromImage } = await import("./generation/openai.provider.js");
+      const openaiDown =
+        (await getServiceStatus("openai")) === "down" ||
+        (await isProviderBudgetExceeded("openai"));
+      const { extractListingScreenshot, emptyExtraction } =
+        await import("./segmentation/listingScreenshotExtraction.service.js");
+      const { extractFromImage } =
+        await import("./generation/openai.provider.js");
 
       // ─── 1a. SAM 2 segmentation (primary image extractor) ─────────────
-      const runSegmentation = extractListingScreenshot({ imageUrl: image, debug })
-        .catch((err) => {
-          req.log?.warn?.({ err }, "sam2 segmentation failed");
-          return emptyExtraction({ reason: err?.code ?? "error" });
-        });
+      const runSegmentation = extractListingScreenshot({
+        imageUrl: image,
+        debug,
+      }).catch((err) => {
+        req.log?.warn?.({ err }, "sam2 segmentation failed");
+        return emptyExtraction({ reason: err?.code ?? "error" });
+      });
 
       // ─── 1b. OpenAI Vision — TEXT FIELDS ONLY (no bbox work) ──────────
       const textPrompt = `You are extracting listing details from a real estate page screenshot. Return ONLY the text fields listed below as JSON. Do NOT return any bounding boxes, regions, or image locations.
@@ -6214,16 +7901,31 @@ If a field is not clearly visible on the page, return null for that field. Never
 
       const textStartedAt = Date.now();
       const runTextExtract = openaiDown
-        ? Promise.resolve({ parsed: {}, model: null, usage: null, skipped: true })
-        : extractFromImage({ base64: image, prompt: textPrompt }).then((result) => ({
-            ...result,
-            latencyMs: Date.now() - textStartedAt,
-          })).catch((err) => {
-            req.log?.warn?.({ err }, "openai text extraction failed");
-            return { parsed: {}, model: null, usage: null, error: err?.message ?? String(err) };
-          });
+        ? Promise.resolve({
+            parsed: {},
+            model: null,
+            usage: null,
+            skipped: true,
+          })
+        : extractFromImage({ base64: image, prompt: textPrompt })
+            .then((result) => ({
+              ...result,
+              latencyMs: Date.now() - textStartedAt,
+            }))
+            .catch((err) => {
+              req.log?.warn?.({ err }, "openai text extraction failed");
+              return {
+                parsed: {},
+                model: null,
+                usage: null,
+                error: err?.message ?? String(err),
+              };
+            });
 
-      const [segResult, textResult] = await Promise.all([runSegmentation, runTextExtract]);
+      const [segResult, textResult] = await Promise.all([
+        runSegmentation,
+        runTextExtract,
+      ]);
 
       // Always log segmentation diagnostics so prod failures surface a reason
       // without needing ?debug=1 on the request.
@@ -6238,18 +7940,22 @@ If a field is not clearly visible on the page, return null for that field. Never
             error: textResult?.error ?? null,
             model: textResult?.model ?? null,
           },
-          imageKind: typeof image === "string"
-            ? (image.startsWith("data:") ? "dataUrl" : "http")
-            : "unknown",
+          imageKind:
+            typeof image === "string"
+              ? image.startsWith("data:")
+                ? "dataUrl"
+                : "http"
+              : "unknown",
           imageBytes: typeof image === "string" ? image.length : 0,
         },
         "listing extract-image complete",
       );
 
       // ─── 2. Merge ────────────────────────────────────────────────────
-      const extracted = textResult?.parsed && typeof textResult.parsed === "object"
-        ? textResult.parsed
-        : {};
+      const extracted =
+        textResult?.parsed && typeof textResult.parsed === "object"
+          ? textResult.parsed
+          : {};
       const keyFields = ["address", "price", "beds", "baths", "sqft"];
       const filledKeys = keyFields.filter((k) => extracted[k] != null);
       const confidence = filledKeys.length >= 4 ? "full" : "partial";
@@ -6308,9 +8014,8 @@ If a field is not clearly visible on the page, return null for that field. Never
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
-
 
 // ── Listing Campaign — Upload Selected Image Crops ────────────────────────
 
@@ -6326,20 +8031,33 @@ studioRouter.post(
     try {
       const { images, folderId } = req.body;
       if (!Array.isArray(images) || images.length === 0) {
-        return validationError(res, [{ path: ["images"], message: "images array is required" }]);
+        return validationError(res, [
+          { path: ["images"], message: "images array is required" },
+        ]);
       }
       if (images.length > 12) {
-        return sendError(res, 400, "TOO_MANY_IMAGES", "Maximum 12 images per upload");
+        return sendError(
+          res,
+          400,
+          "TOO_MANY_IMAGES",
+          "Maximum 12 images per upload",
+        );
       }
 
       // Cross-workspace folder check.
       try {
         await assertFolderInClient(folderId ?? null, req.params.id);
       } catch (e) {
-        return sendError(res, e.status ?? 404, e.code ?? "NOT_FOUND", e.message);
+        return sendError(
+          res,
+          e.status ?? 404,
+          e.code ?? "NOT_FOUND",
+          e.message,
+        );
       }
 
-      const { getImageStorageService } = await import("../../services/storage/imageStorage.js");
+      const { getImageStorageService } =
+        await import("../../services/storage/imageStorage.js");
       const storage = getImageStorageService();
 
       const clientId = req.params.id;
@@ -6347,14 +8065,29 @@ studioRouter.post(
 
       // Enforce image usage limit before uploading
       const quotaErr = await enforceUsageLimit(userId, "images");
-      if (quotaErr) return sendError(res, 402, "IMAGE_LIMIT_EXCEEDED", "Monthly image limit reached. Upgrade your plan for more.", quotaErr);
+      if (quotaErr)
+        return sendError(
+          res,
+          402,
+          "IMAGE_LIMIT_EXCEEDED",
+          "Monthly image limit reached. Upgrade your plan for more.",
+          quotaErr,
+        );
 
       const uploaded = [];
       let runningBytes = 0;
       for (const img of images) {
         if (!img || typeof img !== "object") continue;
-        const { dataUrl, label, caption, isEnhanced, qualityScore, qualityLabel } = img;
-        if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) continue;
+        const {
+          dataUrl,
+          label,
+          caption,
+          isEnhanced,
+          qualityScore,
+          qualityLabel,
+        } = img;
+        if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/"))
+          continue;
 
         // Parse data URL → buffer (we trust nothing about the declared mime,
         // we sniff the bytes below).
@@ -6373,21 +8106,22 @@ studioRouter.post(
         runningBytes += buffer.length;
         const storageOk = await checkStorageLimit(userId, runningBytes, false);
         if (!storageOk.allowed) {
-          return sendError(
-            res,
-            402,
-            "STORAGE_LIMIT",
-            storageOk.reason,
-            { current: storageOk.current, limit: storageOk.limit, uploadedSoFar: uploaded.length }
-          );
+          return sendError(res, 402, "STORAGE_LIMIT", storageOk.reason, {
+            current: storageOk.current,
+            limit: storageOk.limit,
+            uploadedSoFar: uploaded.length,
+          });
         }
 
         // Validate + sanitize enhancement metadata (spinstr97)
         const safeIsEnhanced = isEnhanced === true;
-        const safeQualityScore = typeof qualityScore === "number" && Number.isFinite(qualityScore)
-          ? Math.max(0, Math.min(100, qualityScore))
+        const safeQualityScore =
+          typeof qualityScore === "number" && Number.isFinite(qualityScore)
+            ? Math.max(0, Math.min(100, qualityScore))
+            : null;
+        const safeQualityLabel = ["good", "fair", "low"].includes(qualityLabel)
+          ? qualityLabel
           : null;
-        const safeQualityLabel = ["good", "fair", "low"].includes(qualityLabel) ? qualityLabel : null;
 
         try {
           const result = await storage.upload(buffer, {
@@ -6405,10 +8139,12 @@ studioRouter.post(
               bytes: result.bytes ?? buffer.length,
               mimeType,
               assetType: "image",
-              filename: typeof label === "string" && label
-                ? `listing-${label}${safeIsEnhanced ? "-enhanced" : ""}.${result.format ?? "jpg"}`
-                : `listing-image${safeIsEnhanced ? "-enhanced" : ""}.${result.format ?? "jpg"}`,
-              altText: typeof caption === "string" ? caption.slice(0, 200) : null,
+              filename:
+                typeof label === "string" && label
+                  ? `listing-${label}${safeIsEnhanced ? "-enhanced" : ""}.${result.format ?? "jpg"}`
+                  : `listing-image${safeIsEnhanced ? "-enhanced" : ""}.${result.format ?? "jpg"}`,
+              altText:
+                typeof caption === "string" ? caption.slice(0, 200) : null,
               caption: typeof label === "string" ? label.slice(0, 50) : null,
               isEnhanced: safeIsEnhanced,
               qualityScore: safeQualityScore,
@@ -6430,20 +8166,28 @@ studioRouter.post(
             qualityLabel: asset.qualityLabel,
           });
         } catch (err) {
-          console.error("[upload-images] Cloudinary upload failed:", err?.message ?? err);
+          console.error(
+            "[upload-images] Cloudinary upload failed:",
+            err?.message ?? err,
+          );
           // Continue with other images — best effort (do NOT block flow if enhancement or upload fails)
         }
       }
 
       if (uploaded.length === 0) {
-        return sendError(res, 502, "UPLOAD_FAILED", "Could not upload any of the selected images");
+        return sendError(
+          res,
+          502,
+          "UPLOAD_FAILED",
+          "Could not upload any of the selected images",
+        );
       }
 
       res.json({ assets: uploaded });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Listing Campaign — Save Drafts ────────────────────────────────────────
@@ -6481,8 +8225,17 @@ studioRouter.post(
         // resolveLanguage in the save path.
         language: requestedLanguage,
       } = req.body;
-      if (!campaign || !Array.isArray(campaign.posts) || campaign.posts.length === 0) {
-        return validationError(res, [{ path: ["campaign"], message: "Campaign with posts array is required" }]);
+      if (
+        !campaign ||
+        !Array.isArray(campaign.posts) ||
+        campaign.posts.length === 0
+      ) {
+        return validationError(res, [
+          {
+            path: ["campaign"],
+            message: "Campaign with posts array is required",
+          },
+        ]);
       }
 
       const clientId = req.params.id;
@@ -6504,20 +8257,32 @@ studioRouter.post(
       //   idea       → "Promote our spring offer — lead generation"
       //                  (idea snippet ≤60 chars), or fall back to
       //                  "Custom — lead generation" when no idea text.
-      const sourceType = ["property", "data_item", "idea"].includes(rawSourceType)
+      const sourceType = ["property", "data_item", "idea"].includes(
+        rawSourceType,
+      )
         ? rawSourceType
         : "property";
-      const campaignTypeLabel = (campaignType || (sourceType === "property" ? "just_listed" : "general"))
-        .replace(/_/g, " ");
-      const truncate = (s, n) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s);
+      const campaignTypeLabel = (
+        campaignType || (sourceType === "property" ? "just_listed" : "general")
+      ).replace(/_/g, " ");
+      const truncate = (s, n) =>
+        s && s.length > n ? `${s.slice(0, n - 1)}…` : s;
       let campaignNameRoot;
       if (sourceType === "property") {
-        campaignNameRoot = propertyData?.address || propertyData?.title || sourceTitle || "Listing";
+        campaignNameRoot =
+          propertyData?.address ||
+          propertyData?.title ||
+          sourceTitle ||
+          "Listing";
       } else if (sourceType === "data_item") {
-        campaignNameRoot = sourceTitle || propertyData?.title || "Content asset";
+        campaignNameRoot =
+          sourceTitle || propertyData?.title || "Content asset";
       } else {
         // idea
-        const ideaSnippet = typeof campaignIdea === "string" ? truncate(campaignIdea.trim(), 60) : null;
+        const ideaSnippet =
+          typeof campaignIdea === "string"
+            ? truncate(campaignIdea.trim(), 60)
+            : null;
         campaignNameRoot = ideaSnippet || "Custom";
       }
       // Campaign id — we let Prisma generate a cuid via the model's
@@ -6526,7 +8291,8 @@ studioRouter.post(
       // from before the Campaign model existed are preserved via
       // the backfill script and remain valid (Campaign.id is just
       // TEXT — either format coexists).
-      const campaignName = campaign.campaignName || `${campaignNameRoot} — ${campaignTypeLabel}`;
+      const campaignName =
+        campaign.campaignName || `${campaignNameRoot} — ${campaignTypeLabel}`;
       const totalPosts = campaign.posts.length;
 
       // Source attribution stored on each Draft's `warnings` array
@@ -6542,9 +8308,15 @@ studioRouter.post(
       if (sourceType === "property" && propertyData?.address) {
         warnings.push(`address:${propertyData.address}`);
       }
-      if (sourceTitle) warnings.push(`sourceTitle:${truncate(sourceTitle, 120)}`);
-      if (sourceDataItemType) warnings.push(`sourceDataItemType:${sourceDataItemType}`);
-      if (sourceType === "idea" && typeof campaignIdea === "string" && campaignIdea.trim()) {
+      if (sourceTitle)
+        warnings.push(`sourceTitle:${truncate(sourceTitle, 120)}`);
+      if (sourceDataItemType)
+        warnings.push(`sourceDataItemType:${sourceDataItemType}`);
+      if (
+        sourceType === "idea" &&
+        typeof campaignIdea === "string" &&
+        campaignIdea.trim()
+      ) {
         warnings.push(`campaignIdea:${truncate(campaignIdea.trim(), 200)}`);
       }
       if (dataItemId) warnings.push(`dataItemId:${dataItemId}`);
@@ -6565,10 +8337,12 @@ studioRouter.post(
       // the prior 10:00 UTC / no-bump / no-review-required behavior.
       const [contentPrefs, clientTimezone] = await Promise.all([
         getContentPreferences(clientId).catch(() => null),
-        getClientTimezone(clientId).catch(() => 'UTC'),
+        getClientTimezone(clientId).catch(() => "UTC"),
       ]);
       const preferredPostingTime = contentPrefs?.preferredPostingTime || null;
-      const preferredPostingDays = Array.isArray(contentPrefs?.preferredPostingDays)
+      const preferredPostingDays = Array.isArray(
+        contentPrefs?.preferredPostingDays,
+      )
         ? contentPrefs.preferredPostingDays
         : [];
       const alwaysRequireReview = contentPrefs?.alwaysRequireReview !== false;
@@ -6580,8 +8354,11 @@ studioRouter.post(
       // schedule UI showed. When startDate is absent (legacy callers,
       // ad-hoc generation paths) we fall back to today so existing
       // behaviour is preserved.
-      const presetDays = schedulePreset === 14 ? 14 : schedulePreset === 10 ? 10 : 7;
-      const maxCampaignDay = Math.max(...campaign.posts.map((p) => p.campaignDay || 1));
+      const presetDays =
+        schedulePreset === 14 ? 14 : schedulePreset === 10 ? 10 : 7;
+      const maxCampaignDay = Math.max(
+        ...campaign.posts.map((p) => p.campaignDay || 1),
+      );
 
       // Anchor a campaign day at the user's preferredPostingTime in
       // Client.timezone when both are set; otherwise fall back to
@@ -6616,18 +8393,27 @@ studioRouter.post(
       function computeScheduledDate(campaignDay) {
         if (!addToPlanner) return null;
         // Scale campaign days to fit within the preset window
-        const dayOffset = maxCampaignDay > 1
-          ? Math.round(((campaignDay - 1) / (maxCampaignDay - 1)) * (presetDays - 1))
-          : 0;
+        const dayOffset =
+          maxCampaignDay > 1
+            ? Math.round(
+                ((campaignDay - 1) / (maxCampaignDay - 1)) * (presetDays - 1),
+              )
+            : 0;
         // Anchor day 1 at the user's confirmed start date. Day N
         // lands `dayOffset` days after that.
-        let date = new Date(scheduleAnchor.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+        let date = new Date(
+          scheduleAnchor.getTime() + dayOffset * 24 * 60 * 60 * 1000,
+        );
         // Apply day-of-week bump if the user has restricted posting
         // days. Day-of-week is evaluated in the workspace timezone
         // so a "Mon/Wed/Fri" rule actually lines up with the
         // calendar the user sees.
         if (preferredPostingDays.length > 0) {
-          date = bumpToNextAllowedDay(date, preferredPostingDays, clientTimezone);
+          date = bumpToNextAllowedDay(
+            date,
+            preferredPostingDays,
+            clientTimezone,
+          );
         }
         return date;
       }
@@ -6649,7 +8435,9 @@ studioRouter.post(
       //                        up. Otherwise fall back to DRAFT for
       //                        workspaces that opted out of the
       //                        review gate.
-      const draftStatusForUnscheduled = alwaysRequireReview ? "PENDING_REVIEW" : "DRAFT";
+      const draftStatusForUnscheduled = alwaysRequireReview
+        ? "PENDING_REVIEW"
+        : "DRAFT";
 
       // Pre-compute each draft's scheduledFor up front so the
       // Campaign row can record the actual schedule envelope
@@ -6660,12 +8448,14 @@ studioRouter.post(
         computeScheduledDate(post.campaignDay || idx + 1),
       );
       const scheduledDates = scheduledForByIdx.filter((d) => d != null);
-      const campaignStartsAt = scheduledDates.length > 0
-        ? new Date(Math.min(...scheduledDates.map((d) => d.getTime())))
-        : null;
-      const campaignEndsAt = scheduledDates.length > 0
-        ? new Date(Math.max(...scheduledDates.map((d) => d.getTime())))
-        : null;
+      const campaignStartsAt =
+        scheduledDates.length > 0
+          ? new Date(Math.min(...scheduledDates.map((d) => d.getTime())))
+          : null;
+      const campaignEndsAt =
+        scheduledDates.length > 0
+          ? new Date(Math.max(...scheduledDates.map((d) => d.getTime())))
+          : null;
 
       // Promote Campaign to a first-class row before the draft
       // batch lands. New campaigns receive a cuid via Prisma; the
@@ -6676,10 +8466,14 @@ studioRouter.post(
       // and every persisted Draft.language stay in lockstep. Falls
       // back to the workspace default; no Campaign row is read first
       // because this is the row being created.
-      const { resolveLanguage } = await import("./generation/resolveLanguage.js");
+      const { resolveLanguage } =
+        await import("./generation/resolveLanguage.js");
       const clientForLang = await prisma.client.findUnique({
         where: { id: clientId },
-        select: { defaultLanguage: true, contentPreferences: { select: { defaultLanguage: true } } },
+        select: {
+          defaultLanguage: true,
+          contentPreferences: { select: { defaultLanguage: true } },
+        },
       });
       const resolvedCampaignLanguage = resolveLanguage({
         requestedLanguage,
@@ -6697,12 +8491,20 @@ studioRouter.post(
           campaignType: campaignType || "just_listed",
           language: resolvedCampaignLanguage,
           sourceType,
-          sourceDataItemId: sourceType === "data_item" ? dataItemId ?? null : (sourceType === "property" ? dataItemId ?? null : null),
+          sourceDataItemId:
+            sourceType === "data_item"
+              ? (dataItemId ?? null)
+              : sourceType === "property"
+                ? (dataItemId ?? null)
+                : null,
           sourceTitle:
             sourceType === "property"
-              ? propertyData?.address ?? propertyData?.title ?? sourceTitle ?? null
+              ? (propertyData?.address ??
+                propertyData?.title ??
+                sourceTitle ??
+                null)
               : sourceType === "data_item"
-                ? sourceTitle ?? null
+                ? (sourceTitle ?? null)
                 : null,
           campaignIdea:
             sourceType === "idea" && typeof campaignIdea === "string"
@@ -6736,7 +8538,9 @@ studioRouter.post(
               variations: {
                 ...(post.bodyAlt ? { bodyAlt: post.bodyAlt } : {}),
                 ...(post.subject ? { subject: post.subject } : {}),
-                ...(post.hookScore != null ? { hookScore: post.hookScore } : {}),
+                ...(post.hookScore != null
+                  ? { hookScore: post.hookScore }
+                  : {}),
                 ...(post.imageHint ? { imageHint: post.imageHint } : {}),
                 ...(post.slotType ? { slotType: post.slotType } : {}),
               },
@@ -6753,7 +8557,7 @@ studioRouter.post(
               ...(scheduledFor ? { scheduledFor } : {}),
             },
           });
-        })
+        }),
       );
 
       // Link selected media assets to each draft (one DraftAsset per asset per draft).
@@ -6765,11 +8569,16 @@ studioRouter.post(
         for (let dIdx = 0; dIdx < drafts.length; dIdx += 1) {
           const draft = drafts[dIdx];
           const post = campaign.posts[dIdx];
-          console.log('[MEDIA SAVE] campaign post assignedImageIds', post?.assignedImageIds);
+          console.log(
+            "[MEDIA SAVE] campaign post assignedImageIds",
+            post?.assignedImageIds,
+          );
           // Per-post assigned images take priority
-          const perPost = Array.isArray(post?.assignedImageIds) && post.assignedImageIds.length > 0
-            ? post.assignedImageIds.filter((id) => validAssetIdSet.has(id))
-            : null;
+          const perPost =
+            Array.isArray(post?.assignedImageIds) &&
+            post.assignedImageIds.length > 0
+              ? post.assignedImageIds.filter((id) => validAssetIdSet.has(id))
+              : null;
           const idsForThisDraft = perPost || validAssetIds;
           for (let i = 0; i < idsForThisDraft.length; i += 1) {
             draftAssetRows.push({
@@ -6781,14 +8590,18 @@ studioRouter.post(
           }
         }
         if (draftAssetRows.length > 0) {
-          await prisma.draftAsset.createMany({ data: draftAssetRows, skipDuplicates: true });
+          await prisma.draftAsset.createMany({
+            data: draftAssetRows,
+            skipDuplicates: true,
+          });
         }
 
         // Hydrate each draft's mediaUrl from its primary asset so downstream
         // views (Content Library, Planner) show the image without joining DraftAsset.
         const primaryByDraft = new Map();
         for (const row of draftAssetRows) {
-          if (row.role === "primary") primaryByDraft.set(row.draftId, row.assetId);
+          if (row.role === "primary")
+            primaryByDraft.set(row.draftId, row.assetId);
         }
         if (primaryByDraft.size > 0) {
           const assets = await prisma.mediaAsset.findMany({
@@ -6796,7 +8609,8 @@ studioRouter.post(
             select: { id: true, url: true, assetType: true },
           });
           const assetUrlMap = new Map();
-          for (const a of assets) assetUrlMap.set(a.id, { url: a.url, type: a.assetType });
+          for (const a of assets)
+            assetUrlMap.set(a.id, { url: a.url, type: a.assetType });
           const updates = [];
           for (const [draftId, assetId] of primaryByDraft.entries()) {
             const info = assetUrlMap.get(assetId);
@@ -6805,7 +8619,7 @@ studioRouter.post(
                 prisma.draft.update({
                   where: { id: draftId },
                   data: { mediaUrl: info.url, mediaType: info.type || "image" },
-                })
+                }),
               );
               // Update the in-memory draft so the response includes mediaUrl
               const draftObj = drafts.find((d) => d.id === draftId);
@@ -6821,13 +8635,18 @@ studioRouter.post(
 
       // Log final media state for each draft
       for (const d of drafts) {
-        console.log('[MEDIA SAVE] campaign draft mediaUrl', d.id, d.mediaUrl);
+        console.log("[MEDIA SAVE] campaign draft mediaUrl", d.id, d.mediaUrl);
       }
-      res.json({ drafts, campaignId, campaignName, attachedAssetCount: validAssetIds.length });
+      res.json({
+        drafts,
+        campaignId,
+        campaignName,
+        attachedAssetCount: validAssetIds.length,
+      });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Google Business Profile Integration ───────────────────────────────────
@@ -6843,14 +8662,18 @@ studioRouter.post(
     try {
       const nonce = crypto.randomBytes(16).toString("hex");
       const key = `sp:gbp-oauth:${nonce}`;
-      await redisSet(key, JSON.stringify({ clientId: req.params.id, userId: req.user.id }), 600);
+      await redisSet(
+        key,
+        JSON.stringify({ clientId: req.params.id, userId: req.user.id }),
+        600,
+      );
 
       const authUrl = gbpProvider.getAuthUrl(nonce);
       res.json({ authUrl });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -6870,11 +8693,22 @@ studioRouter.post(
       // Consume OAuth state
       const key = `sp:gbp-oauth:${state}`;
       const raw = await redisGet(key);
-      if (!raw) return sendError(res, 400, "INVALID_STATE", "Invalid or expired OAuth state");
+      if (!raw)
+        return sendError(
+          res,
+          400,
+          "INVALID_STATE",
+          "Invalid or expired OAuth state",
+        );
 
       const stateData = JSON.parse(raw);
       if (stateData.userId !== req.user.id) {
-        return sendError(res, 403, "STATE_MISMATCH", "OAuth state user mismatch");
+        return sendError(
+          res,
+          403,
+          "STATE_MISMATCH",
+          "OAuth state user mismatch",
+        );
       }
 
       await redisDel(key);
@@ -6883,13 +8717,19 @@ studioRouter.post(
       const tokens = await gbpProvider.exchangeCode(code);
 
       // List accounts to help user pick location
-      const tempConfig = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken };
+      const tempConfig = {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      };
       let accounts = [];
       let locations = [];
       try {
         accounts = await gbpProvider.listAccounts(tempConfig);
         if (accounts.length > 0) {
-          locations = await gbpProvider.listLocations(tempConfig, accounts[0].name);
+          locations = await gbpProvider.listLocations(
+            tempConfig,
+            accounts[0].name,
+          );
         }
       } catch {
         // OAuth succeeded but listing failed — still save tokens
@@ -6903,9 +8743,15 @@ studioRouter.post(
       const hasAccount = accounts.length > 0;
       const autoConnect = hasAccount && locations.length <= 1;
       const needsPick = hasAccount && locations.length > 1;
-      const status = needsPick ? "pending" : autoConnect ? "connected" : "connected";
+      const status = needsPick
+        ? "pending"
+        : autoConnect
+          ? "connected"
+          : "connected";
 
-      await upsertWorkspaceTechStackConnection(req.params.id, "google_business_profile",
+      await upsertWorkspaceTechStackConnection(
+        req.params.id,
+        "google_business_profile",
         status,
         {
           metadataJson: {
@@ -6914,9 +8760,10 @@ studioRouter.post(
             email: tokens.email,
             accountId: accounts[0]?.name || null,
             locationId: autoConnect && locations[0] ? locations[0].name : null,
-            locationName: autoConnect && locations[0] ? locations[0].title : null,
+            locationName:
+              autoConnect && locations[0] ? locations[0].title : null,
           },
-        }
+        },
       );
 
       invalidateClientContext(req.params.id).catch(() => {});
@@ -6931,7 +8778,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -6947,10 +8794,16 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       const connection = await prisma.workspaceTechStackConnection.findUnique({
-        where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "google_business_profile" } },
+        where: {
+          workspaceId_providerKey: {
+            workspaceId: req.params.id,
+            providerKey: "google_business_profile",
+          },
+        },
       });
 
-      if (!connection) return sendError(res, 404, "NOT_FOUND", "GBP connection not found");
+      if (!connection)
+        return sendError(res, 404, "NOT_FOUND", "GBP connection not found");
 
       await prisma.workspaceTechStackConnection.update({
         where: { id: connection.id },
@@ -6970,7 +8823,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -6994,7 +8847,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7006,15 +8859,20 @@ studioRouter.delete(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      await upsertWorkspaceTechStackConnection(req.params.id, "google_business_profile", "not_connected", {
-        metadataJson: {},
-      });
+      await upsertWorkspaceTechStackConnection(
+        req.params.id,
+        "google_business_profile",
+        "not_connected",
+        {
+          metadataJson: {},
+        },
+      );
       invalidateClientContext(req.params.id).catch(() => {});
       res.json({ ok: true });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7031,7 +8889,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7044,12 +8902,13 @@ studioRouter.get(
   async (req, res, next) => {
     try {
       const profile = await getGBPBusinessProfile(req.params.id);
-      if (!profile) return sendError(res, 404, "NOT_FOUND", "GBP not connected");
+      if (!profile)
+        return sendError(res, 404, "NOT_FOUND", "GBP not connected");
       res.json(profile);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7065,7 +8924,12 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       const connection = await prisma.workspaceTechStackConnection.findUnique({
-        where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "google_business_profile" } },
+        where: {
+          workspaceId_providerKey: {
+            workspaceId: req.params.id,
+            providerKey: "google_business_profile",
+          },
+        },
       });
       if (!connection || connection.connectionStatus !== "connected") {
         return sendError(res, 400, "NOT_CONNECTED", "GBP not connected");
@@ -7073,8 +8937,11 @@ studioRouter.post(
 
       const config = connection.metadataJson || {};
       const result = await gbpProvider.replyToReview(
-        config, config.accountId, config.locationId,
-        parsed.data.reviewId, parsed.data.replyText
+        config,
+        config.accountId,
+        config.locationId,
+        parsed.data.reviewId,
+        parsed.data.replyText,
       );
 
       res.json({ ok: true, reply: result });
@@ -7084,7 +8951,7 @@ studioRouter.post(
       }
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7100,7 +8967,12 @@ studioRouter.post(
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
       const connection = await prisma.workspaceTechStackConnection.findUnique({
-        where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "google_business_profile" } },
+        where: {
+          workspaceId_providerKey: {
+            workspaceId: req.params.id,
+            providerKey: "google_business_profile",
+          },
+        },
       });
       if (!connection || connection.connectionStatus !== "connected") {
         return sendError(res, 400, "NOT_CONNECTED", "GBP not connected");
@@ -7108,8 +8980,10 @@ studioRouter.post(
 
       const config = connection.metadataJson || {};
       const result = await gbpProvider.createLocalPost(
-        config, config.accountId, config.locationId,
-        parsed.data
+        config,
+        config.accountId,
+        config.locationId,
+        parsed.data,
       );
 
       res.json({ ok: true, post: result });
@@ -7119,7 +8993,7 @@ studioRouter.post(
       }
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7132,12 +9006,13 @@ studioRouter.get(
   async (req, res, next) => {
     try {
       const insights = await getGBPInsights(req.params.id);
-      if (!insights) return sendError(res, 404, "NOT_FOUND", "No review insights available");
+      if (!insights)
+        return sendError(res, 404, "NOT_FOUND", "No review insights available");
       res.json(insights);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7154,7 +9029,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── CRM Integration (Follow Up Boss) ─────────────────────────────────────
@@ -7174,27 +9049,37 @@ studioRouter.post(
       // Validate the API key
       const validation = await fubProvider.validateApiKey(parsed.data.apiKey);
       if (!validation.valid) {
-        return sendError(res, 400, "INVALID_API_KEY", validation.error || "Invalid API key");
+        return sendError(
+          res,
+          400,
+          "INVALID_API_KEY",
+          validation.error || "Invalid API key",
+        );
       }
 
       // Encrypt and store
       const encryptedKey = fubProvider.encryptApiKey(parsed.data.apiKey);
 
-      await upsertWorkspaceTechStackConnection(req.params.id, "real_estate_crm", "connected", {
-        metadataJson: {
-          apiKey: encryptedKey,
-          provider: "follow_up_boss",
-          userName: validation.userName,
-          connectedAt: new Date().toISOString(),
+      await upsertWorkspaceTechStackConnection(
+        req.params.id,
+        "real_estate_crm",
+        "connected",
+        {
+          metadataJson: {
+            apiKey: encryptedKey,
+            provider: "follow_up_boss",
+            userName: validation.userName,
+            connectedAt: new Date().toISOString(),
+          },
         },
-      });
+      );
 
       invalidateClientContext(req.params.id).catch(() => {});
       res.json({ connected: true, userName: validation.userName });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7217,12 +9102,20 @@ studioRouter.post(
       res.json(result);
     } catch (err) {
       // Token decryption failures mean the key needs to be re-entered
-      if (err.code === "TOKEN_DECRYPT_MALFORMED" || err.message?.includes("Malformed encrypted token")) {
-        return sendError(res, 400, "INVALID_KEY", "CRM API key is invalid — please reconnect your CRM.");
+      if (
+        err.code === "TOKEN_DECRYPT_MALFORMED" ||
+        err.message?.includes("Malformed encrypted token")
+      ) {
+        return sendError(
+          res,
+          400,
+          "INVALID_KEY",
+          "CRM API key is invalid — please reconnect your CRM.",
+        );
       }
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7234,15 +9127,20 @@ studioRouter.delete(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      await upsertWorkspaceTechStackConnection(req.params.id, "real_estate_crm", "not_connected", {
-        metadataJson: {},
-      });
+      await upsertWorkspaceTechStackConnection(
+        req.params.id,
+        "real_estate_crm",
+        "not_connected",
+        {
+          metadataJson: {},
+        },
+      );
       invalidateClientContext(req.params.id).catch(() => {});
       res.json({ ok: true });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -7256,39 +9154,53 @@ studioRouter.get(
     try {
       const [gbp, crm] = await Promise.all([
         prisma.workspaceTechStackConnection.findUnique({
-          where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "google_business_profile" } },
+          where: {
+            workspaceId_providerKey: {
+              workspaceId: req.params.id,
+              providerKey: "google_business_profile",
+            },
+          },
         }),
         prisma.workspaceTechStackConnection.findUnique({
-          where: { workspaceId_providerKey: { workspaceId: req.params.id, providerKey: "real_estate_crm" } },
+          where: {
+            workspaceId_providerKey: {
+              workspaceId: req.params.id,
+              providerKey: "real_estate_crm",
+            },
+          },
         }),
       ]);
 
       res.json({
-        gbp: gbp ? {
-          status: gbp.connectionStatus,
-          email: gbp.metadataJson?.email || null,
-          locationName: gbp.metadataJson?.locationName || null,
-          businessName: gbp.metadataJson?.businessName || null,
-          lastSyncedAt: gbp.metadataJson?.lastSyncedAt || null,
-          reviewCount: gbp.metadataJson?.reviewCount || 0,
-          averageRating: gbp.metadataJson?.averageRating || null,
-          unrepliedReviewCount: gbp.metadataJson?.unrepliedReviewCount || 0,
-          lastError: gbp.lastError,
-        } : { status: "not_connected" },
-        crm: crm ? {
-          status: crm.connectionStatus,
-          provider: crm.metadataJson?.provider || null,
-          userName: crm.metadataJson?.userName || null,
-          lastSyncedAt: crm.metadataJson?.lastSyncedAt || null,
-          dealCount: crm.metadataJson?.dealCount || 0,
-          contactCount: crm.metadataJson?.contactCount || 0,
-          lastError: crm.lastError,
-        } : { status: "not_connected" },
+        gbp: gbp
+          ? {
+              status: gbp.connectionStatus,
+              email: gbp.metadataJson?.email || null,
+              locationName: gbp.metadataJson?.locationName || null,
+              businessName: gbp.metadataJson?.businessName || null,
+              lastSyncedAt: gbp.metadataJson?.lastSyncedAt || null,
+              reviewCount: gbp.metadataJson?.reviewCount || 0,
+              averageRating: gbp.metadataJson?.averageRating || null,
+              unrepliedReviewCount: gbp.metadataJson?.unrepliedReviewCount || 0,
+              lastError: gbp.lastError,
+            }
+          : { status: "not_connected" },
+        crm: crm
+          ? {
+              status: crm.connectionStatus,
+              provider: crm.metadataJson?.provider || null,
+              userName: crm.metadataJson?.userName || null,
+              lastSyncedAt: crm.metadataJson?.lastSyncedAt || null,
+              dealCount: crm.metadataJson?.dealCount || 0,
+              contactCount: crm.metadataJson?.contactCount || 0,
+              lastError: crm.lastError,
+            }
+          : { status: "not_connected" },
       });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Integration Requests ──────────────────────────────────────────────────
@@ -7304,14 +9216,18 @@ studioRouter.post(
     try {
       const { providerKey, providerLabel } = req.body;
       if (!providerKey || typeof providerKey !== "string") {
-        return validationError(res, [{ path: ["providerKey"], message: "providerKey is required" }]);
+        return validationError(res, [
+          { path: ["providerKey"], message: "providerKey is required" },
+        ]);
       }
 
       const clientId = req.params.id;
 
       // Check for existing request to prevent duplicates
       const existing = await prisma.workspaceTechStackConnection.findUnique({
-        where: { workspaceId_providerKey: { workspaceId: clientId, providerKey } },
+        where: {
+          workspaceId_providerKey: { workspaceId: clientId, providerKey },
+        },
       });
 
       if (existing && existing.connectionStatus === "requested") {
@@ -7323,20 +9239,25 @@ studioRouter.post(
         return res.json({ alreadyConnected: true });
       }
 
-      await upsertWorkspaceTechStackConnection(clientId, providerKey, "requested", {
-        metadataJson: {
-          providerLabel: providerLabel || providerKey,
-          requestedAt: new Date().toISOString(),
-          requestedBy: getAuth0Sub(req),
-          source: "crm_integration_request",
+      await upsertWorkspaceTechStackConnection(
+        clientId,
+        providerKey,
+        "requested",
+        {
+          metadataJson: {
+            providerLabel: providerLabel || providerKey,
+            requestedAt: new Date().toISOString(),
+            requestedBy: getAuth0Sub(req),
+            source: "crm_integration_request",
+          },
         },
-      });
+      );
 
       res.json({ requested: true });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Listing Feeds (multi-source) ────────────────────────────────────────
@@ -7353,7 +9274,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** POST /api/v1/workspaces/:id/listing-feeds — create a new listing source */
@@ -7364,12 +9285,15 @@ studioRouter.post(
     try {
       const parsed = CreateListingSourceSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const source = await listingFeedService.createListingSource(req.params.id, parsed.data);
+      const source = await listingFeedService.createListingSource(
+        req.params.id,
+        parsed.data,
+      );
       res.status(201).json(source);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** PATCH /api/v1/workspaces/:id/listing-feeds/:sourceId — update a listing source */
@@ -7380,12 +9304,16 @@ studioRouter.patch(
     try {
       const parsed = UpdateListingSourceSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
-      const source = await listingFeedService.updateListingSource(req.params.id, req.params.sourceId, parsed.data);
+      const source = await listingFeedService.updateListingSource(
+        req.params.id,
+        req.params.sourceId,
+        parsed.data,
+      );
       res.json(source);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** POST /api/v1/workspaces/:id/listing-feeds/:sourceId/sync — sync a URL listing source */
@@ -7394,12 +9322,15 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const result = await listingFeedService.syncListingSource(req.params.id, req.params.sourceId);
+      const result = await listingFeedService.syncListingSource(
+        req.params.id,
+        req.params.sourceId,
+      );
       res.json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** DELETE /api/v1/workspaces/:id/listing-feeds/:sourceId — remove a listing source */
@@ -7408,12 +9339,15 @@ studioRouter.delete(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const result = await listingFeedService.removeListingSource(req.params.id, req.params.sourceId);
+      const result = await listingFeedService.removeListingSource(
+        req.params.id,
+        req.params.sourceId,
+      );
       res.json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Listing Enrichment ───────────────────────────────────────────────────
@@ -7424,12 +9358,15 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const result = await enrichListingById(req.params.id, req.params.listingId);
+      const result = await enrichListingById(
+        req.params.id,
+        req.params.listingId,
+      );
       res.json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** POST /api/v1/workspaces/:id/listings/enrich-all — bulk enrich (up to 20, fire-and-forget) */
@@ -7443,7 +9380,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Listing Events ───────────────────────────────────────────────────────
@@ -7455,7 +9392,11 @@ studioRouter.get(
   async (req, res, next) => {
     try {
       const item = await prisma.workspaceDataItem.findFirst({
-        where: { id: req.params.listingId, clientId: req.params.id, status: "ACTIVE" },
+        where: {
+          id: req.params.listingId,
+          clientId: req.params.id,
+          status: "ACTIVE",
+        },
         select: { dataJson: true },
       });
       if (!item) return res.status(404).json({ error: "Listing not found" });
@@ -7464,7 +9405,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** POST /api/v1/workspaces/:id/listings/evaluate-events — run stale/unpromoted scan */
@@ -7478,7 +9419,7 @@ studioRouter.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Listing Simulator (dev only) ─────────────────────────────────────────
@@ -7489,16 +9430,22 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     if (process.env.NODE_ENV === "production") {
-      return res.status(403).json({ error: "Simulator disabled in production" });
+      return res
+        .status(403)
+        .json({ error: "Simulator disabled in production" });
     }
     try {
       const { count = 5, options = {} } = req.body || {};
-      const result = await generateSampleListings(req.params.id, count, options);
+      const result = await generateSampleListings(
+        req.params.id,
+        count,
+        options,
+      );
       res.json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** POST /api/v1/workspaces/:id/dev/listings/:listingId/simulate-event — simulate lifecycle event */
@@ -7507,17 +9454,25 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     if (process.env.NODE_ENV === "production") {
-      return res.status(403).json({ error: "Simulator disabled in production" });
+      return res
+        .status(403)
+        .json({ error: "Simulator disabled in production" });
     }
     try {
       const { event, data = {} } = req.body || {};
-      if (!event) return res.status(400).json({ error: "Missing 'event' field" });
-      const result = await simulateListingEvent(req.params.id, req.params.listingId, event, data);
+      if (!event)
+        return res.status(400).json({ error: "Missing 'event' field" });
+      const result = await simulateListingEvent(
+        req.params.id,
+        req.params.listingId,
+        event,
+        data,
+      );
       res.json(result);
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 // ── Property Data ─────────────────────────────────────────────────────────
@@ -7529,16 +9484,27 @@ studioRouter.get(
   async (req, res, next) => {
     try {
       const { address } = req.query;
-      if (!address) return sendError(res, 400, "MISSING_PARAM", "address query param required");
+      if (!address)
+        return sendError(
+          res,
+          400,
+          "MISSING_PARAM",
+          "address query param required",
+        );
       if (propertyDataService.getActivePropertyDataProviderName() === "none") {
-        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+        return sendError(
+          res,
+          503,
+          "PROVIDER_UNAVAILABLE",
+          "No property data provider configured",
+        );
       }
       const result = await propertyDataService.lookupProperty(address);
       res.json({ data: result });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** GET /api/v1/workspaces/:id/property-data/listings?city=...&state=...&zipCode=... */
@@ -7547,15 +9513,30 @@ studioRouter.get(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { city, state, zipCode, address, propertyType, limit, offset } = req.query;
+      const { city, state, zipCode, address, propertyType, limit, offset } =
+        req.query;
       if (!city && !state && !zipCode && !address) {
-        return sendError(res, 400, "MISSING_PARAM", "At least one of city, state, zipCode, or address required");
+        return sendError(
+          res,
+          400,
+          "MISSING_PARAM",
+          "At least one of city, state, zipCode, or address required",
+        );
       }
       if (propertyDataService.getActivePropertyDataProviderName() === "none") {
-        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+        return sendError(
+          res,
+          503,
+          "PROVIDER_UNAVAILABLE",
+          "No property data provider configured",
+        );
       }
       const result = await propertyDataService.searchListings({
-        city, state, zipCode, address, propertyType,
+        city,
+        state,
+        zipCode,
+        address,
+        propertyType,
         limit: limit ? Number(limit) : undefined,
         offset: offset ? Number(offset) : undefined,
       });
@@ -7568,7 +9549,7 @@ studioRouter.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** GET /api/v1/workspaces/:id/property-data/valuation?address=... */
@@ -7578,16 +9559,27 @@ studioRouter.get(
   async (req, res, next) => {
     try {
       const { address } = req.query;
-      if (!address) return sendError(res, 400, "MISSING_PARAM", "address query param required");
+      if (!address)
+        return sendError(
+          res,
+          400,
+          "MISSING_PARAM",
+          "address query param required",
+        );
       if (propertyDataService.getActivePropertyDataProviderName() === "none") {
-        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+        return sendError(
+          res,
+          503,
+          "PROVIDER_UNAVAILABLE",
+          "No property data provider configured",
+        );
       }
       const result = await propertyDataService.getPropertyValue(address);
       res.json({ data: result });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** GET /api/v1/workspaces/:id/property-data/rent-estimate?address=... */
@@ -7597,16 +9589,27 @@ studioRouter.get(
   async (req, res, next) => {
     try {
       const { address } = req.query;
-      if (!address) return sendError(res, 400, "MISSING_PARAM", "address query param required");
+      if (!address)
+        return sendError(
+          res,
+          400,
+          "MISSING_PARAM",
+          "address query param required",
+        );
       if (propertyDataService.getActivePropertyDataProviderName() === "none") {
-        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+        return sendError(
+          res,
+          503,
+          "PROVIDER_UNAVAILABLE",
+          "No property data provider configured",
+        );
       }
       const result = await propertyDataService.getRentEstimate(address);
       res.json({ data: result });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /** GET /api/v1/workspaces/:id/property-data/market?zipCode=... */
@@ -7616,14 +9619,25 @@ studioRouter.get(
   async (req, res, next) => {
     try {
       const { zipCode } = req.query;
-      if (!zipCode) return sendError(res, 400, "MISSING_PARAM", "zipCode query param required");
+      if (!zipCode)
+        return sendError(
+          res,
+          400,
+          "MISSING_PARAM",
+          "zipCode query param required",
+        );
       if (propertyDataService.getActivePropertyDataProviderName() === "none") {
-        return sendError(res, 503, "PROVIDER_UNAVAILABLE", "No property data provider configured");
+        return sendError(
+          res,
+          503,
+          "PROVIDER_UNAVAILABLE",
+          "No property data provider configured",
+        );
       }
       const result = await propertyDataService.getMarketData(zipCode);
       res.json({ data: result });
     } catch (err) {
       next(err);
     }
-  }
+  },
 );

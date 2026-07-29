@@ -13,7 +13,10 @@ async function getTwilio() {
   }
   try {
     const twilio = await import("twilio");
-    twilioClient = twilio.default(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+    twilioClient = twilio.default(
+      env.TWILIO_ACCOUNT_SID,
+      env.TWILIO_AUTH_TOKEN,
+    );
     return twilioClient;
   } catch (err) {
     console.error(`[TWILIO] Failed to initialize client: ${err.message}`);
@@ -26,17 +29,28 @@ async function getTwilio() {
  * @returns {{ sid: string } | null}
  */
 export async function sendSms({ to, body }) {
+  if (!env.SMS_SENDING_ENABLED || !env.SMS_A2P_APPROVED) {
+    return null;
+  }
   const client = await getTwilio();
-  if (!client || !env.TWILIO_FROM_NUMBER) {
-    console.log(`[NOTIFICATION:SMS] (no provider) to=${to} body="${body}"`);
+  if (!client || !env.TWILIO_MESSAGING_SERVICE_SID) {
+    console.warn("[TWILIO] SMS provider is unavailable");
     return null;
   }
 
   const message = await client.messages.create({
     body,
-    from: env.TWILIO_FROM_NUMBER,
+    messagingServiceSid: env.TWILIO_MESSAGING_SERVICE_SID,
     to,
+    ...(env.TWILIO_STATUS_CALLBACK_URL
+      ? { statusCallback: env.TWILIO_STATUS_CALLBACK_URL }
+      : {}),
   });
 
-  return { sid: message.sid };
+  if (typeof message?.sid !== "string" || !message.sid) {
+    const error = new Error("Twilio did not return a message SID");
+    error.code = "TWILIO_INVALID_RESPONSE";
+    throw error;
+  }
+  return { sid: message.sid, status: message.status ?? null };
 }
