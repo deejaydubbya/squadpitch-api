@@ -112,14 +112,31 @@ export async function requireUser(req, res, next) {
         }
 
         // Auth0 can issue a different subject when an existing person uses a
-        // different connection/provider. Rebind the existing verified-email
-        // record so its user ID and all workspace relationships are preserved.
-        user = await prisma.user.update({
-          where: { email },
-          data: { auth0Sub: sub },
+        // different connection/provider. Workspace ownership historically
+        // used that subject directly, so migrate it in the same transaction
+        // that rebinds the stable User record.
+        const linked = await prisma.$transaction(async (tx) => {
+          const existing = await tx.user.findUniqueOrThrow({
+            where: { email },
+            select: { auth0Sub: true },
+          });
+          const ownership = await tx.client.updateMany({
+            where: { createdBy: existing.auth0Sub },
+            data: { createdBy: sub },
+          });
+          const linkedUser = await tx.user.update({
+            where: { email },
+            data: { auth0Sub: sub },
+          });
+          return { linkedUser, migratedWorkspaceRecords: ownership.count };
         });
+        user = linked.linkedUser;
         req.log?.info(
-          { event: "auth.account_linked_by_verified_email", userId: user.id },
+          {
+            event: "auth.account_linked_by_verified_email",
+            userId: user.id,
+            migratedWorkspaceRecords: linked.migratedWorkspaceRecords,
+          },
           "reconciled existing Auth0 identity",
         );
       }

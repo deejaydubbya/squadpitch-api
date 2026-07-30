@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   upsert: vi.fn(),
   update: vi.fn(),
+  findUniqueOrThrow: vi.fn(),
+  updateMany: vi.fn(),
   reconnectPrisma: vi.fn(),
   isConnected: vi.fn(),
+  transaction: vi.fn(),
 }));
 
 vi.mock("../prisma.js", () => ({
@@ -12,7 +15,10 @@ vi.mock("../prisma.js", () => ({
     user: {
       upsert: mocks.upsert,
       update: mocks.update,
+      findUniqueOrThrow: mocks.findUniqueOrThrow,
     },
+    client: { updateMany: mocks.updateMany },
+    $transaction: mocks.transaction,
   },
   reconnectPrisma: mocks.reconnectPrisma,
   isConnected: mocks.isConnected,
@@ -43,6 +49,19 @@ describe("requireUser account reconciliation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+    mocks.transaction.mockImplementation((callback) =>
+      callback({
+        user: {
+          findUniqueOrThrow: mocks.findUniqueOrThrow,
+          update: mocks.update,
+        },
+        client: { updateMany: mocks.updateMany },
+      }),
+    );
+    mocks.findUniqueOrThrow.mockResolvedValue({
+      auth0Sub: "auth0|old-subject",
+    });
+    mocks.updateMany.mockResolvedValue({ count: 1 });
   });
 
   it("preserves the existing user when a verified email has a new Auth0 subject", async () => {
@@ -74,6 +93,10 @@ describe("requireUser account reconciliation", () => {
     expect(mocks.update).toHaveBeenCalledWith({
       where: { email: "owner@example.test" },
       data: { auth0Sub: "auth0|new-subject" },
+    });
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: { createdBy: "auth0|old-subject" },
+      data: { createdBy: "auth0|new-subject" },
     });
     expect(req.user.id).toBe("user-existing");
     expect(req.auth0Sub).toBe("auth0|new-subject");
