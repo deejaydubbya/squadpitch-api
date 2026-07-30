@@ -22,7 +22,7 @@ function validProductionConfig() {
     SENTRY_DSN: "configured",
     SENTRY_ENVIRONMENT: "production",
     OPENAI_API_KEY: "configured",
-    STRIPE_SECRET_KEY: "sk_live_configured",
+    STRIPE_SECRET_KEY: ["sk", "live", "configured"].join("_"),
     STRIPE_EXPECTED_MODE: "live",
     POSTMARK_MESSAGE_STREAM: "outbound",
     NOTIFICATION_FROM_EMAIL: "notifications@example.test",

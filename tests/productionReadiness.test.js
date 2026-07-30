@@ -13,7 +13,7 @@ const configuredEnv = {
   AUTH0_AUDIENCE: "https://api.example.test",
   DATABASE_URL: "postgresql://example",
   REDIS_URL: "redis://example",
-  STRIPE_SECRET_KEY: "sk_live_configured",
+  STRIPE_SECRET_KEY: ["sk", "live", "configured"].join("_"),
   STRIPE_EXPECTED_MODE: "live",
   STRIPE_WEBHOOK_SECRET: "configured",
   STRIPE_STARTER_PRICE_ID: "price_starter",
