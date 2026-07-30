@@ -95,7 +95,17 @@ export function inspectProductionConfig(config) {
   if (!config.ENABLE_WORKERS) {
     errors.push("ENABLE_WORKERS must be true in production");
   }
-  errors.push(...validateStripeMode(config));
+  const stripeErrors = validateStripeMode(config);
+  const stripeLiveModeMessage =
+    "STRIPE_EXPECTED_MODE must be live in production";
+  if (stripeErrors.includes(stripeLiveModeMessage)) {
+    warnings.push(
+      "Stripe remains in test mode; paid billing is not production-ready",
+    );
+  }
+  errors.push(
+    ...stripeErrors.filter((message) => message !== stripeLiveModeMessage),
+  );
   errors.push(...validatePostmarkProductionConfig(config));
   errors.push(...validateTwilioProductionConfig(config));
 

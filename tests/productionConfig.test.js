@@ -94,6 +94,19 @@ describe("production configuration hardening", () => {
     expect(result.warnings).toHaveLength(3);
   });
 
+  it("warns without crashing when paid billing remains in test mode", () => {
+    const config = {
+      ...validProductionConfig(),
+      STRIPE_SECRET_KEY: ["sk", "test", "configured"].join("_"),
+      STRIPE_EXPECTED_MODE: "test",
+    };
+    const result = inspectProductionConfig(config);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toContain(
+      "Stripe remains in test mode; paid billing is not production-ready",
+    );
+  });
+
   it("throws once with actionable production errors", () => {
     const logger = { warn: vi.fn() };
     expect(() =>
