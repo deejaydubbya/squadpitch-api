@@ -88,7 +88,9 @@ export function inspectProductionConfig(config) {
   }
 
   if (config.PINTEREST_USE_SANDBOX) {
-    errors.push("PINTEREST_USE_SANDBOX must be false in production");
+    warnings.push(
+      "PINTEREST_USE_SANDBOX is enabled; Pinterest remains beta-only",
+    );
   }
   if (!config.ENABLE_WORKERS) {
     errors.push("ENABLE_WORKERS must be true in production");

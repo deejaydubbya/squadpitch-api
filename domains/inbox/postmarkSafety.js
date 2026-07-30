@@ -3,13 +3,19 @@ const DOMAIN_RE =
   /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 const STREAM_RE = /^[a-z][a-z0-9_-]{0,29}$/;
 
+function senderAddress(value) {
+  const normalized = String(value || "").trim();
+  const displayNameMatch = normalized.match(/<([^<>]+)>$/);
+  return displayNameMatch ? displayNameMatch[1].trim() : normalized;
+}
+
 export function validatePostmarkProductionConfig(config) {
   const errors = [];
 
-  if (!EMAIL_RE.test(String(config.NOTIFICATION_FROM_EMAIL || ""))) {
+  if (!EMAIL_RE.test(senderAddress(config.NOTIFICATION_FROM_EMAIL))) {
     errors.push("NOTIFICATION_FROM_EMAIL must be a valid verified sender");
   }
-  if (!EMAIL_RE.test(String(config.INBOX_EMAIL_FROM || ""))) {
+  if (!EMAIL_RE.test(senderAddress(config.INBOX_EMAIL_FROM))) {
     errors.push("INBOX_EMAIL_FROM must be a valid verified sender");
   }
   if (!DOMAIN_RE.test(String(config.INBOX_EMAIL_REPLY_DOMAIN || ""))) {

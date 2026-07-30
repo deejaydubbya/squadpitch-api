@@ -56,7 +56,7 @@ describe("production configuration hardening", () => {
     expect(result.errors).toContain("STRIPE_SECRET_KEY is required");
   });
 
-  it("rejects localhost URLs, sandbox publishing, and unsafe SMS", () => {
+  it("rejects localhost URLs and unsafe SMS while warning on sandbox publishing", () => {
     const config = {
       ...validProductionConfig(),
       APP_URL: "http://localhost:3000",
@@ -66,15 +66,15 @@ describe("production configuration hardening", () => {
       SMS_SENDING_ENABLED: true,
       SMS_A2P_APPROVED: false,
     };
-    const { errors } = inspectProductionConfig(config);
+    const { errors, warnings } = inspectProductionConfig(config);
     expect(errors).toContain(
       "APP_URL must be a public HTTPS URL in production",
     );
     expect(errors).toContain(
       "ALLOWED_ORIGINS must be a public HTTPS URL in production",
     );
-    expect(errors).toContain(
-      "PINTEREST_USE_SANDBOX must be false in production",
+    expect(warnings).toContain(
+      "PINTEREST_USE_SANDBOX is enabled; Pinterest remains beta-only",
     );
     expect(errors).toContain(
       "SMS_SENDING_ENABLED requires SMS_A2P_APPROVED=true",
