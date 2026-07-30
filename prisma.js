@@ -1,23 +1,29 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 
-export const prisma = new PrismaClient({
-  datasources: {
-    db: {
-      // Append pool tuning to the base DATABASE_URL:
-      // - connection_limit=10: sized for performance-1x + 1GB Postgres
-      // - pool_timeout=10: wait up to 10s for a pool slot instead of failing instantly
-      // - connect_timeout=10: allow 10s for TCP connect (Fly internal DNS can be slow)
-      // - socket_timeout=30: kill queries hanging longer than 30s (stale socket detection)
-      url: appendParams(process.env.DATABASE_URL, {
-        connection_limit: "10",
-        pool_timeout: "10",
-        connect_timeout: "10",
-        socket_timeout: "30",
-      }),
+function createPrismaClient() {
+  return new PrismaClient({
+    datasources: {
+      db: {
+        // Append pool tuning to the base DATABASE_URL:
+        // - connection_limit=10: sized for performance-1x + 1GB Postgres
+        // - pool_timeout=10: wait up to 10s for a pool slot instead of failing instantly
+        // - connect_timeout=10: allow 10s for TCP connect (Fly internal DNS can be slow)
+        // - socket_timeout=30: kill queries hanging longer than 30s (stale socket detection)
+        url: appendParams(process.env.DATABASE_URL, {
+          connection_limit: "10",
+          pool_timeout: "10",
+          connect_timeout: "10",
+          socket_timeout: "30",
+        }),
+      },
     },
-  },
-});
+  });
+}
+
+// A live binding lets recovery replace a poisoned query engine for every
+// module that imports the shared client.
+export let prisma = createPrismaClient();
 
 /**
  * Append query parameters to a database URL, merging with any existing params.
@@ -56,21 +62,32 @@ export async function reconnectPrisma() {
 }
 
 async function _doReconnect() {
+  const previousClient = prisma;
   try {
-    await prisma.$disconnect();
+    await previousClient.$disconnect();
   } catch {
     // ignore disconnect errors — pool may already be dead
   }
 
   // Retry connect — the Fly Postgres machine may need a few seconds
   for (let i = 0; i < 5; i++) {
+    const candidate = createPrismaClient();
     try {
       if (i > 0) await new Promise((r) => setTimeout(r, 1000 * Math.min(i, 3)));
-      await prisma.$connect();
+      await candidate.$connect();
+      await candidate.$queryRaw`SELECT 1`;
+      prisma = candidate;
       console.log(`[prisma] Reconnected on attempt ${i + 1}`);
       return;
     } catch (err) {
-      console.warn(`[prisma] Reconnect attempt ${i + 1}/5 failed: ${err.message}`);
+      try {
+        await candidate.$disconnect();
+      } catch {
+        // ignore cleanup errors for a failed candidate
+      }
+      console.warn(
+        `[prisma] Reconnect attempt ${i + 1}/5 failed: ${err.message}`,
+      );
       if (i === 4) throw err;
     }
   }
