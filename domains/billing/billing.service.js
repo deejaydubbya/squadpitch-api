@@ -650,7 +650,7 @@ export async function changePlan({ userId, newTier }) {
   const s = requireStripe();
 
   const sub = await prisma.subscription.findUnique({ where: { userId } });
-  if (!sub?.stripeSubscriptionId) {
+  if (!hasExistingBillableSubscription(sub)) {
     throw Object.assign(
       new Error(
         "No active subscription to change. Use checkout to subscribe first.",

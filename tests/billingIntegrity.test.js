@@ -186,6 +186,26 @@ beforeEach(() => {
 });
 
 describe("Plan changes remain webhook-authoritative", () => {
+  it("routes canceled subscriptions back through checkout", async () => {
+    subStore.set("user-1", {
+      userId: "user-1",
+      stripeCustomerId: "cus_test",
+      stripeSubscriptionId: "sub_canceled",
+      tier: "AGENCY",
+      status: "CANCELED",
+    });
+
+    await expect(
+      billing.changePlan({ userId: "user-1", newTier: "AGENCY" }),
+    ).rejects.toMatchObject({
+      message:
+        "No active subscription to change. Use checkout to subscribe first.",
+      status: 400,
+    });
+    expect(stripeSubscriptionsRetrieve).not.toHaveBeenCalled();
+    expect(stripeSubscriptionsUpdate).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["STARTER", "PRO", true],
     ["PRO", "STARTER", false],
