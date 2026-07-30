@@ -28,13 +28,14 @@ primary_region = "ord"
   min_machines_running = 1
 
   # Health check — Fly restarts the machine if this fails 3 times in a row.
-  # Catches hung processes, OOM zombies, and dead DB connections.
+  # Keep traffic routing on process liveness. Monitor /ready separately for
+  # DB and Redis health so a dependency outage cannot eject every API machine.
   [[http_service.checks]]
     interval = "30s"
     timeout = "5s"
     grace_period = "30s"
     method = "GET"
-    path = "/ready"
+    path = "/health"
 
 [env]
   NODE_ENV = "production"
