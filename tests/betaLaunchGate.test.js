@@ -3,7 +3,11 @@ import { evaluateBetaLaunchGate } from "../scripts/beta-launch-gate/gate.js";
 
 describe("beta launch gate", () => {
   it("does not claim launch readiness without manual evidence", () => {
-    const report = evaluateBetaLaunchGate({ env: {} });
+    const report = evaluateBetaLaunchGate({
+      env: {},
+      apiRoot: process.cwd(),
+      webRoot: process.cwd(),
+    });
     expect(report.summary.status).toBe("NOT_READY_EVIDENCE_INCOMPLETE");
     expect(report.summary.warn).toBeGreaterThan(0);
   });
