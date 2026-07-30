@@ -9,9 +9,42 @@
 import { getAuth0Sub } from "./auth.js";
 import { sendError } from "../lib/apiErrors.js";
 import { prisma, reconnectPrisma, isConnected } from "../prisma.js";
+import { env } from "../config/env.js";
 
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [0, 1000, 2000, 3000, 4000]; // total wait budget: 10s
+
+async function hasVerifiedAuth0Email(req, expectedEmail) {
+  const payload = req.auth?.payload;
+  if (
+    payload?.email_verified === true ||
+    payload?.["https://squadpitch.com/email_verified"] === true
+  ) {
+    return true;
+  }
+
+  // Auth0 custom-API access tokens do not necessarily contain the standard
+  // email_verified claim. On the rare email-collision path, confirm it with
+  // Auth0 directly using the already-validated bearer token.
+  const token = req.auth?.token;
+  if (!token) return false;
+
+  try {
+    const response = await fetch(`https://${env.AUTH0_DOMAIN}/userinfo`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return false;
+    const profile = await response.json();
+    return (
+      profile?.email_verified === true &&
+      typeof profile.email === "string" &&
+      profile.email.toLowerCase() === expectedEmail.toLowerCase()
+    );
+  } catch {
+    return false;
+  }
+}
 
 export async function requireUser(req, res, next) {
   const sub = getAuth0Sub(req);
@@ -27,9 +60,6 @@ export async function requireUser(req, res, next) {
     req.auth?.payload?.name ||
     req.auth?.payload?.["https://squadpitch.com/name"] ||
     null;
-  const emailVerified =
-    req.auth?.payload?.email_verified === true ||
-    req.auth?.payload?.["https://squadpitch.com/email_verified"] === true;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
@@ -68,7 +98,7 @@ export async function requireUser(req, res, next) {
           targets.some((target) => String(target).includes("email"));
 
         if (!emailCollision) throw err;
-        if (!emailVerified) {
+        if (!(await hasVerifiedAuth0Email(req, email))) {
           req.log?.warn(
             { event: "auth.account_link_rejected", reason: "email_unverified" },
             "existing account requires a verified email",

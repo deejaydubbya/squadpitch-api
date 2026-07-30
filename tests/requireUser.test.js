@@ -42,6 +42,7 @@ function response() {
 describe("requireUser account reconciliation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("preserves the existing user when a verified email has a new Auth0 subject", async () => {
@@ -102,5 +103,46 @@ describe("requireUser account reconciliation", () => {
     expect(mocks.update).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(409);
     expect(res.body.error).toBe("ACCOUNT_LINK_REQUIRED");
+  });
+
+  it("confirms verification through Auth0 userinfo when the JWT omits the claim", async () => {
+    const collision = Object.assign(new Error("email collision"), {
+      code: "P2002",
+      meta: { target: ["email"] },
+    });
+    mocks.upsert.mockRejectedValueOnce(collision);
+    mocks.update.mockResolvedValueOnce({
+      id: "user-existing",
+      email: "owner@example.test",
+      auth0Sub: "google-oauth2|subject",
+    });
+    const auth0Fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        email: "owner@example.test",
+        email_verified: true,
+      }),
+    });
+    vi.stubGlobal("fetch", auth0Fetch);
+    const req = {
+      auth: {
+        token: "redacted-test-token",
+        payload: {
+          sub: "google-oauth2|subject",
+          email: "owner@example.test",
+        },
+      },
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+    const next = vi.fn();
+
+    await requireUser(req, response(), next);
+
+    expect(auth0Fetch).toHaveBeenCalledOnce();
+    expect(auth0Fetch.mock.calls[0][1].headers.authorization).toBe(
+      "Bearer redacted-test-token",
+    );
+    expect(mocks.update).toHaveBeenCalledOnce();
+    expect(next).toHaveBeenCalledOnce();
   });
 });
