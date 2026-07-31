@@ -19,7 +19,9 @@ const configuredEnv = {
   STRIPE_STARTER_PRICE_ID: "price_starter",
   STRIPE_PRO_PRICE_ID: "price_pro",
   STRIPE_GROWTH_PRICE_ID: "price_growth",
-  STRIPE_AGENCY_PRICE_ID: "price_agency",
+  STRIPE_STARTER_PRODUCT_ID: "prod_starter",
+  STRIPE_PRO_PRODUCT_ID: "prod_pro",
+  STRIPE_GROWTH_PRODUCT_ID: "prod_growth",
   POSTMARK_SERVER_TOKEN: "configured",
   POSTMARK_MESSAGE_STREAM: "outbound",
   NOTIFICATION_FROM_EMAIL: "notifications@example.test",
@@ -109,7 +111,23 @@ describe("production readiness checks", () => {
       status: 200,
       json: async () =>
         String(url).includes("api.stripe.com")
-          ? { livemode: true, active: true, type: "recurring" }
+          ? {
+              livemode: true,
+              active: true,
+              type: "recurring",
+              product: String(url).includes("price_starter")
+                ? "prod_starter"
+                : String(url).includes("price_pro")
+                  ? "prod_pro"
+                  : "prod_growth",
+              unit_amount: String(url).includes("price_starter")
+                ? 2900
+                : String(url).includes("price_pro")
+                  ? 5900
+                  : 14900,
+              currency: "usd",
+              recurring: { interval: "month", interval_count: 1 },
+            }
           : String(url).includes("api.postmarkapp.com")
             ? {
                 DeliveryType: "Live",

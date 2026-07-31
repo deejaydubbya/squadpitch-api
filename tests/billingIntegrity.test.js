@@ -510,6 +510,7 @@ describe("Stripe webhook is the only thing that grants a paid tier", () => {
 
     stripeSubscriptionsRetrieve.mockResolvedValue({
       id: "sub_live",
+      status: "active",
       current_period_end: 1_800_000_000,
     });
 
@@ -534,6 +535,38 @@ describe("Stripe webhook is the only thing that grants a paid tier", () => {
     const usage = await billing.getUsage("user-1");
     expect(usage.tier).toBe("PRO");
     expect(usage.limits.posts).toBe(150); // PRO limit
+  });
+
+  it("does not grant paid access while the Stripe subscription is incomplete", async () => {
+    subStore.set("user-1", {
+      userId: "user-1",
+      stripeCustomerId: "cus_test",
+      stripeSubscriptionId: null,
+      tier: "STARTER",
+      status: "ACTIVE",
+    });
+    stripeSubscriptionsRetrieve.mockResolvedValue({
+      id: "sub_incomplete",
+      status: "incomplete",
+      current_period_end: 1_800_000_000,
+    });
+
+    await billing.handleWebhookEvent({
+      id: "evt_incomplete",
+      created: 1_700_000_000,
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          customer: "cus_test",
+          subscription: "sub_incomplete",
+          metadata: { userId: "user-1", tier: "PRO" },
+        },
+      },
+    });
+
+    const after = subStore.get("user-1");
+    expect(after.status).toBe("CANCELED");
+    expect(billing.getEffectiveTier(after)).toBe("FREE");
   });
 });
 

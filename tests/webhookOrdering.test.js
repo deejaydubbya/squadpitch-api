@@ -85,6 +85,7 @@ describe("Stripe webhook ordering / dedup guard", () => {
   it("checkout.session.completed activates a subscription", async () => {
     stripeRetrieveMock.mockResolvedValue({
       id: "sub_live",
+      status: "active",
       current_period_end: 2_000_000_000,
     });
     await billing.handleWebhookEvent({

@@ -2,11 +2,18 @@
 
 ## Runtime contract
 
+Launch self-service plans and enforced post limits are Solo/`STARTER` at
+$29/month and 30 posts, Pro/`PRO` at $59/month and 150 posts, and
+Team/`GROWTH` at $149/month and 500 posts. Agency remains an existing internal
+entitlement but has no normal Checkout or Portal plan option.
+
 - Production requires `STRIPE_EXPECTED_MODE=live` and an `sk_live_` secret.
-- The readiness verifier retrieves all four configured prices and requires
-  each object to be live-mode, active, and recurring.
+- The readiness verifier retrieves the three self-service prices and requires
+  each to match its expected live Product, amount, USD currency, monthly
+  interval, interval count, recurring type, and active status.
 - Browsers send only plan keys. The API maps `STARTER`, `PRO`, `GROWTH`, and
-  `AGENCY` to server-held Price IDs.
+  public aliases to the server-held `STARTER`, `PRO`, and `GROWTH` Price IDs.
+  `AGENCY` remains a valid internal entitlement but is not self-service.
 - Checkout and Customer Portal returns must use the exact `APP_URL` origin.
 - Checkout accepts an optional UUID idempotency key and scopes it to the API
   user. Signup Checkout additionally persists and resumes open sessions.
@@ -30,7 +37,9 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_STARTER_PRICE_ID=price_...
 STRIPE_PRO_PRICE_ID=price_...
 STRIPE_GROWTH_PRICE_ID=price_...
-STRIPE_AGENCY_PRICE_ID=price_...
+STRIPE_STARTER_PRODUCT_ID=prod_...
+STRIPE_PRO_PRODUCT_ID=prod_...
+STRIPE_GROWTH_PRODUCT_ID=prod_...
 APP_URL=https://app.squadpitch.com
 ```
 
@@ -41,15 +50,15 @@ Do not commit these values. Set them through Fly secrets and verify names with
 
 Perform these in **live mode**, not the Dashboard test-mode toggle:
 
-1. **Product catalog:** create/confirm one recurring monthly Price for each
-   Squadpitch tier. Keep currency and tax behavior consistent. Copy the live
-   `price_...` IDs into the matching Fly variables.
+1. **Product catalog:** create/confirm one recurring monthly Price for Solo,
+   Pro, and Team. Agency is assisted/internal and must not appear as a normal
+   self-service Portal option.
 2. **Checkout:** enable the intended card/payment methods, collect billing
    details required by the business, configure customer emails, and confirm
    the Squadpitch branding and support links.
 3. **Customer Portal:** enable payment-method updates, invoice history,
-   cancellation behavior, and the exact plan-switch options Squadpitch
-   supports. Do not expose legacy/test Prices.
+   cancellation behavior, and Solo/Pro/Team plan switching. Do not expose
+   Agency or legacy/test Prices.
 4. **Webhook endpoint:** create
    `https://squadpitch-api.fly.dev/api/v1/billing/webhook`, select the current
    API version, and subscribe to:

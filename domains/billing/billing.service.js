@@ -5,14 +5,18 @@ import {
   getLimitsForTier,
   getTierRank,
   PAID_TIERS,
+  SELF_SERVICE_TIERS,
 } from "./billing.constants.js";
 import { logEvent } from "../../lib/logger.js";
 import {
   allowlistedBillingUrl,
+  STRIPE_API_VERSION,
   stripeSubscriptionStatus,
 } from "./stripeSafety.js";
 
-const stripe = env.STRIPE_SECRET_KEY ? new Stripe(env.STRIPE_SECRET_KEY) : null;
+const stripe = env.STRIPE_SECRET_KEY
+  ? new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: STRIPE_API_VERSION })
+  : null;
 
 function requireStripe() {
   if (!stripe)
@@ -73,7 +77,7 @@ export async function getPlans() {
     return _plansCache;
 
   const s = requireStripe();
-  const tiers = ["STARTER", "PRO", "GROWTH", "AGENCY"];
+  const tiers = ["STARTER", "PRO", "GROWTH"];
   const plans = [
     {
       tier: "FREE",
@@ -196,7 +200,7 @@ export async function createCheckoutSession({
 }
 
 export async function selectSignupPlan({ userId, tier }) {
-  if (!PAID_TIERS.includes(tier)) {
+  if (!SELF_SERVICE_TIERS.includes(tier)) {
     throw Object.assign(new Error("Unknown paid plan"), { status: 400 });
   }
 
@@ -792,6 +796,7 @@ export async function handleWebhookEvent(event) {
       const subscriptionId = session.subscription;
       const s = requireStripe();
       const sub = await s.subscriptions.retrieve(subscriptionId);
+      const status = stripeSubscriptionStatus(sub.status);
 
       // current_period_end moved to items in newer Stripe API versions
       const periodEnd =
@@ -806,7 +811,7 @@ export async function handleWebhookEvent(event) {
           stripeCustomerId: session.customer,
           stripeSubscriptionId: subscriptionId,
           tier: tier || "STARTER",
-          status: "ACTIVE",
+          status,
           ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
           lastStripeEventId: event.id,
           lastStripeEventCreated: event.created,
@@ -814,7 +819,7 @@ export async function handleWebhookEvent(event) {
         update: {
           stripeSubscriptionId: subscriptionId,
           tier: tier || "STARTER",
-          status: "ACTIVE",
+          status,
           ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
           lastStripeEventId: event.id,
           lastStripeEventCreated: event.created,
@@ -832,6 +837,7 @@ export async function handleWebhookEvent(event) {
         userId,
         fromTier: before ? getEffectiveTier(before) : "FREE",
         toTier: tier || "STARTER",
+        status,
         stripeSubscriptionId: subscriptionId,
       });
       break;

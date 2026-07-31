@@ -18,7 +18,8 @@
 //   STRIPE_STARTER_PRICE_ID  → Stripe price for Solo  ($29/mo)
 //   STRIPE_PRO_PRICE_ID      → Stripe price for Pro   ($59/mo)
 //   STRIPE_GROWTH_PRICE_ID   → Stripe price for Team  ($149/mo)
-//   STRIPE_AGENCY_PRICE_ID   → Stripe price for Agency ($299/mo)
+// Agency remains a valid internal entitlement but is not self-service.
+// STRIPE_AGENCY_PRICE_ID is optional and reserved for assisted migrations.
 //
 // `assertStripeEnvConfigured()` below logs a fatal warning at boot if any
 // required vars are missing.
@@ -117,6 +118,23 @@ export const TIER_ORDER = ["FREE", "STARTER", "PRO", "GROWTH", "AGENCY"];
 /** All paid tiers (i.e. tiers that require an active Stripe subscription). */
 export const PAID_TIERS = ["STARTER", "PRO", "GROWTH", "AGENCY"];
 
+/** Plans a customer may purchase or switch to without staff assistance. */
+export const SELF_SERVICE_TIERS = ["STARTER", "PRO", "GROWTH"];
+
+const PUBLIC_TIER_ALIASES = {
+  SOLO: "STARTER",
+  STARTER: "STARTER",
+  PRO: "PRO",
+  TEAM: "GROWTH",
+  GROWTH: "GROWTH",
+};
+
+/** Normalize public plan names to canonical internal self-service tiers. */
+export function normalizeSelfServiceTier(value) {
+  if (typeof value !== "string") return null;
+  return PUBLIC_TIER_ALIASES[value.trim().toUpperCase()] ?? null;
+}
+
 export function getLimitsForTier(tier) {
   return PLAN_TIERS[tier]?.limits ?? PLAN_TIERS.FREE.limits;
 }
@@ -128,7 +146,7 @@ export function getTierRank(tier) {
 }
 
 /**
- * Boot-time assertion that every paid tier has a Stripe price ID configured.
+ * Boot-time assertion that every self-service tier has a Price ID configured.
  * Logs (does not throw) so dev environments without Stripe still boot. In
  * production, missing price IDs mean checkout will reject the requested tier
  * — see `createCheckoutSession()`.
@@ -140,7 +158,6 @@ export function assertStripeEnvConfigured(env) {
   if (!env.STRIPE_STARTER_PRICE_ID) missing.push("STRIPE_STARTER_PRICE_ID");
   if (!env.STRIPE_PRO_PRICE_ID) missing.push("STRIPE_PRO_PRICE_ID");
   if (!env.STRIPE_GROWTH_PRICE_ID) missing.push("STRIPE_GROWTH_PRICE_ID");
-  if (!env.STRIPE_AGENCY_PRICE_ID) missing.push("STRIPE_AGENCY_PRICE_ID");
   if (missing.length > 0) {
     console.warn(
       `[BILLING] Missing Stripe env vars: ${missing.join(", ")}. ` +

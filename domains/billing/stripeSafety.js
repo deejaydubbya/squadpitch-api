@@ -1,4 +1,7 @@
 export const STRIPE_MODES = ["test", "live"];
+// Stripe SDK 22.0.1 ships this generated API version. Pinning it prevents an
+// account-default change from altering webhook or subscription response shapes.
+export const STRIPE_API_VERSION = "2026-03-25.dahlia";
 
 export function stripeKeyMode(secretKey) {
   if (typeof secretKey !== "string") return null;

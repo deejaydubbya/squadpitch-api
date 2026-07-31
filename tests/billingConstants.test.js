@@ -5,7 +5,15 @@
 // what they're charged. Lock the contract here.
 
 import { describe, it, expect } from "vitest";
-import { PLAN_TIERS, PAID_TIERS, TIER_ORDER, getLimitsForTier, getTierRank } from "../domains/billing/billing.constants.js";
+import {
+  PLAN_TIERS,
+  PAID_TIERS,
+  SELF_SERVICE_TIERS,
+  TIER_ORDER,
+  getLimitsForTier,
+  getTierRank,
+  normalizeSelfServiceTier,
+} from "../domains/billing/billing.constants.js";
 
 describe("PLAN_TIERS — pricing matches the launch contract", () => {
   it("FREE is $0", () => {
@@ -41,6 +49,17 @@ describe("Tier helpers", () => {
   it("PAID_TIERS lists the four billable tiers (FREE excluded)", () => {
     expect(PAID_TIERS).toEqual(["STARTER", "PRO", "GROWTH", "AGENCY"]);
     expect(PAID_TIERS).not.toContain("FREE");
+  });
+
+  it("keeps Agency internal and normalizes public plan aliases", () => {
+    expect(SELF_SERVICE_TIERS).toEqual(["STARTER", "PRO", "GROWTH"]);
+    expect(normalizeSelfServiceTier("SOLO")).toBe("STARTER");
+    expect(normalizeSelfServiceTier("starter")).toBe("STARTER");
+    expect(normalizeSelfServiceTier("PRO")).toBe("PRO");
+    expect(normalizeSelfServiceTier("TEAM")).toBe("GROWTH");
+    expect(normalizeSelfServiceTier("growth")).toBe("GROWTH");
+    expect(normalizeSelfServiceTier("AGENCY")).toBeNull();
+    expect(normalizeSelfServiceTier("price_123")).toBeNull();
   });
 
   it("TIER_ORDER ranks lowest → highest", () => {

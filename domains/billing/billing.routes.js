@@ -1,6 +1,7 @@
 import express from "express";
 import Stripe from "stripe";
 import { env } from "../../config/env.js";
+import { STRIPE_API_VERSION } from "./stripeSafety.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
 import { logEvent } from "../../lib/logger.js";
 import * as billingService from "./billing.service.js";
@@ -292,7 +293,9 @@ billingRouter.post(`${BASE}/webhook`, async (req, res) => {
 
   let event;
   try {
-    const stripe = new Stripe(env.STRIPE_SECRET_KEY);
+    const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
+      apiVersion: STRIPE_API_VERSION,
+    });
     event = stripe.webhooks.constructEvent(
       req.body,
       sig,

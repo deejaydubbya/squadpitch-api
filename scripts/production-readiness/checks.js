@@ -60,7 +60,9 @@ export async function runProductionReadinessChecks({
         "STRIPE_STARTER_PRICE_ID",
         "STRIPE_PRO_PRICE_ID",
         "STRIPE_GROWTH_PRICE_ID",
-        "STRIPE_AGENCY_PRICE_ID",
+        "STRIPE_STARTER_PRODUCT_ID",
+        "STRIPE_PRO_PRODUCT_ID",
+        "STRIPE_GROWTH_PRODUCT_ID",
       ],
       remediation:
         "Configure Stripe live-mode key, webhook signing secret, and all production price IDs.",
@@ -497,13 +499,30 @@ async function httpCheck({ id, group, url, core, fetchImpl, remediation }) {
 }
 
 async function stripeCheck(env, fetchImpl) {
-  const priceIds = [
-    env.STRIPE_STARTER_PRICE_ID,
-    env.STRIPE_PRO_PRICE_ID,
-    env.STRIPE_GROWTH_PRICE_ID,
-    env.STRIPE_AGENCY_PRICE_ID,
-  ].filter(Boolean);
-  if (!env.STRIPE_SECRET_KEY || priceIds.length !== 4) {
+  const catalog = [
+    {
+      tier: "Solo",
+      priceId: env.STRIPE_STARTER_PRICE_ID,
+      productId: env.STRIPE_STARTER_PRODUCT_ID,
+      amount: 2900,
+    },
+    {
+      tier: "Pro",
+      priceId: env.STRIPE_PRO_PRICE_ID,
+      productId: env.STRIPE_PRO_PRODUCT_ID,
+      amount: 5900,
+    },
+    {
+      tier: "Team",
+      priceId: env.STRIPE_GROWTH_PRICE_ID,
+      productId: env.STRIPE_GROWTH_PRODUCT_ID,
+      amount: 14900,
+    },
+  ];
+  if (
+    !env.STRIPE_SECRET_KEY ||
+    catalog.some(({ priceId, productId }) => !priceId || !productId)
+  ) {
     return check(
       "stripe.connectivity",
       "Stripe",
@@ -516,30 +535,37 @@ async function stripeCheck(env, fetchImpl) {
   }
   try {
     const prices = [];
-    for (const priceId of priceIds) {
+    for (const expected of catalog) {
       const response = await fetchImpl(
-        `https://api.stripe.com/v1/prices/${encodeURIComponent(priceId)}`,
+        `https://api.stripe.com/v1/prices/${encodeURIComponent(expected.priceId)}`,
         { headers: { authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } },
       );
       if (!response.ok) {
         throw new Error(`Stripe returned HTTP ${response.status}`);
       }
-      prices.push(await response.json());
+      prices.push({ expected, actual: await response.json() });
     }
-    const allLiveRecurring = prices.every(
-      (price) =>
-        price.livemode === true && price.active && price.type === "recurring",
+    const catalogMatches = prices.every(
+      ({ expected, actual }) =>
+        actual.livemode === true &&
+        actual.active === true &&
+        actual.type === "recurring" &&
+        actual.product === expected.productId &&
+        actual.unit_amount === expected.amount &&
+        actual.currency === "usd" &&
+        actual.recurring?.interval === "month" &&
+        actual.recurring?.interval_count === 1,
     );
     return check(
       "stripe.connectivity",
       "Stripe",
       "connectivity",
-      allLiveRecurring ? "PASS" : "FAIL",
+      catalogMatches ? "PASS" : "FAIL",
       "P0",
-      allLiveRecurring
-        ? "All four Stripe prices are active live recurring prices"
-        : "A configured Stripe price is test-mode, inactive, or non-recurring",
-      "Replace every tier price ID with its active live recurring Price object.",
+      catalogMatches
+        ? "Solo, Pro, and Team match the approved live monthly catalog"
+        : "A self-service Stripe price does not match its approved live catalog",
+      "Verify each self-service product, amount, currency, interval, and live Price ID.",
     );
   } catch {
     return check(
@@ -549,7 +575,7 @@ async function stripeCheck(env, fetchImpl) {
       "FAIL",
       "P0",
       "Live Stripe price verification failed",
-      "Verify the live secret key and all four production price IDs.",
+      "Verify the live secret key and all three self-service product/price mappings.",
     );
   }
 }

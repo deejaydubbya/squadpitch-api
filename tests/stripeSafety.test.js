@@ -3,10 +3,14 @@ import {
   allowlistedBillingUrl,
   stripeKeyMode,
   stripeSubscriptionStatus,
+  STRIPE_API_VERSION,
   validateStripeMode,
 } from "../domains/billing/stripeSafety.js";
 
 describe("Stripe live-mode safety", () => {
+  it("pins the API version generated for the installed Stripe SDK", () => {
+    expect(STRIPE_API_VERSION).toBe("2026-03-25.dahlia");
+  });
   it("detects secret-key mode without exposing the key", () => {
     expect(stripeKeyMode("sk_live_example")).toBe("live");
     expect(stripeKeyMode("sk_test_example")).toBe("test");

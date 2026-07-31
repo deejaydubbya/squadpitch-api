@@ -42,7 +42,7 @@ primary_region = "ord"
   ENABLE_WORKERS = "true"
   AI_PROVENANCE_RESPONSE_HEADERS_ENABLED = "true"
   PUBLIC_SITES_BASE_DOMAIN = "squadpitchsites.com"
-  STRIPE_EXPECTED_MODE = "test"
+  STRIPE_EXPECTED_MODE = "live"
 
 [[vm]]
   size = "performance-1x"
