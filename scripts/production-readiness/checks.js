@@ -106,6 +106,15 @@ export async function runProductionReadinessChecks({
       env,
     }),
     configCheck({
+      id: "sentry.api.delivery",
+      group: "Sentry",
+      variables: ["SENTRY_DELIVERY_VERIFIED"],
+      required: false,
+      remediation:
+        "Run npm run verify:sentry, locate its event ID in Sentry production, then set SENTRY_DELIVERY_VERIFIED to the verification date/event reference.",
+      env,
+    }),
+    configCheck({
       id: "sites.config",
       group: "Sites runtime",
       variables: [

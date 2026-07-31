@@ -7,7 +7,7 @@ vi.mock("../config/env.js", () => ({
   env: { SENTRY_DSN: undefined, NODE_ENV: "test" },
 }));
 
-const { initSentry, sentryRequestHandler, sentryErrorHandler, captureException, _resetSentryForTest } =
+const { initSentry, sentryRequestHandler, sentryErrorHandler, captureException, redactSentryEvent, _resetSentryForTest } =
   await import("../lib/sentry.js");
 
 beforeEach(() => {
@@ -39,5 +39,21 @@ describe("middleware no-ops when SENTRY_DSN is unset", () => {
 describe("captureException is a safe no-op without DSN", () => {
   it("does not throw", () => {
     expect(() => captureException(new Error("boom"))).not.toThrow();
+  });
+});
+
+describe("Sentry privacy redaction", () => {
+  it("removes credentials, content, and user PII while preserving safe dimensions", () => {
+    const event = redactSentryEvent({
+      request: { headers: { authorization: "Bearer secret" }, cookies: { session: "secret" }, data: "customer content", url: "/route?code=oauth-secret" },
+      user: { id: "user-id", email: "person@example.com", ip_address: "127.0.0.1" },
+      extra: { workspaceId: "workspace-id", provider: "stripe", accessToken: "secret" },
+    });
+    expect(event.request).toEqual({ url: "/route" });
+    expect(event.user).toEqual({ id: "user-id" });
+    expect(event.extra.accessToken).toBe("[Filtered]");
+    expect(JSON.stringify(event)).not.toContain("Bearer secret");
+    expect(JSON.stringify(event)).not.toContain("person@example.com");
+    expect(JSON.stringify(event)).not.toContain("oauth-secret");
   });
 });

@@ -22,6 +22,7 @@
     "verify:production:no-network": "node scripts/production-readiness/index.js --no-network",
     "verify:backup-recovery": "node scripts/backup-recovery/validate.js",
     "verify:observability": "node scripts/observability/validate.js",
+    "verify:sentry": "node scripts/verify-sentry.js",
     "stripe:migration:inspect": "node scripts/stripe-migration/inspect.js",
     "stripe:migration:inspect:json": "node scripts/stripe-migration/inspect.js --json",
     "stripe:migration:reset": "node scripts/stripe-migration/reset.js",
