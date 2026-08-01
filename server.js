@@ -14,6 +14,7 @@ import {
 } from "./lib/sentry.js";
 import { prisma, isConnected, reconnectPrisma } from "./prisma.js";
 import { getRedis, redisPing } from "./redis.js";
+import { inspectWorkerHealth } from "./domains/workerHealth/workerHealth.service.js";
 
 // Domain routers
 import { studioRouter } from "./domains/studio/studio.routes.js";
@@ -188,14 +189,15 @@ app.get("/ready", async (req, res) => {
     }
   }
   const redisOk = env.REDIS_URL ? await redisPing() : false;
+  const workerHealth = redisOk
+    ? await inspectWorkerHealth()
+    : { status: "blocked" };
   const ready = dbOk && redisOk;
-  res
-    .status(ready ? 200 : 503)
-    .json({
-      status: ready ? "ready" : "not_ready",
-      service: "squadpitch-api",
-      dependencies: { db: dbOk, redis: redisOk },
-    });
+  res.status(ready ? 200 : 503).json({
+    status: ready ? "ready" : "not_ready",
+    service: "squadpitch-api",
+    dependencies: { db: dbOk, redis: redisOk, workers: workerHealth.status },
+  });
 });
 
 // Public notification routes (no auth) — VAPID key
@@ -322,6 +324,7 @@ let threadsReplyPollerWorker;
 let facebookCommentPollerWorker;
 let instagramCommentPollerWorker;
 let autopilotEvaluatorWorker;
+let workerHealthWorker;
 
 let server;
 (async () => {
@@ -354,6 +357,10 @@ let server;
     });
 
     if (env.ENABLE_WORKERS) {
+      const { startWorkerHealthWorker } =
+        await import("./domains/workerHealth/workerHealth.service.js");
+      workerHealthWorker = startWorkerHealthWorker();
+
       const { startScheduledPublishWorker } =
         await import("./workers/scheduledPublishWorker.js");
       scheduledPublishWorker = startScheduledPublishWorker();
@@ -467,6 +474,9 @@ const shutdown = (sig) => async () => {
   } catch {}
   try {
     if (autopilotEvaluatorWorker) await autopilotEvaluatorWorker.close();
+  } catch {}
+  try {
+    if (workerHealthWorker) await workerHealthWorker.close();
   } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));

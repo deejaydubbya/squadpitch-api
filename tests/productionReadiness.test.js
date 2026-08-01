@@ -108,10 +108,22 @@ describe("production readiness checks", () => {
         { id: "ai.hosted-provenance", status: "PASS" },
         { id: "ai.trace-correlation", status: "PASS" },
         { id: "ai.fallback-status", status: "PASS" },
+        { id: "worker.redis-reachable", status: "PASS" },
+        { id: "worker.process-running", status: "PASS" },
+        { id: "worker.heartbeat-fresh", status: "PASS" },
+        { id: "worker.synthetic-consumed", status: "PASS" },
+        { id: "worker.backlog", status: "PASS" },
+        { id: "worker.oldest-waiting", status: "PASS" },
+        { id: "worker.failed-rate", status: "PASS" },
+        { id: "worker.stalled", status: "PASS" },
+        { id: "worker.retry-exhaustion", status: "PASS" },
       ],
     });
-    expect(checks).toHaveLength(9);
-    expect(checks.every((item) => item.status === "PASS")).toBe(true);
+    expect(checks).toHaveLength(19);
+    expect(checks.filter((item) => item.status === "PASS")).toHaveLength(18);
+    expect(
+      checks.find((item) => item.id === "WORKER_ALERT_DELIVERY_VERIFIED"),
+    ).toMatchObject({ status: "WARN" });
     expect(checks.map((item) => item.id)).toContain(
       "AI_HOSTED_SERVICE_VERIFIED",
     );

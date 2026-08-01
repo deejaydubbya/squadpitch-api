@@ -6,6 +6,11 @@ import { getUsage } from "../billing/billing.service.js";
 import { runProductionAiVerification } from "../aiPlatform/productionVerification.service.js";
 import { integrationCapabilityMatrix } from "../integrations/integrationCapabilityMatrix.js";
 import { summarizeCanaryResults } from "./canaryPolicy.js";
+import {
+  inspectWorkerHealth,
+  runWorkerHealthRoundTrip,
+  WORKER_HEALTH_THRESHOLDS,
+} from "../workerHealth/workerHealth.service.js";
 
 const ROLLBACK = Symbol("canary-rollback");
 
@@ -83,6 +88,7 @@ export async function runProductionCanary({
   }
 
   results.push(await queueRoundTripProbe(runId));
+  results.push(...(await workerHealthProbe(runId)));
   results.push(await sitesHealthProbe(fetchImpl));
   results.push(providerConfigurationResult());
   results.push({
@@ -108,6 +114,85 @@ export async function runProductionCanary({
     summary: summarizeCanaryResults(results),
     results,
   };
+}
+
+async function workerHealthProbe(runId) {
+  let roundTrip;
+  try {
+    roundTrip = await runWorkerHealthRoundTrip({ correlationId: runId });
+  } catch {
+    roundTrip = { consumed: false, removed: false };
+  }
+  const health = await inspectWorkerHealth();
+  const aggregate = health.queues ?? {
+    totals: {},
+    warnings: ["unavailable"],
+    critical: ["unavailable"],
+    oldestWaitingAgeMs: null,
+  };
+  const pass = (id, condition, success, failure) =>
+    result(id, Boolean(condition), condition ? success : failure);
+  return [
+    pass(
+      "worker.redis-reachable",
+      health.redisReachable,
+      "Redis PING succeeded.",
+      "Redis is unavailable.",
+    ),
+    pass(
+      "worker.process-running",
+      health.processRunning,
+      `${health.services?.instances ?? 0} worker heartbeat instance(s) were observed.`,
+      "No worker heartbeat instances were observed.",
+    ),
+    pass(
+      "worker.heartbeat-fresh",
+      health.heartbeatFresh,
+      "API and AI worker heartbeats are fresh.",
+      "One or more worker heartbeats are missing or stale.",
+    ),
+    pass(
+      "worker.synthetic-consumed",
+      roundTrip.consumed && roundTrip.removed,
+      `Synthetic worker job was consumed, correlated, and removed in ${roundTrip.latencyMs ?? 0}ms.`,
+      "Synthetic worker queue round trip failed or was not cleaned up.",
+    ),
+    pass(
+      "worker.backlog",
+      !aggregate.warnings.includes("queue_backlog") &&
+        !aggregate.critical.includes("queue_backlog"),
+      `Waiting backlog ${aggregate.totals.waiting ?? 0} is below warning threshold ${WORKER_HEALTH_THRESHOLDS.waitingWarn}.`,
+      "Queue backlog exceeded its low-beta threshold.",
+    ),
+    pass(
+      "worker.oldest-waiting",
+      !aggregate.warnings.includes("oldest_waiting") &&
+        !aggregate.critical.includes("oldest_waiting"),
+      `Oldest waiting age ${aggregate.oldestWaitingAgeMs ?? 0}ms is below ${WORKER_HEALTH_THRESHOLDS.oldestWaitingWarnMs}ms.`,
+      "Oldest waiting job exceeded its threshold.",
+    ),
+    pass(
+      "worker.failed-rate",
+      !aggregate.warnings.includes("failed_rate") &&
+        !aggregate.critical.includes("failed_rate"),
+      `Recent failures ${aggregate.totals.failedRecent ?? 0} are below threshold ${WORKER_HEALTH_THRESHOLDS.failedWarn}.`,
+      "Recent failed-job rate exceeded its threshold.",
+    ),
+    pass(
+      "worker.stalled",
+      !aggregate.warnings.includes("stalled") &&
+        !aggregate.critical.includes("stalled"),
+      `Recent stalled jobs: ${aggregate.totals.stalledRecent ?? 0}.`,
+      "One or more recent jobs stalled.",
+    ),
+    pass(
+      "worker.retry-exhaustion",
+      !aggregate.warnings.includes("retry_exhaustion") &&
+        !aggregate.critical.includes("retry_exhaustion"),
+      `Recent retry-exhausted jobs: ${aggregate.totals.retryExhaustedRecent ?? 0}.`,
+      "One or more recent jobs exhausted retries.",
+    ),
+  ];
 }
 
 export function summarizeAiCanaryResults(aiResults, requestId) {
