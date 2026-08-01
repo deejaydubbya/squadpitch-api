@@ -57,25 +57,46 @@ function safeDestinationLink(value) {
   }
 }
 
-function classifyPinterestBadRequest(body) {
+function redactProviderReason(body, pinBody) {
+  let reason = String(body?.message ?? body?.error_description ?? "");
+  const requestValues = [
+    pinBody?.board_id,
+    pinBody?.title,
+    pinBody?.description,
+    pinBody?.link,
+    pinBody?.media_source?.url,
+    pinBody?.media_source?.data,
+  ].filter((value) => typeof value === "string" && value.length > 0);
+  for (const value of requestValues.sort((a, b) => b.length - a.length)) {
+    reason = reason.split(value).join("[redacted-request-value]");
+  }
+  return reason
+    .replace(/https?:\/\/\S+/gi, "[redacted-url]")
+    .replace(/\b\d{6,}\b/g, "[redacted-id]")
+    .replace(/[\r\n\t]+/g, " ")
+    .slice(0, 300);
+}
+
+function classifyPinterestBadRequest(body, pinBody) {
   const message = String(body?.message ?? body?.error_description ?? "").toLowerCase();
   const providerCode = Number.isFinite(Number(body?.code)) ? Number(body.code) : null;
+  const providerReason = redactProviderReason(body, pinBody);
   if (message.includes("board")) {
-    return { code: "PINTEREST_INVALID_BOARD", message: "Pinterest rejected the selected board. Refresh the board list and select it again.", providerCode };
+    return { code: "PINTEREST_INVALID_BOARD", message: "Pinterest rejected the selected board. Refresh the board list and select it again.", providerCode, providerReason };
   }
   if (message.includes("image") || message.includes("media") || message.includes("source")) {
-    return { code: "PINTEREST_INVALID_IMAGE", message: "Pinterest could not accept this image. Choose a public JPEG or PNG and try again.", providerCode };
+    return { code: "PINTEREST_INVALID_IMAGE", message: "Pinterest could not accept this image. Choose a public JPEG or PNG and try again.", providerCode, providerReason };
   }
   if (message.includes("link") || message.includes("url")) {
-    return { code: "PINTEREST_INVALID_LINK", message: "Pinterest rejected the destination or image URL.", providerCode };
+    return { code: "PINTEREST_INVALID_LINK", message: "Pinterest rejected the destination or image URL.", providerCode, providerReason };
   }
   if (message.includes("title")) {
-    return { code: "PINTEREST_INVALID_TITLE", message: "Pinterest rejected the Pin title.", providerCode };
+    return { code: "PINTEREST_INVALID_TITLE", message: "Pinterest rejected the Pin title.", providerCode, providerReason };
   }
   if (message.includes("description")) {
-    return { code: "PINTEREST_INVALID_DESCRIPTION", message: "Pinterest rejected the Pin description.", providerCode };
+    return { code: "PINTEREST_INVALID_DESCRIPTION", message: "Pinterest rejected the Pin description.", providerCode, providerReason };
   }
-  return { code: "PINTEREST_INVALID_REQUEST", message: "Pinterest rejected the Pin payload. Try a different image; if it continues, contact support with the request time.", providerCode };
+  return { code: "PINTEREST_INVALID_REQUEST", message: "Pinterest rejected the Pin payload. Try a different image; if it continues, contact support with the request time.", providerCode, providerReason };
 }
 
 function deriveTitle(draft) {
@@ -208,9 +229,11 @@ export const pinterestAdapter = {
     // Squadpitch itself hosts on Cloudinary, retry the failed request once
     // using Pinterest's documented base64 source. A 400 cannot have created
     // a Pin, so this cannot duplicate a successful publication.
+    let attemptedBase64Fallback = false;
     if (res.status === 400 && body.media_source.source_type === "image_url") {
       const fallbackSource = await cloudinaryBase64MediaSource(draft.mediaUrl);
       if (fallbackSource) {
+        attemptedBase64Fallback = true;
         ({ response: res, responseBody: respBody } = await sendPin(token, {
           ...body,
           media_source: fallbackSource,
@@ -254,13 +277,17 @@ export const pinterestAdapter = {
     }
     if (!res.ok) {
       if (res.status === 400) {
-        const classified = classifyPinterestBadRequest(respBody);
+        const classified = classifyPinterestBadRequest(respBody, body);
         throw Object.assign(
           new PinterestPublishError(classified.message, {
             status: 400,
             code: classified.code,
           }),
-          { providerCode: classified.providerCode },
+          {
+            providerCode: classified.providerCode,
+            providerReason: classified.providerReason,
+            attemptedBase64Fallback,
+          },
         );
       }
       throw new PinterestPublishError(

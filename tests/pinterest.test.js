@@ -552,6 +552,31 @@ describe("pinterest.adapter — publishPost", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("records a bounded provider reason without echoed request values", async () => {
+    const { pinterestAdapter } = await import(
+      "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"
+    );
+    const secretCaption = "private customer caption";
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        code: 15,
+        message: `Invalid board 1234567890 for ${secretCaption} at https://example.com/private.jpg`,
+      }),
+    });
+
+    const error = await pinterestAdapter.publishPost({
+      draft: { body: secretCaption, mediaUrl: "https://example.com/private.jpg" },
+      connection: { accessToken: "token", externalAccountId: "1234567890" },
+    }).catch((caught) => caught);
+
+    expect(error.providerReason).toContain("Invalid board [redacted-request-value]");
+    expect(error.providerReason).not.toContain(secretCaption);
+    expect(error.providerReason).not.toContain("example.com");
+    expect(error.attemptedBase64Fallback).toBe(false);
+  });
+
   it("maps Trial-access code 29 to PINTEREST_TRIAL_PRODUCTION_BLOCKED (not AUTH_FAILED)", async () => {
     // Pinterest code 29 = "Apps with Trial access may not create Pins
     // in production". Should NOT be AUTH_FAILED — that would tell the

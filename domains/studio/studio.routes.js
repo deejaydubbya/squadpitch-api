@@ -8,6 +8,7 @@ import { z } from "zod";
 import { prisma } from "../../prisma.js";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
+import { writeAudit } from "../../lib/auditLog.js";
 import { sniffImageMime, sniffVideoMime } from "../../lib/mimeDetect.js";
 import {
   computeAutoScheduleSlots,
