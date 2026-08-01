@@ -16,7 +16,7 @@ Last reviewed: 2026-08-01
 
 - OAuth connection, board listing with pagination, board creation and board selection.
 - Image Pin creation with provider Pin ID persistence.
-- Proactive token refresh and one safe refresh/retry after a Pinterest authorization failure.
+- Proactive token refresh, per-process coalescing plus a cross-machine Redis lease, and one safe refresh/retry after a Pinterest authorization failure.
 
 Video Pins, comments inbox and Pinterest analytics are unavailable. Image Pin publishing remains beta until the controlled live canary below is manually confirmed.
 

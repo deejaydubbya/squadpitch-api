@@ -5,7 +5,14 @@ const refresh = vi.fn();
 vi.mock("../prisma.js", () => ({
   prisma: { channelConnection: { updateMany }, user: { findUnique: vi.fn().mockResolvedValue(null) } },
 }));
-vi.mock("../lib/tokenCrypto.js", () => ({ encryptToken: (value) => `encrypted:${value}` }));
+vi.mock("../lib/tokenCrypto.js", () => ({
+  encryptToken: (value) => `encrypted:${value}`,
+  decryptToken: (value) => String(value).replace(/^encrypted:/, ""),
+}));
+vi.mock("../redis.js", () => ({
+  redisSetNX: vi.fn().mockResolvedValue(true),
+  redisCompareDelete: vi.fn().mockResolvedValue(true),
+}));
 vi.mock("../domains/studio/token-refresh/index.js", () => ({ getRefreshAdapter: () => ({ refresh }) }));
 vi.mock("../domains/notifications/notification.service.js", () => ({ enqueueNotification: vi.fn() }));
 vi.mock("../lib/logger.js", () => ({ logEvent: vi.fn() }));
@@ -26,7 +33,7 @@ describe("Pinterest refresh persistence", () => {
     };
     const first = refreshConnectionToken(connection);
     const second = refreshConnectionToken(connection);
-    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
     const accessExpiry = new Date(Date.now() + 3600_000);
     const refreshExpiry = new Date(Date.now() + 5_000_000);
     resolveRefresh({

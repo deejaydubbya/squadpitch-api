@@ -5,14 +5,18 @@
 //  - refreshConnectionToken(connection) — perform the refresh
 //  - ensureValidAccessToken(connection) — refresh-if-needed wrapper
 
+import { randomUUID } from "node:crypto";
 import { prisma } from "../../prisma.js";
-import { encryptToken } from "../../lib/tokenCrypto.js";
+import { decryptToken, encryptToken } from "../../lib/tokenCrypto.js";
+import { redisCompareDelete, redisSetNX } from "../../redis.js";
 import { getRefreshAdapter } from "./token-refresh/index.js";
 import { enqueueNotification } from "../notifications/notification.service.js";
 import { logEvent } from "../../lib/logger.js";
 
 const EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 const inFlightRefreshes = new Map();
+const REFRESH_LEASE_SECONDS = 30;
+const PEER_REFRESH_WAIT_MS = 20_000;
 
 /**
  * Returns true if the connection's access token is expired or within 5 minutes
@@ -31,13 +35,58 @@ export function isTokenNearExpiry(connection) {
 export async function refreshConnectionToken(connection) {
   const existing = inFlightRefreshes.get(connection.id);
   if (existing) return existing;
-  const refreshPromise = performRefresh(connection).finally(() => {
+  const refreshPromise = coordinateRefresh(connection).finally(() => {
     if (inFlightRefreshes.get(connection.id) === refreshPromise) {
       inFlightRefreshes.delete(connection.id);
     }
   });
   inFlightRefreshes.set(connection.id, refreshPromise);
   return refreshPromise;
+}
+
+async function coordinateRefresh(connection) {
+  const leaseKey = `sp:oauth:refresh-lock:${connection.id}`;
+  const leaseOwner = randomUUID();
+  const acquired = await redisSetNX(leaseKey, leaseOwner, REFRESH_LEASE_SECONDS);
+  if (!acquired) return waitForPeerRefresh(connection);
+  try {
+    return await performRefresh(connection);
+  } finally {
+    await redisCompareDelete(leaseKey, leaseOwner);
+  }
+}
+
+async function waitForPeerRefresh(connection) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < PEER_REFRESH_WAIT_MS) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const row = await prisma.channelConnection.findUnique({
+      where: { id: connection.id },
+    });
+    if (!row) break;
+    if (row.status === "NEEDS_RECONNECT") {
+      throw Object.assign(new Error("Provider authorization must be renewed"), {
+        status: 401,
+        code: connection.channel === "PINTEREST"
+          ? "PINTEREST_RECONNECT_REQUIRED"
+          : "TOKEN_REFRESH_IMPOSSIBLE",
+      });
+    }
+    if (row.lastRefreshAt && new Date(row.lastRefreshAt).getTime() >= startedAt) {
+      return {
+        ...row,
+        accessToken: decryptToken(row.accessToken),
+        refreshToken: row.refreshToken ? decryptToken(row.refreshToken) : null,
+      };
+    }
+  }
+  throw Object.assign(new Error("Token refresh is already in progress"), {
+    status: 503,
+    code: connection.channel === "PINTEREST"
+      ? "PINTEREST_UNAVAILABLE"
+      : "TOKEN_REFRESH_IN_PROGRESS",
+    transient: true,
+  });
 }
 
 async function performRefresh(connection) {

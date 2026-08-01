@@ -83,6 +83,23 @@ export async function redisDel(key) {
   }
 }
 
+/** Delete a lease only when it is still owned by the supplied value. */
+export async function redisCompareDelete(key, expectedValue) {
+  try {
+    const r = getRedis();
+    if (!r) return false;
+    const result = await r.eval(
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+      1,
+      key,
+      expectedValue,
+    );
+    return result === 1;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Create a NEW ioredis connection for BullMQ.
  * BullMQ requires separate connections for Queues vs Workers (Workers use
