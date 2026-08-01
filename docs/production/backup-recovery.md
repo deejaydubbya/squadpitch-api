@@ -31,11 +31,12 @@ The read-only provider audit is recorded in
 [`restore-tests/2026-07-31.md`](restore-tests/2026-07-31.md). Production uses a
 single-node unmanaged Fly Postgres instance in `ord` on one encrypted 3 GB
 volume. Five successful daily volume snapshots were visible with five-day
-retention; the latest was 2026-07-31 06:13:58 UTC. WAL/PITR backups are disabled,
-no earliest PITR point exists, and no restore has been performed. Consequently,
-the table above remains a set of targets: there is no proven end-to-end RPO or
-RTO. The observed snapshot interval is approximately 24 hours, but snapshot
-restorability is still untested.
+retention. The 2026-08-01 06:14:58 UTC snapshot was restored into an isolated
+target and PostgreSQL became ready in 3 minutes 57 seconds; aggregate-only
+validation completed in 8 minutes 5 seconds. WAL/PITR backups remain disabled,
+so no earliest PITR point exists. The measured timings prove this snapshot
+restore path, not full application recovery or the target RPO/RTO. See the
+linked evidence for scope and retained cleanup resources.
 
 ## Inventory and recovery properties
 

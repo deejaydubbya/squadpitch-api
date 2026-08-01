@@ -35,7 +35,7 @@ describe("backup and recovery inventory", () => {
     );
   });
 
-  it("does not treat documentation and snapshots as full recovery readiness", () => {
+  it("does not treat a snapshot restore as PITR or full recovery readiness", () => {
     const output = execFileSync(
       process.execPath,
       ["scripts/backup-recovery/validate.js", "--json"],
@@ -55,8 +55,8 @@ describe("backup and recovery inventory", () => {
       PROVIDER_BACKUP_CONFIGURED: true,
       RECENT_BACKUP_CONFIRMED: true,
       PITR_CONFIRMED: false,
-      RESTORE_TEST_COMPLETED: false,
-      RESTORE_VALIDATION_PASSED: false,
+      RESTORE_TEST_COMPLETED: true,
+      RESTORE_VALIDATION_PASSED: true,
     });
   });
 });
