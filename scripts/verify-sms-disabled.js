@@ -37,3 +37,4 @@ console.log(
   }),
 );
 await queue.close();
+process.exit(0);
