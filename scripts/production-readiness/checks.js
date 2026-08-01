@@ -360,7 +360,10 @@ async function productionCanaryEvidenceChecks(env, fetchImpl) {
       runId: `readiness-${Date.now()}`,
       fetchImpl,
     });
-    return classifyCanaryEvidence(report);
+    return classifyCanaryEvidence(report, {
+      workerAlertDeliveryVerified:
+        env.WORKER_ALERT_DELIVERY_VERIFIED === "true",
+    });
   } catch {
     return ids.map((id) =>
       check(
@@ -376,7 +379,10 @@ async function productionCanaryEvidenceChecks(env, fetchImpl) {
   }
 }
 
-export function classifyCanaryEvidence(report) {
+export function classifyCanaryEvidence(
+  report,
+  { workerAlertDeliveryVerified = false } = {},
+) {
   const byId = new Map(report?.results?.map((item) => [item.id, item]) ?? []);
   const passed = (id) => byId.get(id)?.status === "PASS";
   const item = (id, pass, passMessage, failMessage) =>
@@ -509,9 +515,11 @@ export function classifyCanaryEvidence(report) {
       "WORKER_ALERT_DELIVERY_VERIFIED",
       "Worker health",
       "evidence",
-      "WARN",
+      workerAlertDeliveryVerified ? "PASS" : "WARN",
       "P2",
-      "Synthetic Sentry event delivery awaits dashboard confirmation",
+      workerAlertDeliveryVerified
+        ? "Synthetic Sentry event and alert email delivery were manually confirmed"
+        : "Synthetic Sentry event delivery awaits dashboard confirmation",
       "Confirm the worker-health event in Sentry and its email alert delivery.",
     ),
   ];

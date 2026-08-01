@@ -129,6 +129,23 @@ describe("production readiness checks", () => {
     );
   });
 
+  it("passes worker alert delivery only after explicit manual confirmation", () => {
+    const report = {
+      workspaceId: "synthetic-workspace",
+      results: [],
+    };
+    const checks = classifyCanaryEvidence(report, {
+      workerAlertDeliveryVerified: true,
+    });
+    expect(
+      checks.find((item) => item.id === "WORKER_ALERT_DELIVERY_VERIFIED"),
+    ).toMatchObject({
+      status: "PASS",
+      message:
+        "Synthetic Sentry event and alert email delivery were manually confirmed",
+    });
+  });
+
   it("does not call usable output hosted without provenance and correlation", () => {
     const checks = classifyCanaryEvidence({
       workspaceId: "synthetic-workspace",

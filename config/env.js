@@ -18,11 +18,11 @@ export const env = {
   REDIS_URL: process.env.REDIS_URL,
   ENABLE_WORKERS:
     String(process.env.ENABLE_WORKERS ?? "false").toLowerCase() === "true",
-  PRODUCTION_CANARY_WORKSPACE_ID:
-    process.env.PRODUCTION_CANARY_WORKSPACE_ID,
+  PRODUCTION_CANARY_WORKSPACE_ID: process.env.PRODUCTION_CANARY_WORKSPACE_ID,
   PRODUCTION_CANARY_MEDIA_ENABLED:
-    String(process.env.PRODUCTION_CANARY_MEDIA_ENABLED ?? "false").toLowerCase() ===
-    "true",
+    String(
+      process.env.PRODUCTION_CANARY_MEDIA_ENABLED ?? "false",
+    ).toLowerCase() === "true",
   PRODUCTION_CANARY_SITES_HEALTH_URL:
     process.env.PRODUCTION_CANARY_SITES_HEALTH_URL,
 
@@ -367,6 +367,7 @@ export const env = {
   SENTRY_TRACES_SAMPLE_RATE: process.env.SENTRY_TRACES_SAMPLE_RATE,
   SENTRY_RELEASE: process.env.SENTRY_RELEASE,
   SENTRY_DELIVERY_VERIFIED: process.env.SENTRY_DELIVERY_VERIFIED,
+  WORKER_ALERT_DELIVERY_VERIFIED: process.env.WORKER_ALERT_DELIVERY_VERIFIED,
   AI_BASELINE_METADATA_ENABLED:
     String(
       process.env.AI_BASELINE_METADATA_ENABLED ?? "false",

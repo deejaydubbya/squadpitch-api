@@ -38,14 +38,14 @@ Aggregate inspection covers:
 
 Low-beta thresholds:
 
-| Signal | Warning | Critical |
-| --- | ---: | ---: |
-| Heartbeat age | — | over 5 minutes |
-| Waiting backlog | 25 jobs | 100 jobs |
-| Oldest waiting job | over 5 minutes | over 15 minutes |
-| Failed jobs in 15 minutes | 3 | 10 |
-| Stalled jobs in 15 minutes | any | repeated/operator escalation |
-| Retry exhaustion in 15 minutes | any | repeated/operator escalation |
+| Signal                         |        Warning |                     Critical |
+| ------------------------------ | -------------: | ---------------------------: |
+| Heartbeat age                  |              — |               over 5 minutes |
+| Waiting backlog                |        25 jobs |                     100 jobs |
+| Oldest waiting job             | over 5 minutes |              over 15 minutes |
+| Failed jobs in 15 minutes      |              3 |                           10 |
+| Stalled jobs in 15 minutes     |            any | repeated/operator escalation |
+| Retry exhaustion in 15 minutes |            any | repeated/operator escalation |
 
 Delayed counts and oldest delayed age are reported but do not alert because
 scheduled publishing and polling legitimately use delayed jobs. Revisit these
@@ -94,5 +94,6 @@ not cover it:
 - Trigger: first event, then no more than once every 15 minutes
 - Action: existing production email notification target
 
-Keep `WORKER_ALERT_DELIVERY_VERIFIED` at WARN until the synthetic event and its
-email notification are confirmed in Sentry.
+Set `WORKER_ALERT_DELIVERY_VERIFIED=true` only after the synthetic event and its
+email notification are manually confirmed in Sentry. The readiness verifier then
+reports this evidence as PASS.
