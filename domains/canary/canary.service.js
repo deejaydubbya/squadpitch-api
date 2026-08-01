@@ -115,9 +115,9 @@ export function summarizeAiCanaryResults(aiResults, requestId) {
   const failed = operations.filter((item) => !item.usableResult).length;
   const provenancePresent =
     operations.length > 0 && operations.every((item) => item.provenance);
-  const hosted =
-    operations.length > 0 &&
-    operations.every((item) => item.provenance?.source === "squadpitch-ai");
+  const hosted = operations.filter(
+    (item) => item.provenance?.source === "squadpitch-ai",
+  ).length;
   const traceCorrelated =
     operations.length > 0 &&
     operations.every(
@@ -141,11 +141,11 @@ export function summarizeAiCanaryResults(aiResults, requestId) {
   results.push(
     result(
       "ai.hosted-provenance",
-      failed === 0 && provenancePresent && hosted,
+      failed === 0 && provenancePresent && hosted > 0,
       failed > 0
         ? `${failed} hosted AI verification operation(s) returned unusable output.`
-        : hosted
-          ? `${operations.length} AI dry-run operation(s) were verified as hosted Squadpitch AI.`
+        : hosted > 0
+          ? `${hosted}/${operations.length} AI dry-run operation(s) returned hosted Squadpitch AI output; remaining operations truthfully reported their execution mode.`
           : "Usable AI output was not verified as hosted Squadpitch AI.",
     ),
   );

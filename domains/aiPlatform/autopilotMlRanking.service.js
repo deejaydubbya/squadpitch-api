@@ -99,6 +99,7 @@ export function heuristicRankCandidates(candidates) {
 export async function rankAutopilotOpportunities({
   actor,
   workspaceId,
+  traceId,
   candidates,
   shadowMode = true,
   modelVersion = AUTOPILOT_ML_MODEL_VERSION,
@@ -184,6 +185,7 @@ export async function rankAutopilotOpportunities({
     keyId: serviceAuthKeyId,
     secret: serviceAuthSecret,
     authorizationService,
+    ...(traceId ? { requestId: traceId, traceId } : {}),
   });
   const serviceStartedAt = Date.now();
   const result = await pythonClient({

@@ -189,7 +189,7 @@ export function productionVerificationOperations({
     {
       key: "autopilot_ranking",
       name: "Autopilot Ranking",
-      execute: async (workspaceId) => {
+      execute: async (workspaceId, traceId) => {
         const result = await autopilot({
           actor: VERIFY_ACTOR,
           workspaceId,
@@ -201,6 +201,7 @@ export function productionVerificationOperations({
           featureEnabled: true,
           authorizationService: allowReadOnlyVerification,
           featureFlagEvaluator: async () => true,
+          traceId,
         });
         return {
           usableResult:
@@ -213,7 +214,7 @@ export function productionVerificationOperations({
     {
       key: "brand_quality",
       name: "Brand Quality",
-      execute: async (workspaceId) => {
+      execute: async (workspaceId, traceId) => {
         const result = await brandQuality({
           actor: VERIFY_ACTOR,
           workspaceId,
@@ -228,6 +229,7 @@ export function productionVerificationOperations({
           featureEnabled: true,
           authorizationService: allowReadOnlyVerification,
           featureFlagEvaluator: async () => true,
+          traceId,
         });
         return {
           usableResult:

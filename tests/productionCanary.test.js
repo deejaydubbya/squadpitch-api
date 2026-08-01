@@ -92,6 +92,38 @@ describe("production canary AI evidence", () => {
       results.find((item) => item.id === "ai.fallback-status"),
     ).toMatchObject({ status: "WARN" });
   });
+
+  it("accepts hosted delivery while preserving an explicitly labeled shadow result", () => {
+    const requestId = "production-canary:run-12345678";
+    const results = summarizeAiCanaryResults(
+      [
+        {
+          usableResult: true,
+          provenance: {
+            source: "squadpitch-ai",
+            fallbackUsed: false,
+            traceId: `${requestId}:retrieval`,
+          },
+        },
+        {
+          usableResult: true,
+          provenance: {
+            source: "node",
+            executionMode: "shadow",
+            fallbackUsed: false,
+            traceId: `${requestId}:brand_quality`,
+          },
+        },
+      ],
+      requestId,
+    );
+    expect(
+      results.find((item) => item.id === "ai.hosted-provenance"),
+    ).toMatchObject({ status: "PASS" });
+    expect(
+      results.find((item) => item.id === "ai.trace-correlation"),
+    ).toMatchObject({ status: "PASS" });
+  });
 });
 
 describe("production canary client", () => {

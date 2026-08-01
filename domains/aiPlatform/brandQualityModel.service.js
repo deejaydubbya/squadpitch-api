@@ -209,6 +209,7 @@ export function deterministicBrandQualityFallback({
 export async function scoreBrandContentQuality({
   actor,
   workspaceId,
+  traceId,
   contentId,
   sanitizedText,
   channel,
@@ -309,6 +310,7 @@ export async function scoreBrandContentQuality({
     keyId: serviceAuthKeyId,
     secret: serviceAuthSecret,
     authorizationService,
+    ...(traceId ? { requestId: traceId, traceId } : {}),
   });
   const serviceStartedAt = Date.now();
   const result = await pythonClient({
