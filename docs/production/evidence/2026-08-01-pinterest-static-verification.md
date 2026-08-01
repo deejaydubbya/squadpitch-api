@@ -15,4 +15,13 @@ Pre-deployment evidence:
 - Fly secret-name inspection: Pinterest credential variables exist only on `squadpitch-api`.
 - The prior sandbox switch was detected and a production-host value was staged for the API deployment.
 
+Post-deployment evidence:
+
+- Commit `0bea2a6` passed GitHub CI and the Security/Gitleaks workflow.
+- The Fly deployment completed successfully on `squadpitch-api`.
+- Prisma reports 68 migrations and an up-to-date production schema, including `20260801_add_pinterest_refresh_token_expiry`.
+- Both API machines report passing Fly health checks; `/health` and `/ready` pass with database, Redis, and workers healthy.
+- The deployed `npm run verify:pinterest` result is PASS, including exact redirect URI and production Pinterest API host selection.
+- The broader networked production verifier reports `READY_WITH_WARNINGS`: 32 PASS, 3 WARN, 20 BLOCKED, 0 FAIL. Warnings are the intentionally disabled Twilio/SMS capability; blocked evidence requires the existing authenticated canary inputs and optional worker health URL and is unrelated to Pinterest.
+
 The remaining evidence is a human-controlled OAuth and single image Pin test using the dedicated synthetic Pinterest account. No customer content, credentials, tokens, authorization codes, or user identifiers are recorded here.
