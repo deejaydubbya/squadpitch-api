@@ -27,32 +27,117 @@ import {
   isAccessDeniedMarker,
   ACCESS_DENIED_RESOLVER_REASON,
 } from "./gbpReviewAccessMarker.js";
+import { SMS_AVAILABILITY } from "../sms/smsAvailability.js";
 
 // Per-provider capability map. Drives which actions are
 // theoretically possible for a given Conversation.provider — does
 // NOT decide whether we can actually fire the send today (that's
 // the second pass below, gated on env config + contact channels).
 const PROVIDER_CAPABILITIES = {
-  SQUADSITES:    { supportsEmail: true,  supportsSms: true,  supportsComment: false, supportsDm: false, supportsReview: false },
-  EMAIL:         { supportsEmail: true,  supportsSms: false, supportsComment: false, supportsDm: false, supportsReview: false },
-  SMS:           { supportsEmail: false, supportsSms: true,  supportsComment: false, supportsDm: false, supportsReview: false },
-  FACEBOOK:      { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: true  },
+  SQUADSITES: {
+    supportsEmail: true,
+    supportsSms: true,
+    supportsComment: false,
+    supportsDm: false,
+    supportsReview: false,
+  },
+  EMAIL: {
+    supportsEmail: true,
+    supportsSms: false,
+    supportsComment: false,
+    supportsDm: false,
+    supportsReview: false,
+  },
+  SMS: {
+    supportsEmail: false,
+    supportsSms: true,
+    supportsComment: false,
+    supportsDm: false,
+    supportsReview: false,
+  },
+  FACEBOOK: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: true,
+    supportsDm: true,
+    supportsReview: true,
+  },
   // Instagram DMs are explicitly out of scope — no
   // instagram_business_manage_messages style scope is requested.
   // Public comment reply support stays true (we ask for
   // instagram_business_manage_comments at OAuth time) but the
   // resolver below pins an honest "requires implementation and
   // approval" reason until the IG comment-reply send path is wired.
-  INSTAGRAM:     { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
-  GOOGLE_BUSINESS:{ supportsEmail: false, supportsSms: false, supportsComment: false, supportsDm: false, supportsReview: true  },
-  YOUTUBE:       { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
-  LINKEDIN:      { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
-  X:             { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
-  TIKTOK:        { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: true,  supportsReview: false },
-  THREADS:       { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
-  PINTEREST:     { supportsEmail: false, supportsSms: false, supportsComment: true,  supportsDm: false, supportsReview: false },
-  WEB_CHAT:      { supportsEmail: true,  supportsSms: false, supportsComment: false, supportsDm: true,  supportsReview: false },
-  MANUAL:        { supportsEmail: true,  supportsSms: true,  supportsComment: false, supportsDm: false, supportsReview: false },
+  INSTAGRAM: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: true,
+    supportsDm: false,
+    supportsReview: false,
+  },
+  GOOGLE_BUSINESS: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: false,
+    supportsDm: false,
+    supportsReview: true,
+  },
+  YOUTUBE: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: true,
+    supportsDm: false,
+    supportsReview: false,
+  },
+  LINKEDIN: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: true,
+    supportsDm: true,
+    supportsReview: false,
+  },
+  X: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: true,
+    supportsDm: true,
+    supportsReview: false,
+  },
+  TIKTOK: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: true,
+    supportsDm: true,
+    supportsReview: false,
+  },
+  THREADS: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: true,
+    supportsDm: false,
+    supportsReview: false,
+  },
+  PINTEREST: {
+    supportsEmail: false,
+    supportsSms: false,
+    supportsComment: true,
+    supportsDm: false,
+    supportsReview: false,
+  },
+  WEB_CHAT: {
+    supportsEmail: true,
+    supportsSms: false,
+    supportsComment: false,
+    supportsDm: true,
+    supportsReview: false,
+  },
+  MANUAL: {
+    supportsEmail: true,
+    supportsSms: true,
+    supportsComment: false,
+    supportsDm: false,
+    supportsReview: false,
+  },
 };
 
 function capabilitiesFor(provider) {
@@ -65,9 +150,7 @@ function capabilitiesFor(provider) {
 // whether sending is *possible* so the UI can offer Connect copy.
 function isSmsProviderConfigured() {
   return Boolean(
-    env.TWILIO_ACCOUNT_SID &&
-      env.TWILIO_AUTH_TOKEN &&
-      env.TWILIO_FROM_NUMBER,
+    env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM_NUMBER,
   );
 }
 
@@ -148,7 +231,8 @@ export function getAvailableReplyActions(conversation, extras = {}) {
       // a missing config (workspace hasn't wired Postmark). The UI
       // uses this to choose "Add an email address" vs "Connect email".
       requiresConfig:
-        !cap.available && (cap.reason ?? "").toLowerCase().includes("configured"),
+        !cap.available &&
+        (cap.reason ?? "").toLowerCase().includes("configured"),
     });
   }
 
@@ -163,22 +247,25 @@ export function getAvailableReplyActions(conversation, extras = {}) {
     // first so the UI shows the actionable step.
     const a2pApproved = Boolean(env.SMS_A2P_APPROVED);
     const sendingEnabled = Boolean(env.SMS_SENDING_ENABLED);
-    const blocker = !smsConfigured
-      ? "SMS sending is not configured for this workspace yet."
-      : !a2pApproved
-        ? "Awaiting Twilio business profile / A2P 10DLC approval."
-        : !sendingEnabled
-          ? "SMS sending is not enabled in this workspace."
-          : !hasPhone
-            ? "This lead has no phone number on file."
-            : optedOut
-              ? "Contact has opted out of SMS (replied STOP)."
-              : conversation.spam
-                ? "Conversation is marked as spam — unmark before sending."
-                : null;
+    const blocker =
+      SMS_AVAILABILITY.availability !== "enabled"
+        ? "SMS is temporarily unavailable."
+        : !smsConfigured
+          ? "SMS sending is not configured for this workspace yet."
+          : !a2pApproved
+            ? "Awaiting Twilio business profile / A2P 10DLC approval."
+            : !sendingEnabled
+              ? "SMS sending is not enabled in this workspace."
+              : !hasPhone
+                ? "This lead has no phone number on file."
+                : optedOut
+                  ? "Contact has opted out of SMS (replied STOP)."
+                  : conversation.spam
+                    ? "Conversation is marked as spam — unmark before sending."
+                    : null;
     actions.push({
       action: "SEND_SMS",
-      label: "Send SMS",
+      label: "SMS — Temporarily unavailable",
       available: blocker === null,
       reason: blocker,
       requiresConfig: !smsConfigured || !a2pApproved || !sendingEnabled,
@@ -278,10 +365,10 @@ export function getAvailableReplyActions(conversation, extras = {}) {
       // surface honest reconnect copy otherwise.
       const ig = extras?.instagramConnection ?? null;
       const hasScope =
-        ig
-        && ig.status === "CONNECTED"
-        && Array.isArray(ig.scopes)
-        && ig.scopes.includes("instagram_business_manage_comments");
+        ig &&
+        ig.status === "CONNECTED" &&
+        Array.isArray(ig.scopes) &&
+        ig.scopes.includes("instagram_business_manage_comments");
       if (!ig) {
         reason = "Connect Instagram to reply to comments.";
         requiresConfig = true;
@@ -304,10 +391,10 @@ export function getAvailableReplyActions(conversation, extras = {}) {
       // surface honest reconnect copy otherwise.
       const fb = extras?.facebookConnection ?? null;
       const hasScope =
-        fb
-        && fb.status === "CONNECTED"
-        && Array.isArray(fb.scopes)
-        && fb.scopes.includes("pages_manage_engagement");
+        fb &&
+        fb.status === "CONNECTED" &&
+        Array.isArray(fb.scopes) &&
+        fb.scopes.includes("pages_manage_engagement");
       if (!fb) {
         reason = "Connect Facebook to reply to comments.";
         requiresConfig = true;
@@ -368,13 +455,18 @@ export function getAvailableReplyActions(conversation, extras = {}) {
     if (provider === "GOOGLE_BUSINESS") {
       const gbp = extras?.gbpConnection ?? null;
       let available = false;
-      let reason = "Connect a Google Business Profile location to reply to reviews.";
+      let reason =
+        "Connect a Google Business Profile location to reply to reviews.";
       let requiresConfig = true;
       if (gbp && gbp.status === "CONNECTED") {
-        const hasLocation = typeof gbp.externalAccountId === "string" &&
+        const hasLocation =
+          typeof gbp.externalAccountId === "string" &&
           gbp.externalAccountId.includes("/locations/");
-        const hasScope = Array.isArray(gbp.scopes) &&
-          gbp.scopes.includes("https://www.googleapis.com/auth/business.manage");
+        const hasScope =
+          Array.isArray(gbp.scopes) &&
+          gbp.scopes.includes(
+            "https://www.googleapis.com/auth/business.manage",
+          );
         // The poller or a prior reply attempt may have learned
         // that Google hasn't allowlisted this project for the
         // legacy reviews API. The marker takes precedence over
@@ -389,11 +481,13 @@ export function getAvailableReplyActions(conversation, extras = {}) {
           requiresConfig = false;
         } else if (!hasLocation) {
           available = false;
-          reason = "Pick a Google Business Profile location to reply to reviews.";
+          reason =
+            "Pick a Google Business Profile location to reply to reviews.";
           requiresConfig = true;
         } else if (!hasScope) {
           available = false;
-          reason = "Google Business Profile is connected, but review reply permission is not available.";
+          reason =
+            "Google Business Profile is connected, but review reply permission is not available.";
           requiresConfig = true;
         } else {
           available = true;
@@ -414,7 +508,8 @@ export function getAvailableReplyActions(conversation, extras = {}) {
         label: "Reply to review",
         available: false,
         reason:
-          scopeBlocker ?? `${humanizeProvider(provider)} review replies aren't connected yet.`,
+          scopeBlocker ??
+          `${humanizeProvider(provider)} review replies aren't connected yet.`,
         requiresConfig: true,
       });
     }

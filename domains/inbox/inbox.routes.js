@@ -32,6 +32,10 @@ import { sendFacebookCommentReply } from "./inbox.outbound.facebook.service.js";
 import { sendInstagramCommentReply } from "./inbox.outbound.instagram.service.js";
 import { sendInboxSms } from "./inbox.outbound.sms.service.js";
 import { isStopRequest, twilioDeliveryFailure } from "./twilioSafety.js";
+import {
+  SMS_AVAILABILITY,
+  recordBlockedSmsAttempt,
+} from "../sms/smsAvailability.js";
 
 export const inboxRouter = express.Router();
 
@@ -454,6 +458,14 @@ inboxRouter.post(
       );
     }
 
+    if (SMS_AVAILABILITY.availability !== "enabled") {
+      recordBlockedSmsAttempt("inbound");
+      res.set("Content-Type", "text/xml");
+      return res
+        .status(200)
+        .send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    }
+
     try {
       const from = typeof req.body?.From === "string" ? req.body.From : null;
       if (from && isStopRequest(req.body)) {
@@ -526,6 +538,11 @@ inboxRouter.post(
           "INVALID_SIGNATURE",
           "Invalid Twilio signature.",
         );
+      }
+
+      if (SMS_AVAILABILITY.availability !== "enabled") {
+        recordBlockedSmsAttempt("status");
+        return res.status(204).send();
       }
 
       const sid =

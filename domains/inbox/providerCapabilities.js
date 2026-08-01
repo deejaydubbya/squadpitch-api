@@ -66,24 +66,24 @@ export const providerCapabilities = {
   },
 
   SMS: {
-    label: "SMS (Twilio)",
+    label: "SMS — Temporarily unavailable",
     ingestComments: false,
-    ingestDMs: true, // possible: Twilio inbound SMS webhook
+    ingestDMs: false,
     ingestReviews: false,
     sendPublicReply: false,
-    sendDM: true, // possible: Twilio Programmable Messaging
+    sendDM: false,
     sendReview: false,
-    webhooks: true,
+    webhooks: false,
     polling: false,
     currentScopes: [
-      "TWILIO_ACCOUNT_SID",
       "TWILIO_AUTH_TOKEN",
-      "TWILIO_MESSAGING_SERVICE_SID",
+      "TWILIO_INBOUND_WEBHOOK_URL",
+      "TWILIO_STATUS_CALLBACK_URL",
     ],
     missingScopes: [],
     appReviewStatus: "not-submitted",
     notes:
-      "Outbound, signed inbound/status webhooks, STOP persistence, idempotency, and delivery failure tracking are wired. Production remains blocked until the correct A2P/ISV registration is approved and both SMS gates are enabled.",
+      "SMS is intentionally unavailable while the provider account is suspended. Outbound execution and inbound side effects are blocked server-side.",
   },
 
   FACEBOOK: {

@@ -15,14 +15,19 @@ import {
   unsubscribePush,
   getPushSubscriptions,
 } from "./notification.service.js";
-import { sendSms } from "./providers/twilioSmsProvider.js";
 import { sendEmail } from "./providers/postmarkEmailProvider.js";
 import { env } from "../../config/env.js";
+import { SMS_AVAILABILITY } from "../sms/smsAvailability.js";
+import { sendError } from "../../lib/apiErrors.js";
 
 export const notificationRouter = express.Router();
 export const notificationPublicRouter = express.Router();
 
 const BASE = "/api/v1/notifications";
+
+notificationRouter.get(`${BASE}/capabilities/sms`, (_req, res) => {
+  res.json({ sms: SMS_AVAILABILITY });
+});
 
 // ── Public (no auth) ──────────────────────────────────────────────────
 
@@ -43,10 +48,17 @@ notificationRouter.get(`${BASE}/preferences`, async (req, res, next) => {
 // PUT preferences
 notificationRouter.put(`${BASE}/preferences`, async (req, res, next) => {
   try {
-    const { emailEnabled, smsEnabled, pushEnabled, digestEnabled, phoneNumber, preferencesJson } = req.body;
+    const {
+      emailEnabled,
+      smsEnabled,
+      pushEnabled,
+      digestEnabled,
+      phoneNumber,
+      preferencesJson,
+    } = req.body;
     const data = {};
     if (typeof emailEnabled === "boolean") data.emailEnabled = emailEnabled;
-    if (typeof smsEnabled === "boolean") data.smsEnabled = smsEnabled;
+    if (typeof smsEnabled === "boolean") data.smsEnabled = false;
     if (typeof pushEnabled === "boolean") data.pushEnabled = pushEnabled;
     if (typeof digestEnabled === "boolean") data.digestEnabled = digestEnabled;
     if (phoneNumber !== undefined) data.phoneNumber = phoneNumber || null;
@@ -82,7 +94,11 @@ notificationRouter.get(`${BASE}/inbox`, async (req, res, next) => {
     const filter = ["all", "unread", "read"].includes(req.query.filter)
       ? req.query.filter
       : "all";
-    const result = await getInboxNotifications(req.user.id, { limit, offset, filter });
+    const result = await getInboxNotifications(req.user.id, {
+      limit,
+      offset,
+      filter,
+    });
     res.json(result);
   } catch (err) {
     next(err);
@@ -168,12 +184,16 @@ notificationRouter.get(`${BASE}/push/subscriptions`, async (req, res, next) => {
 
 notificationRouter.post(`${BASE}/test-email`, async (req, res, next) => {
   try {
-    const user = await (await import("../../prisma.js")).prisma.user.findUnique({
+    const user = await (
+      await import("../../prisma.js")
+    ).prisma.user.findUnique({
       where: { id: req.user.id },
       select: { email: true },
     });
     if (!user?.email) {
-      return res.status(400).json({ error: "No email address on your account" });
+      return res
+        .status(400)
+        .json({ error: "No email address on your account" });
     }
     const result = await sendEmail({
       to: user.email,
@@ -181,7 +201,9 @@ notificationRouter.post(`${BASE}/test-email`, async (req, res, next) => {
       html: `<p>This is a test notification from Squadpitch. Your email notifications are working!</p>`,
     });
     if (!result) {
-      return res.status(500).json({ error: "Email provider unavailable — check Postmark configuration" });
+      return res.status(500).json({
+        error: "Email provider unavailable — check Postmark configuration",
+      });
     }
     res.json({ ok: true, messageId: result.messageId });
   } catch (err) {
@@ -192,22 +214,12 @@ notificationRouter.post(`${BASE}/test-email`, async (req, res, next) => {
 // ── Test SMS ─────────────────────────────────────────────────────────
 
 notificationRouter.post(`${BASE}/test-sms`, async (req, res, next) => {
-  try {
-    const prefs = await getPreferences(req.user.id);
-    if (!prefs.phoneNumber) {
-      return res.status(400).json({ error: "No phone number configured. Add one in notification settings." });
-    }
-    const result = await sendSms({
-      to: prefs.phoneNumber,
-      body: "Squadpitch: Test SMS — your text notifications are working!",
-    });
-    if (!result) {
-      return res.status(500).json({ error: "SMS provider unavailable — check Twilio configuration" });
-    }
-    res.json({ ok: true, sid: result.sid });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  return sendError(
+    res,
+    503,
+    "SMS_UNAVAILABLE",
+    SMS_AVAILABILITY.customerMessage,
+  );
 });
 
 // ── Activity feed ─────────────────────────────────────────────────────
@@ -217,7 +229,11 @@ notificationRouter.get("/api/v1/activity", async (req, res, next) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
     const offset = parseInt(req.query.offset) || 0;
     const clientId = req.query.clientId || undefined;
-    const result = await getActivityFeed(req.user.id, { limit, offset, clientId });
+    const result = await getActivityFeed(req.user.id, {
+      limit,
+      offset,
+      clientId,
+    });
     res.json(result);
   } catch (err) {
     next(err);

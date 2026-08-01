@@ -111,7 +111,22 @@ beforeEach(() => {
   prismaMock = createPrismaMock();
 });
 
-describe("sendInboxSms — gating", () => {
+describe("sendInboxSms — suspended provider", () => {
+  it("always returns SMS_UNAVAILABLE before DB, billing, queue, or provider work", async () => {
+    await expect(
+      sendInboxSms(CLIENT_ID, CONV_ID, USER_ID, { body: "hi" }),
+    ).rejects.toMatchObject({
+      code: "SMS_UNAVAILABLE",
+      status: 503,
+      message: "SMS is temporarily unavailable.",
+    });
+    expect(prismaMock.conversation.findFirst).not.toHaveBeenCalled();
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(twilioMock.sendSms).not.toHaveBeenCalled();
+  });
+});
+
+describe.skip("sendInboxSms — preserved reactivation gates", () => {
   it("refuses when SMS_SENDING_ENABLED is false", async () => {
     envOverrides.SMS_SENDING_ENABLED = false;
     await expect(
@@ -165,7 +180,7 @@ describe("sendInboxSms — gating", () => {
   });
 });
 
-describe("sendInboxSms — happy path + footer", () => {
+describe.skip("sendInboxSms — preserved happy path + footer", () => {
   it("appends 'Reply STOP to opt out.' on the first send to a contact", async () => {
     await sendInboxSms(CLIENT_ID, CONV_ID, USER_ID, {
       body: "Thanks for the message!",
@@ -221,7 +236,7 @@ describe("sendInboxSms — happy path + footer", () => {
   });
 });
 
-describe("sendInboxSms — idempotency + failure", () => {
+describe.skip("sendInboxSms — preserved idempotency + failure", () => {
   it("returns the existing message on a repeated idempotency-key send (no extra Twilio call)", async () => {
     const opts = { body: "hi", idempotencyKey: "key-1" };
     const first = await sendInboxSms(CLIENT_ID, CONV_ID, USER_ID, opts);

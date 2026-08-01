@@ -27,9 +27,8 @@ vi.mock("../config/env.js", () => ({
   },
 }));
 
-const { getAvailableReplyActions } = await import(
-  "../domains/inbox/inbox.replyActions.js"
-);
+const { getAvailableReplyActions } =
+  await import("../domains/inbox/inbox.replyActions.js");
 
 function findAction(actions, id) {
   return actions.find((a) => a.action === id) ?? null;
@@ -114,7 +113,7 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     expect(sms).toBeTruthy();
     expect(sms.available).toBe(false);
     expect(sms.requiresConfig).toBe(true);
-    expect(sms.reason).toMatch(/not configured/i);
+    expect(sms.reason).toMatch(/temporarily unavailable/i);
   });
 
   it("offers SEND_SMS as available-blocked when Twilio is wired but contact has no phone", () => {
@@ -131,7 +130,7 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     const sms = findAction(actions, "SEND_SMS");
     expect(sms.available).toBe(false);
     expect(sms.requiresConfig).toBe(false);
-    expect(sms.reason).toMatch(/no phone number/i);
+    expect(sms.reason).toMatch(/temporarily unavailable/i);
   });
 
   // spinstr13 — A2P gate. Twilio creds + phone in place, but the
@@ -144,9 +143,12 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     envOverrides.TWILIO_FROM_NUMBER = "+15550000000";
     envOverrides.SMS_A2P_APPROVED = false;
     envOverrides.SMS_SENDING_ENABLED = true;
-    const sms = findAction(getAvailableReplyActions(makeConversation()), "SEND_SMS");
+    const sms = findAction(
+      getAvailableReplyActions(makeConversation()),
+      "SEND_SMS",
+    );
     expect(sms.available).toBe(false);
-    expect(sms.reason).toMatch(/Awaiting Twilio business profile \/ A2P 10DLC approval/i);
+    expect(sms.reason).toMatch(/temporarily unavailable/i);
     expect(sms.requiresConfig).toBe(true);
   });
 
@@ -156,9 +158,12 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     envOverrides.TWILIO_FROM_NUMBER = "+15550000000";
     envOverrides.SMS_A2P_APPROVED = true;
     envOverrides.SMS_SENDING_ENABLED = false;
-    const sms = findAction(getAvailableReplyActions(makeConversation()), "SEND_SMS");
+    const sms = findAction(
+      getAvailableReplyActions(makeConversation()),
+      "SEND_SMS",
+    );
     expect(sms.available).toBe(false);
-    expect(sms.reason).toMatch(/sms sending is not enabled/i);
+    expect(sms.reason).toMatch(/temporarily unavailable/i);
   });
 
   it("SEND_SMS short-circuits when contact has opted out of SMS", () => {
@@ -171,18 +176,21 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     conv.contact.enrichmentJson = { smsOptOut: true };
     const sms = findAction(getAvailableReplyActions(conv), "SEND_SMS");
     expect(sms.available).toBe(false);
-    expect(sms.reason).toMatch(/opted out/i);
+    expect(sms.reason).toMatch(/temporarily unavailable/i);
   });
 
-  it("SEND_SMS flips to available with creds + A2P + sending + phone + no opt-out", () => {
+  it("keeps SEND_SMS unavailable even with stale enabled flags and credentials", () => {
     envOverrides.TWILIO_ACCOUNT_SID = "AC123";
     envOverrides.TWILIO_AUTH_TOKEN = "auth";
     envOverrides.TWILIO_FROM_NUMBER = "+15550000000";
     envOverrides.SMS_A2P_APPROVED = true;
     envOverrides.SMS_SENDING_ENABLED = true;
-    const sms = findAction(getAvailableReplyActions(makeConversation()), "SEND_SMS");
-    expect(sms.available).toBe(true);
-    expect(sms.reason).toBeNull();
+    const sms = findAction(
+      getAvailableReplyActions(makeConversation()),
+      "SEND_SMS",
+    );
+    expect(sms.available).toBe(false);
+    expect(sms.reason).toMatch(/temporarily unavailable/i);
   });
 
   it("does NOT surface REPLY_PUBLIC_COMMENT / REPLY_DM / REPLY_REVIEW for SquadSites", () => {
@@ -303,7 +311,12 @@ describe("getAvailableReplyActions — Facebook conversation", () => {
       phone: null,
       externalThreadId: null,
       messages: [
-        { id: "m-1", party: "CONTACT", externalMessageId: null, sourceUrl: null },
+        {
+          id: "m-1",
+          party: "CONTACT",
+          externalMessageId: null,
+          sourceUrl: null,
+        },
       ],
     });
     const actions = getAvailableReplyActions(conv);
@@ -337,7 +350,11 @@ describe("getAvailableReplyActions — Facebook conversation", () => {
 
 describe("getAvailableReplyActions — Google Business / Instagram / YouTube", () => {
   it("Google Business gets REPLY_REVIEW but not comment/DM", () => {
-    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const conv = makeConversation({
+      provider: "GOOGLE_BUSINESS",
+      email: null,
+      phone: null,
+    });
     const actions = getAvailableReplyActions(conv);
     expect(findAction(actions, "REPLY_REVIEW")).toBeTruthy();
     expect(findAction(actions, "REPLY_PUBLIC_COMMENT")).toBeNull();
@@ -346,7 +363,11 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
   });
 
   it("Google Business REPLY_REVIEW flips to available when GBP connection has location + business.manage", () => {
-    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const conv = makeConversation({
+      provider: "GOOGLE_BUSINESS",
+      email: null,
+      phone: null,
+    });
     const actions = getAvailableReplyActions(conv, {
       gbpConnection: {
         status: "CONNECTED",
@@ -360,7 +381,11 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
   });
 
   it("Google Business REPLY_REVIEW stays disabled when location picker hasn't run", () => {
-    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const conv = makeConversation({
+      provider: "GOOGLE_BUSINESS",
+      email: null,
+      phone: null,
+    });
     const actions = getAvailableReplyActions(conv, {
       gbpConnection: {
         status: "CONNECTED",
@@ -374,7 +399,11 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
   });
 
   it("Google Business REPLY_REVIEW stays disabled when business.manage scope is missing", () => {
-    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const conv = makeConversation({
+      provider: "GOOGLE_BUSINESS",
+      email: null,
+      phone: null,
+    });
     const actions = getAvailableReplyActions(conv, {
       gbpConnection: {
         status: "CONNECTED",
@@ -393,7 +422,11 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
   // Better to refuse pre-flight than mark available and have the
   // send fail at runtime.
   it("Google Business REPLY_REVIEW stays disabled when the access-denied marker is set", () => {
-    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const conv = makeConversation({
+      provider: "GOOGLE_BUSINESS",
+      email: null,
+      phone: null,
+    });
     const actions = getAvailableReplyActions(conv, {
       gbpConnection: {
         status: "CONNECTED",
@@ -421,7 +454,11 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
   // allowlisting. The resolver MUST NOT infer review readiness
   // from connection-only state.
   it("a fully-configured GBP connection does not imply review readiness if marker is set", () => {
-    const conv = makeConversation({ provider: "GOOGLE_BUSINESS", email: null, phone: null });
+    const conv = makeConversation({
+      provider: "GOOGLE_BUSINESS",
+      email: null,
+      phone: null,
+    });
     const withMarker = getAvailableReplyActions(conv, {
       gbpConnection: {
         status: "CONNECTED",
@@ -444,7 +481,11 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
   });
 
   it("YouTube gets REPLY_PUBLIC_COMMENT but no DM or review", () => {
-    const conv = makeConversation({ provider: "YOUTUBE", email: null, phone: null });
+    const conv = makeConversation({
+      provider: "YOUTUBE",
+      email: null,
+      phone: null,
+    });
     const actions = getAvailableReplyActions(conv);
     expect(findAction(actions, "REPLY_PUBLIC_COMMENT")).toBeTruthy();
     expect(findAction(actions, "REPLY_DM")).toBeNull();
@@ -461,9 +502,14 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       provider: "YOUTUBE",
       email: null,
       phone: null,
-      messages: [{ party: "CONTACT", externalMessageId: null, sourceUrl: null }],
+      messages: [
+        { party: "CONTACT", externalMessageId: null, sourceUrl: null },
+      ],
     });
-    const action = findAction(getAvailableReplyActions(conv), "REPLY_PUBLIC_COMMENT");
+    const action = findAction(
+      getAvailableReplyActions(conv),
+      "REPLY_PUBLIC_COMMENT",
+    );
     expect(action.available).toBe(false);
     expect(action.reason).toMatch(/no public comment to reply to/i);
   });
@@ -473,9 +519,14 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       provider: "YOUTUBE",
       email: null,
       phone: null,
-      messages: [{ party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null }],
+      messages: [
+        { party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null },
+      ],
     });
-    const action = findAction(getAvailableReplyActions(conv), "REPLY_PUBLIC_COMMENT");
+    const action = findAction(
+      getAvailableReplyActions(conv),
+      "REPLY_PUBLIC_COMMENT",
+    );
     expect(action.available).toBe(false);
     expect(action.reason).toMatch(/Connect YouTube/i);
   });
@@ -485,7 +536,9 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       provider: "YOUTUBE",
       email: null,
       phone: null,
-      messages: [{ party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null }],
+      messages: [
+        { party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null },
+      ],
     });
     const action = findAction(
       getAvailableReplyActions(conv, {
@@ -509,7 +562,9 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       provider: "YOUTUBE",
       email: null,
       phone: null,
-      messages: [{ party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null }],
+      messages: [
+        { party: "CONTACT", externalMessageId: "Ugxyz", sourceUrl: null },
+      ],
     });
     const action = findAction(
       getAvailableReplyActions(conv, {
@@ -538,11 +593,22 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       provider: "LINKEDIN",
       email: null,
       phone: null,
-      messages: [{ party: "CONTACT", externalMessageId: "urn:li:comment:1", sourceUrl: null }],
+      messages: [
+        {
+          party: "CONTACT",
+          externalMessageId: "urn:li:comment:1",
+          sourceUrl: null,
+        },
+      ],
     });
-    const action = findAction(getAvailableReplyActions(conv), "REPLY_PUBLIC_COMMENT");
+    const action = findAction(
+      getAvailableReplyActions(conv),
+      "REPLY_PUBLIC_COMMENT",
+    );
     expect(action.available).toBe(false);
-    expect(action.reason).toMatch(/Pending LinkedIn Community Management API approval/i);
+    expect(action.reason).toMatch(
+      /Pending LinkedIn Community Management API approval/i,
+    );
     expect(action.requiresConfig).toBe(false);
   });
 
@@ -557,7 +623,9 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       provider: "THREADS",
       email: null,
       phone: null,
-      messages: [{ party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null }],
+      messages: [
+        { party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null },
+      ],
     });
     const action = findAction(
       getAvailableReplyActions(conv, {
@@ -579,7 +647,9 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       provider: "THREADS",
       email: null,
       phone: null,
-      messages: [{ party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null }],
+      messages: [
+        { party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null },
+      ],
     });
     const action = findAction(
       getAvailableReplyActions(conv, {
@@ -601,7 +671,9 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       provider: "THREADS",
       email: null,
       phone: null,
-      messages: [{ party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null }],
+      messages: [
+        { party: "CONTACT", externalMessageId: "ti_reply_1", sourceUrl: null },
+      ],
     });
     const action = findAction(
       getAvailableReplyActions(conv, {
@@ -630,7 +702,9 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
     });
     const action = findAction(getAvailableReplyActions(conv), "REPLY_DM");
     expect(action.available).toBe(false);
-    expect(action.reason).toMatch(/Pending LinkedIn Community Management API approval/i);
+    expect(action.reason).toMatch(
+      /Pending LinkedIn Community Management API approval/i,
+    );
   });
 
   it("Instagram gets comment only — DMs out of scope; defaults to Connect-Instagram copy when no connection", () => {
@@ -644,7 +718,11 @@ describe("getAvailableReplyActions — Google Business / Instagram / YouTube", (
       email: null,
       phone: null,
       messages: [
-        { party: "CONTACT", externalMessageId: "ig_comment_17856789012345678", sourceUrl: null },
+        {
+          party: "CONTACT",
+          externalMessageId: "ig_comment_17856789012345678",
+          sourceUrl: null,
+        },
       ],
     });
     const actions = getAvailableReplyActions(conv);

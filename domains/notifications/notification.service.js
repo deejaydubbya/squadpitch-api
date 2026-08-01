@@ -15,9 +15,14 @@
 import { prisma } from "../../prisma.js";
 import { getNotificationQueue } from "../../lib/queues.js";
 import { inAppTemplates } from "./inAppTemplates.js";
-import { activityTemplates, NOTIFICATION_EVENTS, ACTIVITY_EVENTS } from "./activityTemplates.js";
+import {
+  activityTemplates,
+  NOTIFICATION_EVENTS,
+  ACTIVITY_EVENTS,
+} from "./activityTemplates.js";
 import { PUSH_EVENTS, buildPushPayload } from "./pushTemplates.js";
 import { dispatchEvent as dispatchIntegrationEvent } from "../integrations/integration.service.js";
+import { SMS_AVAILABILITY } from "../sms/smsAvailability.js";
 
 // Notification event types. NEW_LEAD was added when SquadInbox
 // shipped — fired by the FormSubmission intake when a new
@@ -52,24 +57,28 @@ export async function getPreferences(userId) {
       data: { userId },
     });
   }
-  return prefs;
+  return { ...prefs, smsEnabled: false };
 }
 
 /**
  * Update notification preferences.
  */
 export async function updatePreferences(userId, data) {
+  const safeData = { ...data, smsEnabled: false };
   return prisma.notificationPreference.upsert({
     where: { userId },
-    create: { userId, ...data },
-    update: data,
+    create: { userId, ...safeData },
+    update: safeData,
   });
 }
 
 /**
  * Get notification logs for a user.
  */
-export async function getNotificationLogs(userId, { limit = 50, offset = 0 } = {}) {
+export async function getNotificationLogs(
+  userId,
+  { limit = 50, offset = 0 } = {},
+) {
   return prisma.notificationLog.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
@@ -141,14 +150,27 @@ export async function enqueueNotification({
     // 3. Create in-app notification (unless user disabled this event for in-app)
     const inAppKey = `INAPP_${eventType}`;
     if (eventPrefs[inAppKey] !== false) {
-      createInAppNotification({ userId, eventType, payload, resourceType, resourceId }).catch((e) =>
-        console.error(`[NOTIFICATION] in-app create error: ${e.message}`)
+      createInAppNotification({
+        userId,
+        eventType,
+        payload,
+        resourceType,
+        resourceId,
+      }).catch((e) =>
+        console.error(`[NOTIFICATION] in-app create error: ${e.message}`),
       );
     }
 
     // 4. Always create activity event (audit trail, not user-dismissable)
-    createActivityEvent({ userId, clientId: payload?.clientId, eventType, payload, resourceType, resourceId }).catch((e) =>
-      console.error(`[NOTIFICATION] activity create error: ${e.message}`)
+    createActivityEvent({
+      userId,
+      clientId: payload?.clientId,
+      eventType,
+      payload,
+      resourceType,
+      resourceId,
+    }).catch((e) =>
+      console.error(`[NOTIFICATION] activity create error: ${e.message}`),
     );
 
     // 5. Check if this event type is globally disabled (skips email/SMS/push/slack/webhook)
@@ -202,6 +224,7 @@ export async function enqueueNotification({
 
     // 6. Enqueue SMS job (critical events only)
     if (
+      SMS_AVAILABILITY.availability === "enabled" &&
       prefs.smsEnabled &&
       prefs.phoneNumber &&
       SMS_EVENTS.has(eventType)
@@ -240,7 +263,7 @@ export async function enqueueNotification({
       const pushPrefKey = `PUSH_${eventType}`;
       if (eventPrefs[pushPrefKey] !== false) {
         enqueuePushNotifications({ userId, eventType, payload }).catch((e) =>
-          console.error(`[NOTIFICATION] push enqueue error: ${e.message}`)
+          console.error(`[NOTIFICATION] push enqueue error: ${e.message}`),
         );
       }
     }
@@ -255,7 +278,13 @@ export async function enqueueNotification({
 
 // ── In-app notifications ───────────────────────────────────────────────
 
-async function createInAppNotification({ userId, eventType, payload, resourceType, resourceId }) {
+async function createInAppNotification({
+  userId,
+  eventType,
+  payload,
+  resourceType,
+  resourceId,
+}) {
   const templateFn = inAppTemplates[eventType];
   if (!templateFn) return;
   const { title, message, linkUrl } = templateFn(payload || {});
@@ -273,7 +302,14 @@ async function createInAppNotification({ userId, eventType, payload, resourceTyp
   });
 }
 
-async function createActivityEvent({ userId, clientId, eventType, payload, resourceType, resourceId }) {
+async function createActivityEvent({
+  userId,
+  clientId,
+  eventType,
+  payload,
+  resourceType,
+  resourceId,
+}) {
   const templateFn = activityTemplates[eventType];
   if (!templateFn) return;
   const { title, description, icon, linkUrl } = templateFn(payload || {});
@@ -298,13 +334,27 @@ async function createActivityEvent({ userId, clientId, eventType, payload, resou
  * For events like DRAFT_CREATED, DRAFT_APPROVED, etc.
  * Safe to call fire-and-forget.
  */
-export async function recordActivity({ userId, clientId, eventType, payload, resourceType, resourceId }) {
+export async function recordActivity({
+  userId,
+  clientId,
+  eventType,
+  payload,
+  resourceType,
+  resourceId,
+}) {
   try {
     if (!ACTIVITY_EVENTS.has(eventType)) {
       console.warn(`[ACTIVITY] Unknown event type: ${eventType}`);
       return;
     }
-    await createActivityEvent({ userId, clientId, eventType, payload, resourceType, resourceId });
+    await createActivityEvent({
+      userId,
+      clientId,
+      eventType,
+      payload,
+      resourceType,
+      resourceId,
+    });
   } catch (err) {
     console.error(`[ACTIVITY] recordActivity error: ${err.message}`);
   }
@@ -312,7 +362,10 @@ export async function recordActivity({ userId, clientId, eventType, payload, res
 
 // ── Inbox queries ──────────────────────────────────────────────────────
 
-export async function getInboxNotifications(userId, { limit = 20, offset = 0, filter = "all" } = {}) {
+export async function getInboxNotifications(
+  userId,
+  { limit = 20, offset = 0, filter = "all" } = {},
+) {
   const where = { userId };
   if (filter === "unread") where.read = false;
   else if (filter === "read") where.read = true;
@@ -380,7 +433,10 @@ async function enqueuePushNotifications({ userId, eventType, payload }) {
   }
 }
 
-export async function subscribePush(userId, { endpoint, p256dh, auth, userAgent }) {
+export async function subscribePush(
+  userId,
+  { endpoint, p256dh, auth, userAgent },
+) {
   await prisma.pushSubscription.upsert({
     where: { userId_endpoint: { userId, endpoint } },
     create: { userId, endpoint, p256dh, auth, userAgent: userAgent ?? null },
@@ -419,13 +475,16 @@ export async function getPushSubscriptions(userId) {
 
 function dispatchToIntegrations({ userId, eventType, payload }) {
   dispatchIntegrationEvent({ userId, eventType, payload }).catch((e) =>
-    console.error(`[NOTIFICATION] integration dispatch error: ${e.message}`)
+    console.error(`[NOTIFICATION] integration dispatch error: ${e.message}`),
   );
 }
 
 // ── Activity feed ──────────────────────────────────────────────────────
 
-export async function getActivityFeed(userId, { limit = 20, offset = 0, clientId } = {}) {
+export async function getActivityFeed(
+  userId,
+  { limit = 20, offset = 0, clientId } = {},
+) {
   const where = { userId };
   if (clientId) where.clientId = clientId;
 

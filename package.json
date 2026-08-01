@@ -28,6 +28,7 @@
     "verify:worker-health:json": "node scripts/worker-health/index.js --json",
     "verify:worker-roundtrip": "node scripts/worker-health/index.js",
     "verify:worker-alert": "node scripts/verify-worker-alert.js",
+    "verify:sms-disabled": "node scripts/verify-sms-disabled.js",
     "stripe:migration:inspect": "node scripts/stripe-migration/inspect.js",
     "stripe:migration:inspect:json": "node scripts/stripe-migration/inspect.js --json",
     "stripe:migration:reset": "node scripts/stripe-migration/reset.js",

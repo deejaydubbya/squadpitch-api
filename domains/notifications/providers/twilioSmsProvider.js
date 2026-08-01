@@ -2,6 +2,10 @@
 // Falls back to console logging if Twilio credentials are not configured.
 
 import { env } from "../../../config/env.js";
+import {
+  assertSmsAvailable,
+  recordBlockedSmsAttempt,
+} from "../../sms/smsAvailability.js";
 
 let twilioClient = null;
 
@@ -29,6 +33,8 @@ async function getTwilio() {
  * @returns {{ sid: string } | null}
  */
 export async function sendSms({ to, body }) {
+  recordBlockedSmsAttempt("outbound");
+  assertSmsAvailable();
   if (!env.SMS_SENDING_ENABLED || !env.SMS_A2P_APPROVED) {
     return null;
   }

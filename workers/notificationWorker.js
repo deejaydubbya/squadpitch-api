@@ -27,7 +27,10 @@ import { sendSms } from "../domains/notifications/providers/twilioSmsProvider.js
 import { sendPush } from "../domains/notifications/providers/webPushProvider.js";
 import { sendSlackNotification } from "../domains/notifications/providers/slackWebhookProvider.js";
 import { deliverWebhook } from "../domains/notifications/providers/webhookProvider.js";
-import { templates, smsTemplates } from "../domains/notifications/emailTemplates.js";
+import {
+  templates,
+  smsTemplates,
+} from "../domains/notifications/emailTemplates.js";
 import { createNotionPage } from "../domains/integrations/providers/notionProvider.js";
 import { appendSheetRow } from "../domains/integrations/providers/sheetsProvider.js";
 import { sendDiscordNotification } from "../domains/integrations/providers/discordProvider.js";
@@ -36,8 +39,12 @@ import { createDraftCampaign } from "../domains/integrations/providers/mailchimp
 import { createDraftBroadcast } from "../domains/integrations/providers/convertkitProvider.js";
 import { createDraftPost } from "../domains/integrations/providers/wordpressProvider.js";
 import { createDraftItem } from "../domains/integrations/providers/webflowProvider.js";
+import {
+  SMS_AVAILABILITY,
+  recordBlockedSmsAttempt,
+} from "../domains/sms/smsAvailability.js";
 
-async function processJob(job) {
+export async function processJob(job) {
   const { name, data } = job;
 
   if (name === "send-notification-email") {
@@ -108,7 +115,10 @@ async function processEmailJob({ logId, email, eventType, payload }) {
   try {
     const result = await sendEmail({ to: email, subject, html });
     if (!result) {
-      await markFailed(logId, "Email provider unavailable — check Postmark configuration");
+      await markFailed(
+        logId,
+        "Email provider unavailable — check Postmark configuration",
+      );
       return { skipped: true };
     }
     await prisma.notificationLog.update({
@@ -126,6 +136,11 @@ async function processEmailJob({ logId, email, eventType, payload }) {
 }
 
 async function processSmsJob({ logId, phoneNumber, eventType, payload }) {
+  if (SMS_AVAILABILITY.availability !== "enabled") {
+    recordBlockedSmsAttempt("job");
+    await markFailed(logId, "SMS_UNAVAILABLE: SMS is temporarily unavailable.");
+    return { skipped: true, code: "SMS_UNAVAILABLE" };
+  }
   const smsFn = smsTemplates[eventType];
   if (!smsFn) {
     await markFailed(logId, `No SMS template for event: ${eventType}`);
@@ -137,7 +152,10 @@ async function processSmsJob({ logId, phoneNumber, eventType, payload }) {
   try {
     const result = await sendSms({ to: phoneNumber, body });
     if (!result) {
-      await markFailed(logId, "SMS provider unavailable — check Twilio configuration");
+      await markFailed(
+        logId,
+        "SMS provider unavailable — check Twilio configuration",
+      );
       return { skipped: true };
     }
     await prisma.notificationLog.update({
@@ -164,7 +182,9 @@ async function processPushJob({ endpoint, p256dh, auth, title, body, url }) {
     if (statusCode === 410 || statusCode === 404) {
       try {
         await prisma.pushSubscription.deleteMany({ where: { endpoint } });
-        console.log(`[WORKER] Removed expired push subscription: ${endpoint.slice(0, 60)}…`);
+        console.log(
+          `[WORKER] Removed expired push subscription: ${endpoint.slice(0, 60)}…`,
+        );
       } catch {
         // Best-effort cleanup
       }
@@ -185,13 +205,25 @@ async function processSlackJob({ webhookUrl, eventType, payload }) {
   }
 }
 
-async function processWebhookJob({ webhookId, eventType, payload, userId, replayOfId }) {
+async function processWebhookJob({
+  webhookId,
+  eventType,
+  payload,
+  userId,
+  replayOfId,
+}) {
   // Look up the endpoint at execution time so the signing secret never
   // lives in the BullMQ payload (Redis). Producers must enqueue jobs with
   // only `{ webhookId, eventType, payload, userId, replayOfId? }`.
   const hook = await prisma.outboundWebhook.findUnique({
     where: { id: webhookId },
-    select: { id: true, targetUrl: true, secret: true, isActive: true, userId: true },
+    select: {
+      id: true,
+      targetUrl: true,
+      secret: true,
+      isActive: true,
+      userId: true,
+    },
   });
   if (!hook) {
     throw new Error(`Webhook ${webhookId} no longer exists`);
@@ -222,28 +254,31 @@ async function processWebhookJob({ webhookId, eventType, payload, userId, replay
   }
 
   try {
-    const { responseStatus, responseBody, requestHeaders } = await deliverWebhook({
-      targetUrl,
-      secret,
-      eventType,
-      payload,
-      userId: effectiveUserId,
-    });
+    const { responseStatus, responseBody, requestHeaders } =
+      await deliverWebhook({
+        targetUrl,
+        secret,
+        eventType,
+        payload,
+        userId: effectiveUserId,
+      });
 
     const success = responseStatus >= 200 && responseStatus < 300;
 
     if (logId) {
-      await prisma.webhookDeliveryLog.update({
-        where: { id: logId },
-        data: {
-          responseStatus,
-          responseBody,
-          requestHeaders: requestHeaders ?? undefined,
-          deliveredAt: new Date(),
-          status: success ? "success" : "failed",
-          attemptCount: { increment: 1 },
-        },
-      }).catch(() => {});
+      await prisma.webhookDeliveryLog
+        .update({
+          where: { id: logId },
+          data: {
+            responseStatus,
+            responseBody,
+            requestHeaders: requestHeaders ?? undefined,
+            deliveredAt: new Date(),
+            status: success ? "success" : "failed",
+            attemptCount: { increment: 1 },
+          },
+        })
+        .catch(() => {});
     }
 
     if (!success) {
@@ -253,14 +288,16 @@ async function processWebhookJob({ webhookId, eventType, payload, userId, replay
     return { sent: true, responseStatus };
   } catch (err) {
     if (logId) {
-      await prisma.webhookDeliveryLog.update({
-        where: { id: logId },
-        data: {
-          deliveredAt: new Date(),
-          status: "failed",
-          attemptCount: { increment: 1 },
-        },
-      }).catch(() => {});
+      await prisma.webhookDeliveryLog
+        .update({
+          where: { id: logId },
+          data: {
+            deliveredAt: new Date(),
+            status: "failed",
+            attemptCount: { increment: 1 },
+          },
+        })
+        .catch(() => {});
     }
     throw err; // Re-throw for retry
   }
@@ -272,89 +309,178 @@ async function processNotionJob({ integrationId, config, eventType, payload }) {
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, pageId: result.pageId };
   } catch (err) {
-    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    await updateIntegrationLog(
+      integrationId,
+      eventType,
+      "failed",
+      null,
+      err.message,
+    );
     throw err; // Re-throw for BullMQ retry
   }
 }
 
 async function processSheetsJob({ integrationId, config, eventType, payload }) {
   try {
-    const result = await appendSheetRow(integrationId, config, eventType, payload);
+    const result = await appendSheetRow(
+      integrationId,
+      config,
+      eventType,
+      payload,
+    );
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, updatedRange: result.updatedRange };
   } catch (err) {
-    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    await updateIntegrationLog(
+      integrationId,
+      eventType,
+      "failed",
+      null,
+      err.message,
+    );
     throw err; // Re-throw for BullMQ retry
   }
 }
 
-async function processDiscordJob({ integrationId, config, eventType, payload }) {
+async function processDiscordJob({
+  integrationId,
+  config,
+  eventType,
+  payload,
+}) {
   try {
     const result = await sendDiscordNotification(config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true };
   } catch (err) {
-    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    await updateIntegrationLog(
+      integrationId,
+      eventType,
+      "failed",
+      null,
+      err.message,
+    );
     throw err;
   }
 }
 
-async function processHubspotJob({ integrationId, config, eventType, payload }) {
+async function processHubspotJob({
+  integrationId,
+  config,
+  eventType,
+  payload,
+}) {
   try {
     const result = await logHubspotActivity(config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, noteId: result.noteId };
   } catch (err) {
-    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    await updateIntegrationLog(
+      integrationId,
+      eventType,
+      "failed",
+      null,
+      err.message,
+    );
     throw err;
   }
 }
 
-async function processMailchimpJob({ integrationId, config, eventType, payload }) {
+async function processMailchimpJob({
+  integrationId,
+  config,
+  eventType,
+  payload,
+}) {
   try {
     const result = await createDraftCampaign(config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, campaignId: result.campaignId };
   } catch (err) {
-    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    await updateIntegrationLog(
+      integrationId,
+      eventType,
+      "failed",
+      null,
+      err.message,
+    );
     throw err;
   }
 }
 
-async function processConvertkitJob({ integrationId, config, eventType, payload }) {
+async function processConvertkitJob({
+  integrationId,
+  config,
+  eventType,
+  payload,
+}) {
   try {
     const result = await createDraftBroadcast(config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, broadcastId: result.broadcastId };
   } catch (err) {
-    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    await updateIntegrationLog(
+      integrationId,
+      eventType,
+      "failed",
+      null,
+      err.message,
+    );
     throw err;
   }
 }
 
-async function processWordpressJob({ integrationId, config, eventType, payload }) {
+async function processWordpressJob({
+  integrationId,
+  config,
+  eventType,
+  payload,
+}) {
   try {
     const result = await createDraftPost(config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, postId: result.postId };
   } catch (err) {
-    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    await updateIntegrationLog(
+      integrationId,
+      eventType,
+      "failed",
+      null,
+      err.message,
+    );
     throw err;
   }
 }
 
-async function processWebflowJob({ integrationId, config, eventType, payload }) {
+async function processWebflowJob({
+  integrationId,
+  config,
+  eventType,
+  payload,
+}) {
   try {
     const result = await createDraftItem(config, eventType, payload);
     await updateIntegrationLog(integrationId, eventType, "success", result);
     return { sent: true, itemId: result.itemId };
   } catch (err) {
-    await updateIntegrationLog(integrationId, eventType, "failed", null, err.message);
+    await updateIntegrationLog(
+      integrationId,
+      eventType,
+      "failed",
+      null,
+      err.message,
+    );
     throw err;
   }
 }
 
-async function updateIntegrationLog(integrationId, eventType, status, responseData, errorMessage) {
+async function updateIntegrationLog(
+  integrationId,
+  eventType,
+  status,
+  responseData,
+  errorMessage,
+) {
   try {
     await prisma.integrationLog.create({
       data: {
@@ -385,7 +511,7 @@ export function startNotificationWorker() {
   const connection = getRedisConnection();
   if (!connection) {
     console.warn(
-      "[WORKER] No Redis connection — sp-notification worker disabled"
+      "[WORKER] No Redis connection — sp-notification worker disabled",
     );
     return null;
   }
@@ -397,19 +523,19 @@ export function startNotificationWorker() {
 
   worker.on("completed", (job) => {
     console.log(
-      `[WORKER] sp-notification job ${job.id} (${job.name}) completed`
+      `[WORKER] sp-notification job ${job.id} (${job.name}) completed`,
     );
   });
   worker.on("failed", (job, err) => {
     console.error(
       `[WORKER] sp-notification job ${job?.id} (${job?.name}) failed:`,
-      err?.message ?? err
+      err?.message ?? err,
     );
   });
   worker.on("error", (err) => {
     console.error(
       "[WORKER] sp-notification worker error:",
-      err?.message ?? err
+      err?.message ?? err,
     );
   });
 

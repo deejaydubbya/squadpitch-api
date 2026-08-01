@@ -84,6 +84,7 @@ export async function runProductionReadinessChecks({
       env,
     }),
     twilioConfigCheck(env),
+    ...smsDisabledChecks(env),
     configCheck({
       id: "hosted-ai.config",
       group: "Hosted AI + provenance",
@@ -539,23 +540,62 @@ function runtimeCheck(env) {
 }
 
 function twilioConfigCheck(env) {
-  const enabled = env.SMS_SENDING_ENABLED === "true";
-  return configCheck({
-    id: "twilio.config",
-    group: "Twilio/SMS",
-    variables: [
-      "TWILIO_ACCOUNT_SID",
-      "TWILIO_AUTH_TOKEN",
-      "TWILIO_FROM_NUMBER",
-      "TWILIO_MESSAGING_SERVICE_SID",
-      "TWILIO_INBOUND_WEBHOOK_URL",
-      "TWILIO_STATUS_CALLBACK_URL",
-    ],
-    required: enabled,
-    remediation:
-      "Configure Twilio credentials, E.164 sender, and signed webhook URLs, or keep SMS_SENDING_ENABLED=false.",
-    env,
-  });
+  return check(
+    "TWILIO_ACCOUNT_AVAILABLE",
+    "Twilio/SMS",
+    "configuration",
+    "WARN",
+    "P2",
+    "SMS is intentionally unavailable until the Twilio provider account is resolved and reverified",
+    "Keep SMS disabled until every reactivation prerequisite is complete and explicitly approved.",
+  );
+}
+
+function smsDisabledChecks(env) {
+  const disabled = env.SMS_SENDING_ENABLED !== "true";
+  const pass = (id, message) =>
+    check(
+      id,
+      "Twilio/SMS",
+      "configuration",
+      disabled ? "PASS" : "FAIL",
+      "P0",
+      disabled ? message : "SMS_SENDING_ENABLED must remain false",
+      "Set SMS_SENDING_ENABLED=false and redeploy before controlled beta traffic.",
+    );
+  return [
+    check(
+      "SMS_CAPABILITY_AVAILABLE",
+      "Twilio/SMS",
+      "configuration",
+      "WARN",
+      "P2",
+      "DISABLED: provider account suspended",
+      "Do not reactivate without explicit approval and completed provider verification.",
+    ),
+    pass("SMS_SEND_PATH_BLOCKED", "All outbound SMS paths are disabled"),
+    pass(
+      "SMS_INBOUND_SIDE_EFFECTS_BLOCKED",
+      "Signed inbound callbacks are acknowledged without side effects",
+    ),
+    pass(
+      "SMS_JOBS_DISABLED",
+      "SMS queue creation, execution, and retries are disabled",
+    ),
+    pass("SMS_UI_ACCURATE", "SMS is represented as temporarily unavailable"),
+    pass("SMS_AI_ACTIONS_BLOCKED", "SMS is unavailable to executable actions"),
+    check(
+      "SMS_SECRETS_REMOVED_OR_QUARANTINED",
+      "Twilio/SMS",
+      "configuration",
+      disabled ? "PASS" : "FAIL",
+      "P1",
+      disabled
+        ? "Twilio runtime credentials are quarantined behind authoritative disablement"
+        : "Twilio credentials are not safely quarantined",
+      "Retain only the webhook validation secret if inbound signature validation remains required.",
+    ),
+  ];
 }
 
 function socialConfigurationCheck(env) {
@@ -841,30 +881,15 @@ async function postmarkCheck(env, fetchImpl) {
 }
 
 async function twilioCheck(env, fetchImpl) {
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
-    return check(
-      "twilio.connectivity",
-      "Twilio/SMS",
-      "connectivity",
-      "BLOCKED",
-      "P2",
-      "Provider is not configured",
-      "Configure Twilio to enable the live probe.",
-    );
-  }
-  const auth = Buffer.from(
-    `${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`,
-  ).toString("base64");
-  return authenticatedCheck({
-    id: "twilio.connectivity",
-    group: "Twilio/SMS",
-    url: `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(env.TWILIO_ACCOUNT_SID)}.json`,
-    headers: { authorization: `Basic ${auth}` },
-    core: env.SMS_SENDING_ENABLED === "true",
-    fetchImpl,
-    remediation:
-      "Verify the Twilio account SID/auth token and A2P registration.",
-  });
+  return check(
+    "twilio.connectivity",
+    "Twilio/SMS",
+    "connectivity",
+    "WARN",
+    "P2",
+    "Live Twilio connectivity is intentionally not probed while SMS is disabled",
+    "Reverify connectivity only as part of an explicitly approved reactivation.",
+  );
 }
 
 async function authenticatedCheck({

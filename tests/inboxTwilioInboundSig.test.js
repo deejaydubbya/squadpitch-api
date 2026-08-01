@@ -89,7 +89,7 @@ async function buildApp() {
 }
 
 describe("Twilio inbound webhook — signature verification", () => {
-  it("accepts a valid signature and records STOP opt-out", async () => {
+  it("accepts a valid signature without recording STOP or other side effects", async () => {
     const app = await buildApp();
     const body = { From: "+15551234567", Body: "STOP" };
     const sig = signRequest(body);
@@ -101,8 +101,7 @@ describe("Twilio inbound webhook — signature verification", () => {
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toMatch(/text\/xml/);
     expect(res.text).toContain("<Response></Response>");
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].data.enrichmentJson.smsOptOut).toBe(true);
+    expect(updateCalls).toHaveLength(0);
   });
 
   it("rejects with 403 when the X-Twilio-Signature header is missing", async () => {
@@ -172,11 +171,10 @@ describe("Twilio inbound webhook — signature verification", () => {
       .type("form")
       .send(body);
     expect(res.status).toBe(200);
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].data.enrichmentJson.smsOptOut).toBe(true);
+    expect(updateCalls).toHaveLength(0);
   });
 
-  it("returns 500 so Twilio retries when persisting STOP fails", async () => {
+  it("returns 200 without touching persistence when SMS is disabled", async () => {
     prismaMock.contact.update.mockRejectedValueOnce(
       new Error("db unavailable"),
     );
@@ -187,7 +185,8 @@ describe("Twilio inbound webhook — signature verification", () => {
       .set("X-Twilio-Signature", signRequest(body))
       .type("form")
       .send(body);
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(200);
+    expect(prismaMock.contact.update).not.toHaveBeenCalled();
   });
 
   it("marks failed delivery callbacks once and rejects invalid signatures", async () => {
@@ -209,14 +208,7 @@ describe("Twilio inbound webhook — signature verification", () => {
       .type("form")
       .send(body);
     expect(accepted.status).toBe(204);
-    expect(prismaMock.message.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          providerMessageId: body.MessageSid,
-          deliveryStatus: { not: "FAILED" },
-        }),
-      }),
-    );
+    expect(prismaMock.message.updateMany).not.toHaveBeenCalled();
 
     const rejected = await request(app)
       .post("/api/v1/inbox/webhooks/twilio/status")
@@ -224,6 +216,6 @@ describe("Twilio inbound webhook — signature verification", () => {
       .type("form")
       .send(body);
     expect(rejected.status).toBe(403);
-    expect(prismaMock.message.updateMany).toHaveBeenCalledTimes(1);
+    expect(prismaMock.message.updateMany).not.toHaveBeenCalled();
   });
 });

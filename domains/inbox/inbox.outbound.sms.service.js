@@ -32,6 +32,10 @@ import { prisma } from "../../prisma.js";
 import { env } from "../../config/env.js";
 import { sendSms } from "../notifications/providers/twilioSmsProvider.js";
 import { checkRateLimit } from "../sites/rateLimit.js";
+import {
+  assertSmsAvailable,
+  recordBlockedSmsAttempt,
+} from "../sms/smsAvailability.js";
 
 const STOP_FOOTER = "\n\nReply STOP to opt out.";
 
@@ -72,6 +76,8 @@ export async function sendInboxSms(
   userId,
   { body, idempotencyKey } = {},
 ) {
+  recordBlockedSmsAttempt("outbound");
+  assertSmsAvailable();
   // Pre-flight gates — the resolver should have prevented this
   // call when any of these fail, but we re-check server-side so
   // a stale UI cache can't slip a send past us.
