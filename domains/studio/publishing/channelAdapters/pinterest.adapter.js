@@ -56,6 +56,27 @@ function safeDestinationLink(value) {
   }
 }
 
+function classifyPinterestBadRequest(body) {
+  const message = String(body?.message ?? body?.error_description ?? "").toLowerCase();
+  const providerCode = Number.isFinite(Number(body?.code)) ? Number(body.code) : null;
+  if (message.includes("board")) {
+    return { code: "PINTEREST_INVALID_BOARD", message: "Pinterest rejected the selected board. Refresh the board list and select it again.", providerCode };
+  }
+  if (message.includes("image") || message.includes("media") || message.includes("source")) {
+    return { code: "PINTEREST_INVALID_IMAGE", message: "Pinterest could not accept this image. Choose a public JPEG or PNG and try again.", providerCode };
+  }
+  if (message.includes("link") || message.includes("url")) {
+    return { code: "PINTEREST_INVALID_LINK", message: "Pinterest rejected the destination or image URL.", providerCode };
+  }
+  if (message.includes("title")) {
+    return { code: "PINTEREST_INVALID_TITLE", message: "Pinterest rejected the Pin title.", providerCode };
+  }
+  if (message.includes("description")) {
+    return { code: "PINTEREST_INVALID_DESCRIPTION", message: "Pinterest rejected the Pin description.", providerCode };
+  }
+  return { code: "PINTEREST_INVALID_REQUEST", message: "Pinterest rejected the Pin payload. Try a different image; if it continues, contact support with the request time.", providerCode };
+}
+
 function deriveTitle(draft) {
   const body = draft.body ?? "";
   // Pinterest titles are short. Take the first line of the caption,
@@ -185,6 +206,16 @@ export const pinterestAdapter = {
       );
     }
     if (!res.ok) {
+      if (res.status === 400) {
+        const classified = classifyPinterestBadRequest(respBody);
+        throw Object.assign(
+          new PinterestPublishError(classified.message, {
+            status: 400,
+            code: classified.code,
+          }),
+          { providerCode: classified.providerCode },
+        );
+      }
       throw new PinterestPublishError(
         `Pinterest rejected this Pin (${res.status}).`,
         { status: res.status }

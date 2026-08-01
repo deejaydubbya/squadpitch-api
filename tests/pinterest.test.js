@@ -456,6 +456,27 @@ describe("pinterest.adapter — publishPost", () => {
     ).rejects.toMatchObject({ code: "AUTH_FAILED" });
   });
 
+  it("classifies Pinterest 400 responses without exposing provider content", async () => {
+    const { pinterestAdapter } = await import(
+      "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"
+    );
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ code: 3, message: "Invalid media source containing sensitive customer text" }),
+    });
+    const error = await pinterestAdapter.publishPost({
+      draft: { body: "x", mediaUrl: "https://img/y.jpg", mediaType: "image" },
+      connection: { accessToken: "t", externalAccountId: "1234567890" },
+    }).catch((err) => err);
+    expect(error).toMatchObject({
+      code: "PINTEREST_INVALID_IMAGE",
+      status: 400,
+      providerCode: 3,
+    });
+    expect(error.message).not.toContain("sensitive customer text");
+  });
+
   it("429 throws transient", async () => {
     const { pinterestAdapter } = await import(
       "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"

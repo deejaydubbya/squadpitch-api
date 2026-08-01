@@ -52,7 +52,7 @@ const NO_RECONNECT_STATUSES = new Set(["CONNECTED"]);
 function classifyAdapterError(err, channel) {
   if (!err) return err;
   // Preserve any already-tagged code (e.g., timeouts thrown by withPublishTimeout)
-  if (err.code === "PROVIDER_TIMEOUT") return err;
+  if (err.code === "PROVIDER_TIMEOUT" || err.code?.startsWith("PINTEREST_")) return err;
 
   const status = err.status ?? err.statusCode ?? 0;
   const metaCode = err.metaError?.code;
