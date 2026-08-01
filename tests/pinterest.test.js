@@ -577,6 +577,32 @@ describe("pinterest.adapter — publishPost", () => {
     expect(error.attemptedBase64Fallback).toBe(false);
   });
 
+  it("identifies a sandbox board selected for production publishing", async () => {
+    const { pinterestAdapter } = await import(
+      "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"
+    );
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({
+        code: 15,
+        message: "Cannot add non-sandbox pins on sandbox boards.",
+      }),
+    });
+
+    await expect(pinterestAdapter.publishPost({
+      draft: {
+        body: "A listing",
+        mediaUrl: "https://res.cloudinary.com/squadpitch/image/upload/listing.jpg",
+      },
+      connection: { accessToken: "token", externalAccountId: "1234567890" },
+    })).rejects.toMatchObject({
+      code: "PINTEREST_SANDBOX_BOARD_MISMATCH",
+      attemptedBase64Fallback: false,
+    });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("maps Trial-access code 29 to PINTEREST_TRIAL_PRODUCTION_BLOCKED (not AUTH_FAILED)", async () => {
     // Pinterest code 29 = "Apps with Trial access may not create Pins
     // in production". Should NOT be AUTH_FAILED — that would tell the

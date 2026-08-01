@@ -81,6 +81,14 @@ function classifyPinterestBadRequest(body, pinBody) {
   const message = String(body?.message ?? body?.error_description ?? "").toLowerCase();
   const providerCode = Number.isFinite(Number(body?.code)) ? Number(body.code) : null;
   const providerReason = redactProviderReason(body, pinBody);
+  if (message.includes("non-sandbox pins on sandbox boards")) {
+    return {
+      code: "PINTEREST_SANDBOX_BOARD_MISMATCH",
+      message: "This board belongs to Pinterest's sandbox and cannot receive production Pins. Create a new board in Squadpitch or select a regular Pinterest board.",
+      providerCode,
+      providerReason,
+    };
+  }
   if (message.includes("board")) {
     return { code: "PINTEREST_INVALID_BOARD", message: "Pinterest rejected the selected board. Refresh the board list and select it again.", providerCode, providerReason };
   }
@@ -230,7 +238,17 @@ export const pinterestAdapter = {
     // using Pinterest's documented base64 source. A 400 cannot have created
     // a Pin, so this cannot duplicate a successful publication.
     let attemptedBase64Fallback = false;
-    if (res.status === 400 && body.media_source.source_type === "image_url") {
+    const initialReason = String(
+      respBody?.message ?? respBody?.error_description ?? "",
+    ).toLowerCase();
+    const sandboxBoardMismatch = initialReason.includes(
+      "non-sandbox pins on sandbox boards",
+    );
+    if (
+      res.status === 400 &&
+      body.media_source.source_type === "image_url" &&
+      !sandboxBoardMismatch
+    ) {
       const fallbackSource = await cloudinaryBase64MediaSource(draft.mediaUrl);
       if (fallbackSource) {
         attemptedBase64Fallback = true;
