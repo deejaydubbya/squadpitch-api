@@ -6,6 +6,7 @@ import { buildAuthUrl } from "../../domains/studio/oauth/pinterest.oauth.js";
 import { getRefreshAdapter } from "../../domains/studio/token-refresh/index.js";
 import { getAdapterForChannel } from "../../domains/studio/publishing/channelAdapters/index.js";
 import { integrationCapabilityMatrix } from "../../domains/integrations/integrationCapabilityMatrix.js";
+import evidence from "./evidence.json" with { type: "json" };
 
 const EXPECTED_REDIRECT = "https://app.squadpitch.com/oauth/PINTEREST/callback";
 const EXPECTED_SCOPES = [
@@ -40,6 +41,18 @@ const requiredNames = [
   "PINTEREST_REDIRECT_URI",
   "TOKEN_ENCRYPTION_KEY",
 ];
+const canary = evidence.imagePinPublishing ?? {};
+const requiredCanaryAssertions = [
+  "oauthCompleted",
+  "minimumScopesConfirmed",
+  "boardListingConfirmed",
+  "syntheticBoardConfirmed",
+  "singleImagePinPublished",
+  "correctBoardConfirmed",
+  "squadpitchPublishedStateConfirmed",
+  "providerPinIdStored",
+  "refreshCreatedNoDuplicate",
+].every((key) => canary[key] === true);
 const checks = [
   ...requiredNames.map((name) =>
     check(`config.${name}`, Boolean(env[name]), `${name} is ${env[name] ? "configured" : "missing"}`),
@@ -52,6 +65,26 @@ const checks = [
   check("refresh.adapter", Boolean(getRefreshAdapter("PINTEREST")), "Pinterest refresh adapter registered"),
   check("publish.adapter", getAdapterForChannel("PINTEREST")?.channel === "PINTEREST", "Pinterest publishing adapter registered"),
   check("capability.refresh", integrationCapabilityMatrix.PINTEREST.tokenRefresh === "AVAILABLE", "Pinterest token refresh advertised as available"),
+  check(
+    "evidence.image_pin_canary",
+    evidence.environment === "production" &&
+      canary.classification === "AVAILABLE" &&
+      requiredCanaryAssertions &&
+      canary.customerDataUsed === false,
+    "controlled production OAuth and single image Pin canary is durably recorded",
+  ),
+  check(
+    "capability.image_publish",
+    integrationCapabilityMatrix.PINTEREST.mediaPublish === "AVAILABLE",
+    "Pinterest image Pin publishing is classified as AVAILABLE",
+  ),
+  check(
+    "capability.unsupported",
+    integrationCapabilityMatrix.PINTEREST.videoPublish === "UNAVAILABLE" &&
+      integrationCapabilityMatrix.PINTEREST.commentsInbox === "UNAVAILABLE" &&
+      integrationCapabilityMatrix.PINTEREST.analytics === "UNAVAILABLE",
+    "video Pins, comments inbox and analytics remain unavailable",
+  ),
 ];
 const failed = checks.filter((item) => item.status === "FAIL");
 const report = {

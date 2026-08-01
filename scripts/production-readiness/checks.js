@@ -306,7 +306,7 @@ function integrationCapabilityCheck() {
     "P0",
     errors.length
       ? "Integration capability matrix contains unsafe availability claims"
-      : "Integration availability is capability-specific and approval-gated",
+      : `Integration availability is capability-specific and approval-gated; Pinterest image publishing is ${integrationCapabilityMatrix.PINTEREST.mediaPublish}`,
     "Downgrade unsupported or unapproved capabilities to BETA, COMING_SOON, or UNAVAILABLE.",
   );
 }

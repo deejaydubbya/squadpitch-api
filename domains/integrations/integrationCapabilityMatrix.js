@@ -52,7 +52,7 @@ export const integrationCapabilityMatrix = {
   PINTEREST: entry("Pinterest", "AVAILABLE", {
     boardListing: "AVAILABLE",
     boardCreation: "AVAILABLE",
-    mediaPublish: "BETA",
+    mediaPublish: "AVAILABLE",
     videoPublish: "UNAVAILABLE",
     tokenRefresh: "AVAILABLE",
     commentsInbox: "UNAVAILABLE",

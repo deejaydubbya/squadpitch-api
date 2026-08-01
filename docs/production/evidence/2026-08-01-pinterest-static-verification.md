@@ -1,6 +1,6 @@
 # Pinterest static production verification — 2026-08-01
 
-Classification before live canary: **WARN**
+Final classification: **AVAILABLE - production verified for image Pin publishing**
 
 Pinterest Standard access, exact redirect URI, minimum scopes, encrypted token storage, continuous token refresh, board operations and image Pin publishing are implemented.
 
@@ -24,4 +24,12 @@ Post-deployment evidence:
 - The deployed `npm run verify:pinterest` result is PASS, including exact redirect URI and production Pinterest API host selection.
 - The broader networked production verifier reports `READY_WITH_WARNINGS`: 32 PASS, 3 WARN, 20 BLOCKED, 0 FAIL. Warnings are the intentionally disabled Twilio/SMS capability; blocked evidence requires the existing authenticated canary inputs and optional worker health URL and is unrelated to Pinterest.
 
-The remaining evidence is a human-controlled OAuth and single image Pin test using the dedicated synthetic Pinterest account. No customer content, credentials, tokens, authorization codes, or user identifiers are recorded here.
+Manual production-canary evidence:
+
+- A dedicated synthetic Squadpitch account completed production OAuth with only the expected user-account, board and Pin permissions.
+- Board listing succeeded and `[SYNTHETIC CANARY] Squadpitch Pinterest Test` was created or selected.
+- One non-customer image-only Pin was published to the correct board.
+- Squadpitch stored the published state and provider Pin ID.
+- Refreshing created no duplicate.
+
+The evidence is also recorded in `scripts/pinterest-readiness/evidence.json`. No customer content, credentials, tokens, authorization codes, provider IDs or user identifiers are recorded. Video Pins, Pinterest comments and Pinterest analytics remain `UNAVAILABLE`.

@@ -68,12 +68,20 @@ describe("integration production capability matrix", () => {
       connect: "AVAILABLE",
       boardListing: "AVAILABLE",
       boardCreation: "AVAILABLE",
-      mediaPublish: "BETA",
+      mediaPublish: "AVAILABLE",
       videoPublish: "UNAVAILABLE",
       tokenRefresh: "AVAILABLE",
       commentsInbox: "UNAVAILABLE",
       analytics: "UNAVAILABLE",
       approval: "DOCUMENTED_STANDARD_ACCESS",
+    });
+  });
+
+  it("keeps unsupported Pinterest capabilities unavailable", () => {
+    expect(integrationCapabilityMatrix.PINTEREST).toMatchObject({
+      videoPublish: "UNAVAILABLE",
+      commentsInbox: "UNAVAILABLE",
+      analytics: "UNAVAILABLE",
     });
   });
 });

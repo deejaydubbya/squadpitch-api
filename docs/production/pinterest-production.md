@@ -18,7 +18,7 @@ Last reviewed: 2026-08-01
 - Image Pin creation with provider Pin ID persistence.
 - Proactive token refresh, per-process coalescing plus a cross-machine Redis lease, and one safe refresh/retry after a Pinterest authorization failure.
 
-Video Pins, comments inbox and Pinterest analytics are unavailable. Image Pin publishing remains beta until the controlled live canary below is manually confirmed.
+Video Pins, comments inbox and Pinterest analytics are unavailable. Image Pin publishing is `AVAILABLE` after the controlled production canary was manually confirmed on 2026-08-01.
 
 ## Static production evidence — 2026-08-01
 
@@ -28,6 +28,8 @@ Video Pins, comments inbox and Pinterest analytics are unavailable. Image Pin pu
 - OAuth state is HMAC-signed, random, expires after ten minutes, and is single-use through Redis. Callback ownership is rechecked against the authenticated user and workspace.
 - Automated verification does not perform OAuth and never creates a Pin.
 
-## Remaining manual canary
+## Completed production canary - 2026-08-01
 
-Use a dedicated synthetic account to complete OAuth, load boards, create or select `[SYNTHETIC CANARY] Squadpitch Pinterest Test`, and publish one synthetic image Pin. Confirm the Pin and stored provider ID, and verify no duplicate was created. Do not mark live publishing verified until this is complete.
+Using the dedicated synthetic Squadpitch account, the operator completed production OAuth with the expected minimum scopes, loaded boards, created or selected `[SYNTHETIC CANARY] Squadpitch Pinterest Test`, and published one non-customer image-only Pin. Exactly one Pin appeared on the correct board, Squadpitch recorded the post as published, the provider Pin ID was stored, and refreshing created no duplicate.
+
+Durable machine-readable evidence is stored in `scripts/pinterest-readiness/evidence.json` and enforced by `npm run verify:pinterest`. This evidence applies only to image Pin publishing; it does not expand video, comments or analytics support.

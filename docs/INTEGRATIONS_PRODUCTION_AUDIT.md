@@ -16,7 +16,7 @@ analytics, comments, webhook, or production-review availability.
 | YouTube                 | BETA        | BETA               | BETA / BETA           | BETA                | BETA        | UNAVAILABLE | Google OAuth verification   |
 | Google Business Profile | BETA        | BETA               | UNAVAILABLE           | BETA reviews        | UNAVAILABLE | UNAVAILABLE | GBP API access              |
 | TikTok                  | BETA        | BETA               | BETA / BETA           | UNAVAILABLE         | UNAVAILABLE | UNAVAILABLE | TikTok app/content audit    |
-| Pinterest               | AVAILABLE   | AVAILABLE          | AVAILABLE / BETA      | UNAVAILABLE         | UNAVAILABLE | UNAVAILABLE | Standard access             |
+| Pinterest               | AVAILABLE   | AVAILABLE          | AVAILABLE / AVAILABLE | UNAVAILABLE         | UNAVAILABLE | UNAVAILABLE | Standard access + image canary |
 | X                       | BETA        | BETA               | BETA / BETA           | UNAVAILABLE         | UNAVAILABLE | UNAVAILABLE | API tier/rate limits        |
 | Reddit                  | COMING_SOON | COMING_SOON        | COMING_SOON           | COMING_SOON         | COMING_SOON | UNAVAILABLE | Not started                 |
 
@@ -87,8 +87,9 @@ Posting API audit; until then publishing remains Beta.
 
 ### Pinterest
 
-Confirm Standard access, redirect URI, scopes, and selected-board flow. Image
-Pin publishing is Available; unproven video variants remain Beta.
+Standard access, redirect URI, scopes, selected-board flow and one controlled
+production image Pin are confirmed. Image Pin publishing is `AVAILABLE`.
+Video Pins, comments and analytics remain `UNAVAILABLE`.
 
 ### X
 

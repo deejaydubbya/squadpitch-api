@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "pinterest-production-evidence.v1",
+  "verifiedAt": "2026-08-01",
+  "environment": "production",
+  "accountType": "dedicated-synthetic",
+  "boardLabel": "[SYNTHETIC CANARY] Squadpitch Pinterest Test",
+  "imagePinPublishing": {
+    "classification": "AVAILABLE",
+    "oauthCompleted": true,
+    "minimumScopesConfirmed": true,
+    "boardListingConfirmed": true,
+    "syntheticBoardConfirmed": true,
+    "singleImagePinPublished": true,
+    "correctBoardConfirmed": true,
+    "squadpitchPublishedStateConfirmed": true,
+    "providerPinIdStored": true,
+    "refreshCreatedNoDuplicate": true,
+    "customerDataUsed": false
+  },
+  "unsupportedCapabilities": {
+    "videoPublish": "UNAVAILABLE",
+    "commentsInbox": "UNAVAILABLE",
+    "analytics": "UNAVAILABLE"
+  }
+}
