@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { evaluateBetaLaunchGate } from "../scripts/beta-launch-gate/gate.js";
-import { resolve } from "node:path";
 
 const completeManualEvidence = Object.fromEntries(
   [
@@ -47,7 +46,7 @@ describe("beta launch gate", () => {
     const report = evaluateBetaLaunchGate({
       env: completeManualEvidence,
       apiRoot: process.cwd(),
-      webRoot: resolve(process.cwd(), "..", "squadpitch-web"),
+      webRoot: process.cwd(),
     });
     expect(report.summary.status).toBe(
       "CONTROLLED_BETA_ALLOWED_WITH_ACCEPTED_WARNING",
@@ -64,7 +63,7 @@ describe("beta launch gate", () => {
     const report = evaluateBetaLaunchGate({
       env: completeManualEvidence,
       apiRoot: process.cwd(),
-      webRoot: resolve(process.cwd(), "..", "squadpitch-web"),
+      webRoot: process.cwd(),
       recoveryEvidence: {
         pitrConfirmed: false,
         restoreTestCompleted: true,
