@@ -8,6 +8,7 @@ import { metaRefresh } from "./meta.refresh.js";
 import { linkedinRefresh } from "./linkedin.refresh.js";
 import { threadsRefresh } from "./threads.refresh.js";
 import { instagramRefresh } from "./instagram.refresh.js";
+import { pinterestRefresh } from "./pinterest.refresh.js";
 
 const ADAPTERS = {
   YOUTUBE: youtubeRefresh,
@@ -22,6 +23,7 @@ const ADAPTERS = {
   FACEBOOK: metaRefresh,
   LINKEDIN: linkedinRefresh,
   THREADS: threadsRefresh,
+  PINTEREST: pinterestRefresh,
 };
 
 export function getRefreshAdapter(channel) {

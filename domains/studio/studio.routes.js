@@ -5247,7 +5247,11 @@ studioRouter.post(
 
       const oauth = getOAuthForChannel(channel);
 
-      const { token, expiresAt } = await signState({ clientId, channel });
+      const { token, expiresAt } = await signState({
+        clientId,
+        channel,
+        actorSub: getAuth0Sub(req),
+      });
       const authUrl = await oauth.buildAuthUrl({ state: token });
       res.json({ authUrl, state: token, expiresAt });
     } catch (err) {
@@ -5262,7 +5266,7 @@ studioRouter.post(`${BASE}/oauth/complete`, async (req, res, next) => {
     if (!parsed.success) return validationError(res, parsed.error.issues);
 
     const { code, state } = parsed.data;
-    const payload = await verifyState(state);
+    const payload = await verifyState(state, { actorSub: getAuth0Sub(req) });
     const { clientId, channel } = payload;
 
     // The state JWT carries clientId, but verify the completing
@@ -5288,6 +5292,7 @@ studioRouter.post(`${BASE}/oauth/complete`, async (req, res, next) => {
       accessToken: tokenBundle.accessToken,
       refreshToken: tokenBundle.refreshToken,
       tokenExpiresAt: tokenBundle.tokenExpiresAt,
+      refreshTokenExpiresAt: tokenBundle.refreshTokenExpiresAt,
       scopes: tokenBundle.scopes,
       externalAccountId: tokenBundle.externalAccountId,
       displayName: tokenBundle.displayName,
@@ -5537,7 +5542,7 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
-      const { boardId, boardName } = req.body ?? {};
+      const { boardId } = req.body ?? {};
       if (!boardId || typeof boardId !== "string") {
         return validationError(res, [
           { path: ["boardId"], message: "boardId is required" },
@@ -5560,7 +5565,6 @@ studioRouter.post(
       const updated = await saveSelectedBoard({
         connectionId: conn.id,
         boardId,
-        boardName,
       });
       res.json({ connection: updated });
     } catch (err) {

@@ -1382,6 +1382,7 @@ model ChannelConnection {
   accessToken       String           @db.Text
   refreshToken      String?          @db.Text
   tokenExpiresAt    DateTime?
+  refreshTokenExpiresAt DateTime?
   scopes            String[]
   status            ConnectionStatus @default(CONNECTED)
   lastValidatedAt   DateTime?

@@ -62,4 +62,18 @@ describe("integration production capability matrix", () => {
       expect(row).not.toHaveProperty("clientSecret");
     }
   });
+
+  it("reports the implemented Pinterest capability boundaries", () => {
+    expect(integrationCapabilityMatrix.PINTEREST).toMatchObject({
+      connect: "AVAILABLE",
+      boardListing: "AVAILABLE",
+      boardCreation: "AVAILABLE",
+      mediaPublish: "BETA",
+      videoPublish: "UNAVAILABLE",
+      tokenRefresh: "AVAILABLE",
+      commentsInbox: "UNAVAILABLE",
+      analytics: "UNAVAILABLE",
+      approval: "DOCUMENTED_STANDARD_ACCESS",
+    });
+  });
 });

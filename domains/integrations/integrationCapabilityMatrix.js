@@ -50,7 +50,11 @@ export const integrationCapabilityMatrix = {
     approval: "TIKTOK_APP_REVIEW_REQUIRED",
   }),
   PINTEREST: entry("Pinterest", "AVAILABLE", {
+    boardListing: "AVAILABLE",
+    boardCreation: "AVAILABLE",
     mediaPublish: "BETA",
+    videoPublish: "UNAVAILABLE",
+    tokenRefresh: "AVAILABLE",
     commentsInbox: "UNAVAILABLE",
     analytics: "UNAVAILABLE",
     approval: "DOCUMENTED_STANDARD_ACCESS",
@@ -78,6 +82,10 @@ function entry(label, overall, overrides = {}) {
     commentsInbox: "UNAVAILABLE",
     analytics: "UNAVAILABLE",
     webhook: "UNAVAILABLE",
+    boardListing: "UNAVAILABLE",
+    boardCreation: "UNAVAILABLE",
+    videoPublish: "UNAVAILABLE",
+    tokenRefresh: defaultCapability,
     approval: "UNVERIFIED",
     ui: overall,
     ...overrides,
@@ -96,6 +104,10 @@ export function validateIntegrationCapabilityMatrix(matrix) {
     "analytics",
     "webhook",
     "ui",
+    "boardListing",
+    "boardCreation",
+    "videoPublish",
+    "tokenRefresh",
   ];
   for (const [provider, descriptor] of Object.entries(matrix)) {
     for (const key of capabilityKeys) {

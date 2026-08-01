@@ -81,6 +81,7 @@ describe("pinterest.oauth — exchangeCode", () => {
           access_token: "tok",
           refresh_token: "rtok",
           expires_in: 86400,
+          refresh_token_expires_in: 5184000,
           scope: "user_accounts:read,boards:read,pins:read,pins:write",
         }),
       })
@@ -102,6 +103,7 @@ describe("pinterest.oauth — exchangeCode", () => {
     expect(init.headers.Authorization).not.toMatch(/Bearer/);
     expect(r.accessToken).toBe("tok");
     expect(r.refreshToken).toBe("rtok");
+    expect(r.refreshTokenExpiresAt).toBeInstanceOf(Date);
     expect(r.externalAccountId).toBe("wardlowdaniel");
     expect(r.displayName).toBe("@wardlowdaniel");
     expect(r.scopes).toEqual([
@@ -257,13 +259,14 @@ describe("pinterestBoards.service.createBoard", () => {
   });
 
   it("POSTs to /v5/boards with the trimmed name and returns the new board", async () => {
-    prismaMock.channelConnection.findUnique.mockResolvedValueOnce({
-      id: "c1",
-      channel: "PINTEREST",
-      accessToken: "stored",
-      status: "CONNECTED",
+    prismaMock.channelConnection.findUnique.mockResolvedValue({
+      id: "c1", channel: "PINTEREST", accessToken: "stored", status: "CONNECTED",
     });
-    const fetchMock = vi.fn().mockResolvedValueOnce({
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true, status: 200, json: async () => ({ items: [] }),
+      })
+      .mockResolvedValueOnce({
       ok: true,
       status: 201,
       json: async () => ({
@@ -271,7 +274,7 @@ describe("pinterestBoards.service.createBoard", () => {
         name: "Listings",
         privacy: "PUBLIC",
       }),
-    });
+      });
     global.fetch = fetchMock;
 
     const { createBoard } = await import(
@@ -288,7 +291,7 @@ describe("pinterestBoards.service.createBoard", () => {
       description: null,
       privacy: "PUBLIC",
     });
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[1];
     expect(url).toBe("https://api.pinterest.com/v5/boards");
     expect(init.method).toBe("POST");
     const sentBody = JSON.parse(init.body);
@@ -303,6 +306,39 @@ describe("pinterestBoards.service.createBoard", () => {
     await expect(
       createBoard({ connectionId: "c1", name: "   " })
     ).rejects.toMatchObject({ code: "MISSING_BOARD_NAME" });
+  });
+});
+
+describe("pinterestBoards.service.saveSelectedBoard", () => {
+  it("only stores a board returned by the connected Pinterest account", async () => {
+    prismaMock.channelConnection.findUnique
+      .mockResolvedValueOnce({
+        id: "c1", channel: "PINTEREST", accessToken: "stored", status: "CONNECTED",
+      })
+      .mockResolvedValueOnce({ displayName: "@synthetic" });
+    prismaMock.channelConnection.update.mockResolvedValue({ id: "c1" });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ items: [{ id: "123", name: "Owned board" }] }),
+    });
+    const { saveSelectedBoard } = await import("../domains/studio/pinterestBoards.service.js");
+    await saveSelectedBoard({ connectionId: "c1", boardId: "123", boardName: "Spoofed name" });
+    expect(prismaMock.channelConnection.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ externalAccountId: "123", displayName: "@synthetic · Owned board" }),
+    }));
+  });
+
+  it("rejects a board that is not visible to the connected account", async () => {
+    prismaMock.channelConnection.findUnique.mockResolvedValueOnce({
+      id: "c1", channel: "PINTEREST", accessToken: "stored", status: "CONNECTED",
+    });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true, status: 200, json: async () => ({ items: [] }),
+    });
+    const { saveSelectedBoard } = await import("../domains/studio/pinterestBoards.service.js");
+    await expect(saveSelectedBoard({ connectionId: "c1", boardId: "999" })).rejects.toMatchObject({
+      code: "PINTEREST_BOARD_NOT_OWNED",
+    });
   });
 });
 

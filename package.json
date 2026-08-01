@@ -20,6 +20,8 @@
     "verify:production": "node scripts/production-readiness/index.js",
     "verify:production:json": "node scripts/production-readiness/index.js --json",
     "verify:production:no-network": "node scripts/production-readiness/index.js --no-network",
+    "verify:pinterest": "node scripts/pinterest-readiness/index.js",
+    "verify:pinterest:json": "node scripts/pinterest-readiness/index.js --json",
     "verify:backup-recovery": "node scripts/backup-recovery/validate.js",
     "verify:backup-recovery:json": "node scripts/backup-recovery/validate.js --json",
     "verify:observability": "node scripts/observability/validate.js",

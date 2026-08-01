@@ -31,12 +31,28 @@ const PIN_DESCRIPTION_MAX = 500;
 const TRIAL_PRODUCTION_BLOCKED_CODE = 29;
 
 class PinterestPublishError extends Error {
-  constructor(message, { status, code, pinterestError } = {}) {
+  constructor(message, { status, code } = {}) {
     super(message);
     this.name = "PinterestPublishError";
     this.status = status ?? 502;
     this.code = code ?? "PINTEREST_PUBLISH_FAILED";
-    this.pinterestError = pinterestError ?? null;
+  }
+}
+
+function safeDestinationLink(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (!["https:", "http:"].includes(url.protocol)) return null;
+    const host = url.hostname.toLowerCase();
+    if (
+      host === "localhost" || host === "127.0.0.1" || host === "::1" ||
+      host.endsWith(".local") || /^10\./.test(host) || /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    ) return null;
+    return value;
+  } catch {
+    return null;
   }
 }
 
@@ -117,7 +133,7 @@ export const pinterestAdapter = {
     // the Pin's outbound link — Pinterest treats this as the primary
     // click destination. Skipping when absent is fine; Pins without
     // links still publish.
-    const link = client?.websiteUrl ?? null;
+    const link = safeDestinationLink(client?.websiteUrl);
     if (link) body.link = link;
 
     const res = await fetch(pinterestApiUrl("/v5/pins"), {
@@ -146,7 +162,6 @@ export const pinterestAdapter = {
         {
           status: 403,
           code: "PINTEREST_TRIAL_PRODUCTION_BLOCKED",
-          pinterestError: respBody,
         }
       );
     }
@@ -154,22 +169,22 @@ export const pinterestAdapter = {
     if (res.status === 401 || res.status === 403) {
       throw new PinterestPublishError(
         "Pinterest needs to be reconnected.",
-        { status: res.status, code: "AUTH_FAILED", pinterestError: respBody }
+        { status: res.status, code: "AUTH_FAILED" }
       );
     }
     if (res.status === 429) {
       throw Object.assign(
         new PinterestPublishError(
           "Pinterest is rate-limiting publish requests. Try again shortly.",
-          { status: 429, pinterestError: respBody }
+          { status: 429 }
         ),
         { transient: true }
       );
     }
     if (!res.ok) {
       throw new PinterestPublishError(
-        respBody?.message ?? `Pinterest rejected this Pin (${res.status}).`,
-        { status: res.status, pinterestError: respBody }
+        `Pinterest rejected this Pin (${res.status}).`,
+        { status: res.status }
       );
     }
 
@@ -177,7 +192,7 @@ export const pinterestAdapter = {
     if (!pinId) {
       throw new PinterestPublishError(
         "Pinterest did not return a Pin id.",
-        { status: 502, pinterestError: respBody }
+        { status: 502 }
       );
     }
     // /v5/pins doesn't return a public URL directly. The canonical

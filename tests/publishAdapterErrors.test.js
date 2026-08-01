@@ -25,9 +25,11 @@ const transitionDraftMock = vi.fn();
 const updateConnectionStatusMock = vi.fn().mockResolvedValue(null);
 const getConnectionForAdapterMock = vi.fn();
 const ensureValidAccessTokenMock = vi.fn(async (c) => c);
+const refreshConnectionTokenMock = vi.fn();
 const formatDraftMock = vi.fn((d) => ({ ...d, _formatted: true }));
 const adapterPublishMock = vi.fn();
 const draftUpdateMock = vi.fn().mockResolvedValue({ ...mockDraft });
+const draftFindUniqueMock = vi.fn(async () => ({ ...mockDraft }));
 
 // Force a short timeout (clamped to 1s minimum by the helper) so the
 // timeout test doesn't slow the suite.
@@ -38,7 +40,7 @@ vi.mock("../config/env.js", () => ({
 vi.mock("../prisma.js", () => ({
   prisma: {
     draft: {
-      findUnique: vi.fn().mockResolvedValue({ ...mockDraft }),
+      findUnique: draftFindUniqueMock,
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       update: draftUpdateMock,
     },
@@ -69,6 +71,7 @@ vi.mock("../domains/notifications/notification.service.js", () => ({
 
 vi.mock("../domains/studio/tokenRefreshService.js", () => ({
   ensureValidAccessToken: ensureValidAccessTokenMock,
+  refreshConnectionToken: refreshConnectionTokenMock,
 }));
 
 const { publishDraft } = await import(
@@ -79,6 +82,8 @@ beforeEach(() => {
   transitionDraftMock.mockReset();
   adapterPublishMock.mockReset();
   draftUpdateMock.mockClear();
+  mockDraft.channel = "INSTAGRAM";
+  refreshConnectionTokenMock.mockReset();
   // Default: connected, valid token
   getConnectionForAdapterMock.mockResolvedValue({
     status: "CONNECTED",
@@ -87,6 +92,35 @@ beforeEach(() => {
 });
 
 describe("publishDraft — adapter reliability and classification", () => {
+  it("refreshes and retries Pinterest exactly once after an auth failure", async () => {
+    mockDraft.channel = "PINTEREST";
+    getConnectionForAdapterMock.mockResolvedValue({
+      id: "connection-1",
+      clientId: "client-1",
+      channel: "PINTEREST",
+      status: "CONNECTED",
+      accessToken: "old-access",
+      refreshToken: "refresh",
+      tokenExpiresAt: new Date(Date.now() + 86_400_000),
+    });
+    refreshConnectionTokenMock.mockResolvedValue({
+      id: "connection-1",
+      clientId: "client-1",
+      channel: "PINTEREST",
+      status: "CONNECTED",
+      accessToken: "new-access",
+      refreshToken: "new-refresh",
+    });
+    adapterPublishMock
+      .mockRejectedValueOnce(Object.assign(new Error("unauthorized"), { code: "AUTH_FAILED", status: 401 }))
+      .mockResolvedValueOnce({ externalPostId: "pin-1", externalPostUrl: "https://www.pinterest.com/pin/pin-1/" });
+    transitionDraftMock.mockResolvedValue({ ...mockDraft, status: "PUBLISHED", externalPostId: "pin-1" });
+
+    await publishDraft({ draftId: "draft-1", actorSub: "auth0|x", source: "manual" });
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+    expect(adapterPublishMock).toHaveBeenCalledTimes(2);
+    expect(adapterPublishMock.mock.calls[1][0].connection.accessToken).toBe("new-access");
+  });
   it("classifies a hung adapter as PROVIDER_TIMEOUT and never marks PUBLISHED", async () => {
     adapterPublishMock.mockReturnValue(new Promise(() => {})); // never resolves
     const start = Date.now();

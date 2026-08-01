@@ -46,17 +46,25 @@ function hmac(payload) {
  * Sign a state payload. The returned token is safe to embed in a URL.
  * Also stores the nonce in Redis with a TTL so replay can be rejected.
  */
-export async function signState({ clientId, channel }) {
+function actorBinding(actorSub) {
+  return base64url(
+    crypto.createHmac("sha256", getSecret()).update(`actor:${actorSub}`).digest(),
+  );
+}
+
+export async function signState({ clientId, channel, actorSub }) {
+  if (!actorSub) throw invalidState("OAuth state requires an initiating user");
   const nonce = crypto.randomBytes(16).toString("hex");
   const exp = Date.now() + STATE_TTL_SECONDS * 1000;
-  const payload = JSON.stringify({ clientId, channel, nonce, exp });
+  const actor = actorBinding(actorSub);
+  const payload = JSON.stringify({ clientId, channel, actor, nonce, exp });
   const payloadB64 = base64url(payload);
   const sig = base64url(hmac(payloadB64));
 
   // Best-effort nonce store. If Redis is down we still have exp as fallback.
   await redisSet(
     `${NONCE_KEY_PREFIX}${nonce}`,
-    JSON.stringify({ clientId, channel }),
+    JSON.stringify({ clientId, channel, actor }),
     STATE_TTL_SECONDS
   );
 
@@ -78,7 +86,7 @@ function invalidState(message, cause) {
  * Verify a state token. Returns the decoded payload on success.
  * Single-use: the nonce is deleted from Redis after successful verification.
  */
-export async function verifyState(token) {
+export async function verifyState(token, { actorSub } = {}) {
   if (!token || typeof token !== "string" || !token.includes(".")) {
     throw invalidState("Missing or malformed state token");
   }
@@ -98,12 +106,19 @@ export async function verifyState(token) {
     throw invalidState("Unable to decode state payload", err);
   }
 
-  const { clientId, channel, nonce, exp } = payload;
-  if (!clientId || !channel || !nonce || !exp) {
+  const { clientId, channel, actor, nonce, exp } = payload;
+  if (!clientId || !channel || !actor || !nonce || !exp) {
     throw invalidState("State payload missing fields");
   }
   if (typeof exp !== "number" || Date.now() > exp) {
     throw invalidState("State token expired");
+  }
+  if (!actorSub) throw invalidState("OAuth state cannot resolve the current user");
+  const expectedActor = actorBinding(actorSub);
+  const actorA = Buffer.from(actor);
+  const actorB = Buffer.from(expectedActor);
+  if (actorA.length !== actorB.length || !crypto.timingSafeEqual(actorA, actorB)) {
+    throw invalidState("OAuth state belongs to a different user");
   }
 
   // Single-use nonce check (best effort — if Redis is down, exp alone gates).

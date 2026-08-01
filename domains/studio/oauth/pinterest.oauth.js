@@ -47,11 +47,10 @@ function assertConfigured() {
   }
 }
 
-function pinterestError(message, body, status = 502) {
+function pinterestError(message, status = 502) {
   return Object.assign(new Error(message), {
     status,
     code: "PINTEREST_OAUTH_FAILED",
-    pinterestError: body,
   });
 }
 
@@ -96,14 +95,16 @@ export async function exchangeCode({ code }) {
       grant_type: "authorization_code",
       code,
       redirect_uri: env.PINTEREST_REDIRECT_URI,
+      // Pinterest now uses continuous refresh tokens. Apps created before
+      // 2025-09-25 must opt in; newer apps safely ignore this parameter.
+      continuous_refresh: "true",
     }),
   });
 
   const tokenBody = await tokenRes.json().catch(() => ({}));
   if (!tokenRes.ok || tokenBody.error || !tokenBody.access_token) {
     throw pinterestError(
-      tokenBody?.message ?? tokenBody?.error_description ?? `Pinterest token exchange failed (${tokenRes.status})`,
-      tokenBody,
+      `Pinterest token exchange failed (${tokenRes.status})`,
       tokenRes.status
     );
   }
@@ -114,6 +115,13 @@ export async function exchangeCode({ code }) {
   // access token). Refresh tokens last ~1 year per current docs.
   const expiresIn = Number(tokenBody.expires_in) || 30 * 24 * 60 * 60;
   const tokenExpiresAt = new Date(Date.now() + expiresIn * 1000);
+  const refreshExpiresIn = Number(tokenBody.refresh_token_expires_in);
+  const refreshExpiresAtSeconds = Number(tokenBody.refresh_token_expires_at);
+  const refreshTokenExpiresAt = Number.isFinite(refreshExpiresAtSeconds) && refreshExpiresAtSeconds > 0
+    ? new Date(refreshExpiresAtSeconds * 1000)
+    : Number.isFinite(refreshExpiresIn) && refreshExpiresIn > 0
+      ? new Date(Date.now() + refreshExpiresIn * 1000)
+      : null;
   const grantedScopes = tokenBody.scope
     ? String(tokenBody.scope).split(",").map((s) => s.trim()).filter(Boolean)
     : PINTEREST_SCOPES;
@@ -142,6 +150,7 @@ export async function exchangeCode({ code }) {
     accessToken,
     refreshToken,
     tokenExpiresAt,
+    refreshTokenExpiresAt,
     scopes: grantedScopes,
     externalAccountId,
     displayName,

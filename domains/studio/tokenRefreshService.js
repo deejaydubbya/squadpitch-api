@@ -12,6 +12,7 @@ import { enqueueNotification } from "../notifications/notification.service.js";
 import { logEvent } from "../../lib/logger.js";
 
 const EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
+const inFlightRefreshes = new Map();
 
 /**
  * Returns true if the connection's access token is expired or within 5 minutes
@@ -28,6 +29,18 @@ export function isTokenNearExpiry(connection) {
  * Returns the updated connection with decrypted tokens.
  */
 export async function refreshConnectionToken(connection) {
+  const existing = inFlightRefreshes.get(connection.id);
+  if (existing) return existing;
+  const refreshPromise = performRefresh(connection).finally(() => {
+    if (inFlightRefreshes.get(connection.id) === refreshPromise) {
+      inFlightRefreshes.delete(connection.id);
+    }
+  });
+  inFlightRefreshes.set(connection.id, refreshPromise);
+  return refreshPromise;
+}
+
+async function performRefresh(connection) {
   const adapter = getRefreshAdapter(connection.channel);
 
   if (!adapter) {
@@ -47,7 +60,7 @@ export async function refreshConnectionToken(connection) {
       connectionId: connection.id,
       clientId: connection.clientId,
       reason: "transient",
-      error: err?.message ?? "unknown",
+      errorCode: err?.code ?? "TOKEN_REFRESH_FAILED",
     });
     throw err;
   }
@@ -59,14 +72,14 @@ export async function refreshConnectionToken(connection) {
       connectionId: connection.id,
       clientId: connection.clientId,
       reason: "cannot_refresh",
-      error: result.error ?? null,
+      errorCode: result.code ?? "TOKEN_REFRESH_IMPOSSIBLE",
     });
     await markNeedsReconnect(connection, result.error);
     throw Object.assign(
       new Error(
         `${connection.channel} token cannot be refreshed — user must re-authenticate`
       ),
-      { status: 401, code: "TOKEN_REFRESH_IMPOSSIBLE" }
+      { status: 401, code: result.code ?? "TOKEN_REFRESH_IMPOSSIBLE" }
     );
   }
 
@@ -82,6 +95,9 @@ export async function refreshConnectionToken(connection) {
 
   if (result.refreshToken) {
     updateData.refreshToken = encryptToken(result.refreshToken);
+  }
+  if (result.refreshTokenExpiresAt !== undefined) {
+    updateData.refreshTokenExpiresAt = result.refreshTokenExpiresAt;
   }
 
   await prisma.channelConnection.updateMany({
@@ -101,6 +117,8 @@ export async function refreshConnectionToken(connection) {
     accessToken: result.accessToken,
     refreshToken: result.refreshToken ?? connection.refreshToken,
     tokenExpiresAt: result.expiresAt,
+    refreshTokenExpiresAt:
+      result.refreshTokenExpiresAt ?? connection.refreshTokenExpiresAt ?? null,
     status: "CONNECTED",
     lastRefreshAt: new Date(),
     refreshFailedAt: null,

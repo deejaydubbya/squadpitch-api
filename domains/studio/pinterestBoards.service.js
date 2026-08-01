@@ -89,8 +89,8 @@ export async function listBoards({ connectionId }) {
     }
     if (!res.ok) {
       throw new PinterestBoardsError(
-        body?.message ?? `Pinterest boards fetch failed (${res.status})`,
-        { status: res.status, body }
+        `Pinterest boards fetch failed (${res.status})`,
+        { status: res.status }
       );
     }
 
@@ -147,6 +147,14 @@ export async function createBoard({ connectionId, name, description }) {
     );
   }
 
+  // Treat an exact-name retry as idempotent. A client timeout must not
+  // create a duplicate board on Pinterest.
+  const existingBoards = await listBoards({ connectionId });
+  const existingBoard = existingBoards.find(
+    (board) => board.name.trim().toLowerCase() === trimmed.toLowerCase(),
+  );
+  if (existingBoard) return existingBoard;
+
   const token = decryptToken(conn.accessToken);
   const res = await fetch(pinterestApiUrl("/v5/boards"), {
     method: "POST",
@@ -165,13 +173,13 @@ export async function createBoard({ connectionId, name, description }) {
   if (res.status === 401 || res.status === 403) {
     throw new PinterestBoardsError(
       "Pinterest needs to be reconnected with board access.",
-      { status: 403, code: "PROVIDER_PERMISSION_DENIED", body }
+      { status: 403, code: "PROVIDER_PERMISSION_DENIED" }
     );
   }
   if (!res.ok || !body?.id) {
     throw new PinterestBoardsError(
-      body?.message ?? `Pinterest board creation failed (${res.status})`,
-      { status: res.status, body }
+      `Pinterest board creation failed (${res.status})`,
+      { status: res.status }
     );
   }
 
@@ -194,7 +202,6 @@ export async function createBoard({ connectionId, name, description }) {
 export async function saveSelectedBoard({
   connectionId,
   boardId,
-  boardName,
 }) {
   if (!boardId || typeof boardId !== "string") {
     throw new PinterestBoardsError("boardId is required", {
@@ -202,6 +209,18 @@ export async function saveSelectedBoard({
       code: "MISSING_BOARD_ID",
     });
   }
+
+  // Never trust a board id/name supplied by the browser. Resolve the board
+  // against the connected account and persist Pinterest's canonical name.
+  const ownedBoards = await listBoards({ connectionId });
+  const selectedBoard = ownedBoards.find((board) => board.id === boardId);
+  if (!selectedBoard) {
+    throw new PinterestBoardsError(
+      "The selected board does not belong to the connected Pinterest account.",
+      { status: 400, code: "PINTEREST_BOARD_NOT_OWNED" },
+    );
+  }
+  const boardName = selectedBoard.name;
 
   const existing = await prisma.channelConnection.findUnique({
     where: { id: connectionId },

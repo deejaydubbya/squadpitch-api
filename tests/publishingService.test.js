@@ -25,6 +25,7 @@ const transitionDraftMock = vi.fn();
 const updateConnectionStatusMock = vi.fn().mockResolvedValue(null);
 const getConnectionForAdapterMock = vi.fn();
 const ensureValidAccessTokenMock = vi.fn();
+const refreshConnectionTokenMock = vi.fn();
 const formatDraftMock = vi.fn((d) => ({ ...d, _formatted: true }));
 
 vi.mock("../prisma.js", () => ({
@@ -61,6 +62,7 @@ vi.mock("../domains/notifications/notification.service.js", () => ({
 
 vi.mock("../domains/studio/tokenRefreshService.js", () => ({
   ensureValidAccessToken: ensureValidAccessTokenMock,
+  refreshConnectionToken: refreshConnectionTokenMock,
 }));
 
 const { publishDraft } = await import(

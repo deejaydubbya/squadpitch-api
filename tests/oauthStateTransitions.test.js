@@ -27,12 +27,13 @@ describe("OAuth state transitions", () => {
     const { token } = await signState({
       clientId: "workspace-a",
       channel: "FACEBOOK",
+      actorSub: "auth0|user-a",
     });
-    await expect(verifyState(token)).resolves.toMatchObject({
+    await expect(verifyState(token, { actorSub: "auth0|user-a" })).resolves.toMatchObject({
       clientId: "workspace-a",
       channel: "FACEBOOK",
     });
-    await expect(verifyState(token)).rejects.toMatchObject({
+    await expect(verifyState(token, { actorSub: "auth0|user-a" })).rejects.toMatchObject({
       code: "INVALID_OAUTH_STATE",
     });
   });
@@ -41,13 +42,14 @@ describe("OAuth state transitions", () => {
     const { token } = await signState({
       clientId: "workspace-a",
       channel: "INSTAGRAM",
+      actorSub: "auth0|user-a",
     });
     const [payload, signature] = token.split(".");
     const tampered = `${payload.slice(0, -1)}A.${signature}`;
-    await expect(verifyState(tampered)).rejects.toMatchObject({
+    await expect(verifyState(tampered, { actorSub: "auth0|user-a" })).rejects.toMatchObject({
       code: "INVALID_OAUTH_STATE",
     });
-    await expect(verifyState(token)).resolves.toMatchObject({
+    await expect(verifyState(token, { actorSub: "auth0|user-a" })).resolves.toMatchObject({
       clientId: "workspace-a",
     });
   });
@@ -58,10 +60,22 @@ describe("OAuth state transitions", () => {
     const { token } = await signState({
       clientId: "workspace-a",
       channel: "YOUTUBE",
+      actorSub: "auth0|user-a",
     });
     vi.setSystemTime(new Date("2026-07-29T12:11:00Z"));
-    await expect(verifyState(token)).rejects.toMatchObject({
+    await expect(verifyState(token, { actorSub: "auth0|user-a" })).rejects.toMatchObject({
       code: "INVALID_OAUTH_STATE",
     });
+  });
+
+  it("rejects completion by a different authenticated user", async () => {
+    const { token } = await signState({
+      clientId: "workspace-a",
+      channel: "PINTEREST",
+      actorSub: "auth0|initiator",
+    });
+    await expect(
+      verifyState(token, { actorSub: "auth0|different-user" }),
+    ).rejects.toMatchObject({ code: "INVALID_OAUTH_STATE" });
   });
 });

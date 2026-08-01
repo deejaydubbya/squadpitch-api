@@ -20,7 +20,10 @@ import {
 import { formatDraft } from "../draft.service.js";
 import { getAdapterForChannel } from "./channelAdapters/index.js";
 import { enqueueNotification } from "../../notifications/notification.service.js";
-import { ensureValidAccessToken } from "../tokenRefreshService.js";
+import {
+  ensureValidAccessToken,
+  refreshConnectionToken,
+} from "../tokenRefreshService.js";
 import { withPublishTimeout } from "./publishTimeout.js";
 
 // ── Adapter error classification ────────────────────────────────────────
@@ -286,14 +289,34 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
     // Bound the adapter call with a hard timeout. On timeout, the helper
     // throws PROVIDER_TIMEOUT (status 504) which the worker classifies as
     // transient and retries.
-    const { externalPostId, externalPostUrl } = await withPublishTimeout(
-      adapter.publishPost({
-        draft: workingDraft,
-        connection,
-        client: workingDraft.client,
-      }),
-      { channel: workingDraft.channel }
-    );
+    const invokeAdapter = (activeConnection) =>
+      withPublishTimeout(
+        adapter.publishPost({
+          draft: workingDraft,
+          connection: activeConnection,
+          client: workingDraft.client,
+        }),
+        { channel: workingDraft.channel },
+      );
+
+    let publishResult;
+    try {
+      publishResult = await invokeAdapter(connection);
+    } catch (firstError) {
+      // A Pinterest access token can be revoked before its recorded expiry.
+      // Refresh once, then retry the same idempotency-guarded publish. Never
+      // recurse or retry a second time, which avoids duplicate/infinite loops.
+      if (
+        workingDraft.channel !== "PINTEREST" ||
+        firstError?.code !== "AUTH_FAILED"
+      ) {
+        throw firstError;
+      }
+      connection = await refreshConnectionToken(connection);
+      publishResult = await invokeAdapter(connection);
+    }
+
+    const { externalPostId, externalPostUrl } = publishResult;
 
     // Refuse to flip the draft to PUBLISHED without proof of delivery.
     // Every channel adapter we ship returns a non-empty externalPostId on
