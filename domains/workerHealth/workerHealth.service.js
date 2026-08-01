@@ -137,6 +137,10 @@ export async function runWorkerHealthRoundTrip({
     connection: eventsConnection,
   });
   const startedAt = Date.now();
+  // Subscribe before enqueueing. The standing worker can finish this tiny job
+  // before QueueEvents is ready, which otherwise makes a successful job look
+  // like a timeout under production latency.
+  await events.waitUntilReady();
   const job = await queue.add(
     WORKER_HEALTH_JOB,
     { synthetic: true, correlationId },
@@ -148,7 +152,6 @@ export async function runWorkerHealthRoundTrip({
     },
   );
   try {
-    await events.waitUntilReady();
     const value = await job.waitUntilFinished(events, timeoutMs);
     if (value?.correlationId !== correlationId) {
       throw new Error("Worker-health correlation mismatch");
