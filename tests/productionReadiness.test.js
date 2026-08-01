@@ -6,6 +6,7 @@ import {
   summarizeReadiness,
 } from "../scripts/production-readiness/classifier.js";
 import { runProductionReadinessChecks } from "../scripts/production-readiness/checks.js";
+import { classifyCanaryEvidence } from "../scripts/production-readiness/checks.js";
 
 const configuredEnv = {
   NODE_ENV: "production",
@@ -95,6 +96,47 @@ describe("production readiness classification", () => {
 });
 
 describe("production readiness checks", () => {
+  it("derives distinct canary and hosted-AI evidence from real result fields", () => {
+    const checks = classifyCanaryEvidence({
+      workspaceId: "synthetic-workspace",
+      results: [
+        { id: "auth.workspace-access", status: "PASS" },
+        { id: "database.rollback-write", status: "PASS" },
+        { id: "queue.round-trip", status: "PASS" },
+        { id: "publishing.boundary", status: "PASS" },
+        { id: "ai.provenance-present", status: "PASS" },
+        { id: "ai.hosted-provenance", status: "PASS" },
+        { id: "ai.trace-correlation", status: "PASS" },
+        { id: "ai.fallback-status", status: "PASS" },
+      ],
+    });
+    expect(checks).toHaveLength(9);
+    expect(checks.every((item) => item.status === "PASS")).toBe(true);
+    expect(checks.map((item) => item.id)).toContain(
+      "AI_HOSTED_SERVICE_VERIFIED",
+    );
+  });
+
+  it("does not call usable output hosted without provenance and correlation", () => {
+    const checks = classifyCanaryEvidence({
+      workspaceId: "synthetic-workspace",
+      results: [
+        { id: "auth.workspace-access", status: "PASS" },
+        { id: "database.rollback-write", status: "PASS" },
+        { id: "queue.round-trip", status: "PASS" },
+        { id: "publishing.boundary", status: "PASS" },
+        { id: "ai.hosted-provenance", status: "PASS" },
+        { id: "ai.fallback-status", status: "PASS" },
+      ],
+    });
+    expect(
+      checks.find((item) => item.id === "AI_PROVENANCE_PRESENT"),
+    ).toMatchObject({ status: "FAIL" });
+    expect(
+      checks.find((item) => item.id === "AI_HOSTED_SERVICE_VERIFIED"),
+    ).toMatchObject({ status: "FAIL" });
+  });
+
   it("supports a deterministic no-network mode without exposing values", async () => {
     const checks = await runProductionReadinessChecks({
       env: configuredEnv,

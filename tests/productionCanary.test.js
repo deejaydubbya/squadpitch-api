@@ -5,6 +5,7 @@ import {
   validateCanaryInvocation,
 } from "../domains/canary/canaryPolicy.js";
 import { verifyProductionCanary } from "../scripts/production-canary/runner.js";
+import { summarizeAiCanaryResults } from "../domains/canary/canary.service.js";
 
 describe("production canary policy", () => {
   const valid = {
@@ -36,6 +37,60 @@ describe("production canary policy", () => {
         { status: "FAIL" },
       ]),
     ).toEqual({ status: "FAIL", pass: 1, warn: 1, fail: 1 });
+  });
+});
+
+describe("production canary AI evidence", () => {
+  it("requires hosted source, provenance, and correlated traces", () => {
+    const requestId = "production-canary:run-12345678";
+    const results = summarizeAiCanaryResults(
+      [
+        {
+          usableResult: true,
+          provenance: {
+            source: "squadpitch-ai",
+            fallbackUsed: false,
+            traceId: `${requestId}:campaign_ops`,
+          },
+        },
+      ],
+      requestId,
+    );
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ai.provenance-present",
+          status: "PASS",
+        }),
+        expect.objectContaining({ id: "ai.hosted-provenance", status: "PASS" }),
+        expect.objectContaining({ id: "ai.trace-correlation", status: "PASS" }),
+      ]),
+    );
+  });
+
+  it("rejects usable local fallback as hosted AI", () => {
+    const results = summarizeAiCanaryResults(
+      [
+        {
+          usableResult: true,
+          provenance: {
+            source: "squadpitch-api",
+            fallbackUsed: true,
+            traceId: "unrelated",
+          },
+        },
+      ],
+      "production-canary:run-12345678",
+    );
+    expect(
+      results.find((item) => item.id === "ai.hosted-provenance"),
+    ).toMatchObject({ status: "FAIL" });
+    expect(
+      results.find((item) => item.id === "ai.trace-correlation"),
+    ).toMatchObject({ status: "FAIL" });
+    expect(
+      results.find((item) => item.id === "ai.fallback-status"),
+    ).toMatchObject({ status: "WARN" });
   });
 });
 

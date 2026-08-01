@@ -154,7 +154,21 @@ export async function runProductionReadinessChecks({
       ["web.connectivity", "Runtime/environment"],
       ["sites.connectivity", "Sites runtime"],
       ["hosted-ai.connectivity", "Hosted AI + provenance"],
-      ["hosted-ai.provenance", "Hosted AI + provenance"],
+      ["CANARY_IDENTITY_CONFIGURED", "Synthetic canary + hosted AI provenance"],
+      [
+        "CANARY_WORKSPACE_ALLOWLISTED",
+        "Synthetic canary + hosted AI provenance",
+      ],
+      [
+        "CANARY_DATABASE_PATH_VERIFIED",
+        "Synthetic canary + hosted AI provenance",
+      ],
+      ["CANARY_QUEUE_PATH_VERIFIED", "Synthetic canary + hosted AI provenance"],
+      ["CANARY_AI_PATH_VERIFIED", "Synthetic canary + hosted AI provenance"],
+      ["CANARY_CLEANUP_VERIFIED", "Synthetic canary + hosted AI provenance"],
+      ["AI_PROVENANCE_PRESENT", "Synthetic canary + hosted AI provenance"],
+      ["AI_HOSTED_SERVICE_VERIFIED", "Synthetic canary + hosted AI provenance"],
+      ["AI_FALLBACK_AVAILABLE", "Synthetic canary + hosted AI provenance"],
       ["stripe.connectivity", "Stripe"],
       ["postmark.connectivity", "Postmark/email"],
       ["twilio.connectivity", "Twilio/SMS"],
@@ -261,7 +275,7 @@ export async function runProductionReadinessChecks({
       remediation:
         "Check squadpitch-ai health, then run npm run verify:ai-production for signed provenance.",
     }),
-    await hostedAiProvenanceCheck(env, fetchImpl),
+    ...(await productionCanaryEvidenceChecks(env, fetchImpl)),
     await stripeCheck(env, fetchImpl),
     await postmarkCheck(env, fetchImpl),
     await twilioCheck(env, fetchImpl),
@@ -286,57 +300,138 @@ function integrationCapabilityCheck() {
   );
 }
 
-async function hostedAiProvenanceCheck(env, fetchImpl) {
-  const workspaceId = env.SQUADPITCH_VERIFY_WORKSPACE_ID;
-  const baseUrl = env.SQUADPITCH_VERIFY_BASE_URL;
-  const token = env.SQUADPITCH_VERIFY_TOKEN;
-  const cookie = env.SQUADPITCH_VERIFY_COOKIE;
+async function productionCanaryEvidenceChecks(env, fetchImpl) {
+  const workspaceId = env.SQUADPITCH_CANARY_WORKSPACE_ID;
+  const baseUrl = env.SQUADPITCH_CANARY_BASE_URL;
+  const token = env.SQUADPITCH_CANARY_TOKEN;
+  const cookie = env.SQUADPITCH_CANARY_COOKIE;
+  const ids = [
+    "CANARY_IDENTITY_CONFIGURED",
+    "CANARY_WORKSPACE_ALLOWLISTED",
+    "CANARY_DATABASE_PATH_VERIFIED",
+    "CANARY_QUEUE_PATH_VERIFIED",
+    "CANARY_AI_PATH_VERIFIED",
+    "CANARY_CLEANUP_VERIFIED",
+    "AI_PROVENANCE_PRESENT",
+    "AI_HOSTED_SERVICE_VERIFIED",
+    "AI_FALLBACK_AVAILABLE",
+  ];
   if (!workspaceId || !baseUrl || (!token && !cookie)) {
-    return check(
-      "hosted-ai.provenance",
-      "Hosted AI + provenance",
-      "connectivity",
-      "BLOCKED",
-      "P0",
-      "Authenticated AI verification configuration is unavailable",
-      "Set SQUADPITCH_VERIFY_BASE_URL, WORKSPACE_ID, and token/cookie, then rerun.",
+    return ids.map((id) =>
+      check(
+        id,
+        "Synthetic canary + hosted AI provenance",
+        "evidence",
+        "BLOCKED",
+        "P0",
+        "Authenticated production canary evidence is unavailable",
+        "Set SQUADPITCH_CANARY_BASE_URL, WORKSPACE_ID, and token/cookie, then rerun.",
+      ),
     );
   }
   try {
-    const { verifyAiProduction } =
-      await import("../ai-production-verification/runner.js");
-    const report = await verifyAiProduction({
+    const { verifyProductionCanary } =
+      await import("../production-canary/runner.js");
+    const report = await verifyProductionCanary({
       baseUrl,
       token,
       cookie,
       workspaceId,
+      runId: `readiness-${Date.now()}`,
       fetchImpl,
     });
-    const hosted = report.results.filter(
-      (item) => item.status === "PASS" && item.source === "squadpitch-ai",
-    ).length;
-    return check(
-      "hosted-ai.provenance",
-      "Hosted AI + provenance",
-      "connectivity",
-      report.fail === 0 && hosted > 0 ? "PASS" : "FAIL",
-      "P0",
-      report.fail === 0
-        ? `${hosted} hosted AI operation(s) verified with provenance`
-        : `${report.fail} AI verification operation(s) failed`,
-      "Run npm run verify:ai-production and repair signed private-network execution failures.",
-    );
+    return classifyCanaryEvidence(report);
   } catch {
-    return check(
-      "hosted-ai.provenance",
-      "Hosted AI + provenance",
-      "connectivity",
-      "FAIL",
-      "P0",
-      "Authenticated AI provenance verification failed",
-      "Run npm run verify:ai-production and inspect API/Python trace logs.",
+    return ids.map((id) =>
+      check(
+        id,
+        "Synthetic canary + hosted AI provenance",
+        "evidence",
+        "FAIL",
+        "P0",
+        "Authenticated production canary verification failed",
+        "Run npm run canary:production and inspect the API, worker, and hosted AI trace logs.",
+      ),
     );
   }
+}
+
+export function classifyCanaryEvidence(report) {
+  const byId = new Map(report?.results?.map((item) => [item.id, item]) ?? []);
+  const passed = (id) => byId.get(id)?.status === "PASS";
+  const item = (id, pass, passMessage, failMessage) =>
+    check(
+      id,
+      "Synthetic canary + hosted AI provenance",
+      "evidence",
+      pass ? "PASS" : "FAIL",
+      "P0",
+      pass ? passMessage : failMessage,
+      "Rerun the production canary and repair the failed isolated path.",
+    );
+  const cleanup =
+    passed("database.rollback-write") &&
+    passed("queue.round-trip") &&
+    passed("publishing.boundary");
+  const fallbackReported = ["PASS", "WARN"].includes(
+    byId.get("ai.fallback-status")?.status,
+  );
+  return [
+    item(
+      "CANARY_IDENTITY_CONFIGURED",
+      passed("auth.workspace-access"),
+      "Normal synthetic-user authentication was verified",
+      "Synthetic-user authentication was not verified",
+    ),
+    item(
+      "CANARY_WORKSPACE_ALLOWLISTED",
+      report?.workspaceId && passed("auth.workspace-access"),
+      "The dedicated synthetic workspace passed the exact allowlist",
+      "The synthetic workspace allowlist was not verified",
+    ),
+    item(
+      "CANARY_DATABASE_PATH_VERIFIED",
+      passed("database.rollback-write"),
+      "Production database write/read/rollback was verified",
+      "Production database rollback probe failed",
+    ),
+    item(
+      "CANARY_QUEUE_PATH_VERIFIED",
+      passed("queue.round-trip"),
+      "Dedicated BullMQ enqueue/consume/removal was verified",
+      "Dedicated queue round trip failed",
+    ),
+    item(
+      "CANARY_AI_PATH_VERIFIED",
+      passed("ai.hosted-provenance"),
+      "Hosted AI dry-run path was verified",
+      "Hosted AI dry-run path failed",
+    ),
+    item(
+      "CANARY_CLEANUP_VERIFIED",
+      cleanup,
+      "Database rollback, queue removal, and no-publish boundary were verified",
+      "Canary cleanup evidence was incomplete",
+    ),
+    item(
+      "AI_PROVENANCE_PRESENT",
+      passed("ai.provenance-present"),
+      "Every AI operation returned service provenance",
+      "AI provenance evidence was missing",
+    ),
+    item(
+      "AI_HOSTED_SERVICE_VERIFIED",
+      passed("ai.hosted-provenance") && passed("ai.trace-correlation"),
+      "Hosted Squadpitch AI source and trace correlation were verified",
+      "Hosted AI source or trace correlation was not verified",
+    ),
+    item(
+      "AI_FALLBACK_AVAILABLE",
+      fallbackReported,
+      "Fallback classification was explicitly reported by production",
+      "Fallback classification was unavailable",
+    ),
+  ];
 }
 
 function runtimeCheck(env) {
