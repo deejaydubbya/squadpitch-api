@@ -13,6 +13,9 @@ NOTIFICATION_FROM_EMAIL=notifications@squadpitch.com
 INBOX_EMAIL_FROM=inbox@mail.squadpitch.com
 INBOX_EMAIL_REPLY_DOMAIN=mail.squadpitch.com
 POSTMARK_INBOUND_WEBHOOK_SECRET=<at least 32 random characters>
+POSTMARK_ACCOUNT_APPROVED=false
+POSTMARK_SENDER_VERIFIED=false
+POSTMARK_DELIVERY_VERIFIED=false
 INBOX_EMAIL_DAILY_CAP=50
 ```
 
@@ -90,3 +93,14 @@ Use owned test mailboxes and a non-customer conversation:
 Postmark retries non-200 inbound webhook responses; the API returns `500` only
 for retryable processing/database failures and safely acknowledges permanent
 malformed or unrecognized messages.
+The three verification flags are durable operational evidence, not inferred
+from credential presence. Set each to `true` only after the corresponding
+Postmark dashboard state or controlled non-customer delivery has been manually
+confirmed. Until approval and sender verification are confirmed, Inbox email
+actions remain unavailable with a reason-specific capability code.
+
+Inbox replies use the central verified Squadpitch sender. The workspace name is
+sanitized and used only in the display name; customer, user, and lead addresses
+are never used as `From`. `Reply-To` remains
+`reply+<conversationId>@<INBOX_EMAIL_REPLY_DOMAIN>` so replies thread back into
+Squadpitch. Gmail and Microsoft mailbox sending are not implemented.

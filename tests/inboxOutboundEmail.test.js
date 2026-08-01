@@ -39,6 +39,10 @@ vi.mock("../config/env.js", () => ({
       INBOX_EMAIL_FROM: "Squadpitch Inbox <inbox@mail.squadpitch.com>",
       INBOX_EMAIL_REPLY_DOMAIN: "mail.squadpitch.com",
       POSTMARK_MESSAGE_STREAM: "outbound",
+      POSTMARK_INBOUND_WEBHOOK_SECRET: "test-secret",
+      POSTMARK_ACCOUNT_APPROVED: true,
+      POSTMARK_SENDER_VERIFIED: true,
+      POSTMARK_DELIVERY_VERIFIED: true,
       INBOX_EMAIL_DAILY_CAP: 50,
       ...envOverrides,
     };
@@ -291,28 +295,28 @@ describe("sendInboxEmail — capability + safety blockers", () => {
   it("throws EMAIL_NOT_AVAILABLE (412) when the lead has no email", async () => {
     await expect(
       outbound.sendInboxEmail(CLIENT_A, "conv-no-email", "auth0|u1", { body: "hi" }),
-    ).rejects.toMatchObject({ status: 412, code: "EMAIL_NOT_AVAILABLE" });
+    ).rejects.toMatchObject({ status: 412, code: "EMAIL_RECIPIENT_MISSING" });
     expect(state.prisma.state.messages.length).toBe(0);
   });
 
   it("throws EMAIL_NOT_AVAILABLE when the conversation is marked spam", async () => {
     await expect(
       outbound.sendInboxEmail(CLIENT_A, "conv-spam", "auth0|u1", { body: "hi" }),
-    ).rejects.toMatchObject({ status: 412, code: "EMAIL_NOT_AVAILABLE" });
+    ).rejects.toMatchObject({ status: 412, code: "EMAIL_CONVERSATION_SPAM" });
   });
 
   it("throws EMAIL_NOT_CONFIGURED (412) when POSTMARK_SERVER_TOKEN is unset", async () => {
     envOverrides = { POSTMARK_SERVER_TOKEN: undefined };
     await expect(
       outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", { body: "hi" }),
-    ).rejects.toMatchObject({ status: 412, code: "EMAIL_NOT_CONFIGURED" });
+    ).rejects.toMatchObject({ status: 412, code: "EMAIL_PROVIDER_NOT_CONFIGURED" });
   });
 
   it("throws EMAIL_NOT_CONFIGURED when INBOX_EMAIL_FROM is unset", async () => {
     envOverrides = { INBOX_EMAIL_FROM: undefined };
     await expect(
       outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", { body: "hi" }),
-    ).rejects.toMatchObject({ status: 412, code: "EMAIL_NOT_CONFIGURED" });
+    ).rejects.toMatchObject({ status: 412, code: "EMAIL_PROVIDER_NOT_CONFIGURED" });
   });
 
   it("throws BODY_REQUIRED when body is empty", async () => {
@@ -350,7 +354,7 @@ describe("sendInboxEmail — provider failure paths", () => {
 
     const msg = state.prisma.state.messages[0];
     expect(msg.deliveryStatus).toBe("FAILED");
-    expect(msg.errorReason).toMatch(/^406:/);
+    expect(msg.errorReason).toBe("postmark:RECIPIENT_INACTIVE:code=406:retryable=false");
   });
 
   it("marks Message FAILED when the Postmark client throws (network/timeout)", async () => {
@@ -361,7 +365,8 @@ describe("sendInboxEmail — provider failure paths", () => {
 
     const msg = state.prisma.state.messages[0];
     expect(msg.deliveryStatus).toBe("FAILED");
-    expect(msg.errorReason).toMatch(/Network timeout/);
+    expect(msg.errorReason).toBe("postmark:PROVIDER_UNAVAILABLE:code=unknown:retryable=true");
+    expect(msg.errorReason).not.toMatch(/timeout|@/i);
   });
 
   it("maps a Postmark 4xx with ErrorCode 412 (pending-approval) to PROVIDER_FAILED with user-actionable copy", async () => {
@@ -393,7 +398,7 @@ describe("sendInboxEmail — provider failure paths", () => {
 
     const msg = state.prisma.state.messages[0];
     expect(msg.deliveryStatus).toBe("FAILED");
-    expect(msg.errorReason).toMatch(/^412:/);
+    expect(msg.errorReason).toBe("postmark:ACCOUNT_APPROVAL_PENDING:code=412:retryable=false");
   });
 
   it("maps Postmark ErrorCode 406 (inactive recipient) to a targeted user message", async () => {
@@ -424,7 +429,10 @@ describe("emailCapabilityFor — UI-facing capability snapshot", () => {
       conversation: { spam: false },
       contact: { email: "x@example.com" },
     });
-    expect(result).toEqual({ available: true, reason: null });
+    expect(result.available).toBe(true);
+    expect(result.canSend).toBe(true);
+    expect(result.channelEligible).toBe(true);
+    expect(result.recipientAvailable).toBe(true);
   });
 
   it("returns available=false with 'no email' reason", () => {
@@ -434,7 +442,24 @@ describe("emailCapabilityFor — UI-facing capability snapshot", () => {
       contact: { email: null },
     });
     expect(result.available).toBe(false);
-    expect(result.reason).toMatch(/no email address/i);
+    expect(result.reason).toMatch(/add an email address/i);
+    expect(result.blockedCode).toBe("EMAIL_RECIPIENT_MISSING");
+  });
+
+  it("distinguishes account approval and sender verification", () => {
+    envOverrides = { POSTMARK_ACCOUNT_APPROVED: false };
+    const pending = outbound.emailCapabilityFor({ conversation: {}, contact: { email: "x@example.com" } });
+    expect(pending.blockedCode).toBe("EMAIL_ACCOUNT_APPROVAL_PENDING");
+
+    envOverrides = { POSTMARK_ACCOUNT_APPROVED: true, POSTMARK_SENDER_VERIFIED: false };
+    const sender = outbound.emailCapabilityFor({ conversation: {}, contact: { email: "x@example.com" } });
+    expect(sender.blockedCode).toBe("EMAIL_SENDER_UNVERIFIED");
+  });
+
+  it("sanitizes provider errors without retaining email addresses or raw text", () => {
+    const safe = outbound.sanitizedProviderFailure(422, 400);
+    expect(safe).toBe("postmark:SENDER_UNVERIFIED:code=422:retryable=false");
+    expect(safe).not.toContain("@");
   });
 
   it("returns available=false with provider reason when token missing", () => {

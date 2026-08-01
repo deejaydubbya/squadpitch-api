@@ -258,6 +258,15 @@ export const env = {
   // Password used to authenticate Postmark's inbound webhook via
   // HTTP Basic Auth (or an injected X-Postmark-Secret header).
   POSTMARK_INBOUND_WEBHOOK_SECRET: process.env.POSTMARK_INBOUND_WEBHOOK_SECRET,
+  POSTMARK_ACCOUNT_APPROVED:
+    String(process.env.POSTMARK_ACCOUNT_APPROVED ?? "false").toLowerCase() ===
+    "true",
+  POSTMARK_SENDER_VERIFIED:
+    String(process.env.POSTMARK_SENDER_VERIFIED ?? "false").toLowerCase() ===
+    "true",
+  POSTMARK_DELIVERY_VERIFIED:
+    String(process.env.POSTMARK_DELIVERY_VERIFIED ?? "false").toLowerCase() ===
+    "true",
   // Per-workspace daily send cap. Conservative default so a runaway
   // workspace (or a bug) can't blast a Postmark account dry.
   INBOX_EMAIL_DAILY_CAP: Number.isFinite(

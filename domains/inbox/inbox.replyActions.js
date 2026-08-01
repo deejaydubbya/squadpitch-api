@@ -3,9 +3,9 @@
 // Given a Conversation (with its Contact + Provider) and the
 // workspace's current provider configuration, return an ordered
 // list of action descriptors the composer can render. Email is the
-// only fully-wired send channel today; everything else returns
-// `available: false` with a recognizable reason so the UI can show
-// "Connect <provider>" rather than a misleading send button.
+// Provider-specific actions are authoritative. Email is offered only
+// for providers whose matrix supports it; social comment actions are
+// independently gated by their real connection, scope, and message id.
 //
 // Shape pinned by the spinstr07 prompt:
 //   SEND_EMAIL             — contact.email + email provider configured
@@ -66,8 +66,8 @@ const PROVIDER_CAPABILITIES = {
   // instagram_business_manage_messages style scope is requested.
   // Public comment reply support stays true (we ask for
   // instagram_business_manage_comments at OAuth time) but the
-  // resolver below pins an honest "requires implementation and
-  // approval" reason until the IG comment-reply send path is wired.
+  // resolver below gates the wired comment-reply adapter on the
+  // connected account, granted scope, and inbound comment identity.
   INSTAGRAM: {
     supportsEmail: false,
     supportsSms: false,
@@ -227,12 +227,13 @@ export function getAvailableReplyActions(conversation, extras = {}) {
       label: "Send email",
       available: cap.available,
       reason: cap.available ? null : cap.reason,
-      // Distinguishes a missing channel (contact has no email) from
-      // a missing config (workspace hasn't wired Postmark). The UI
-      // uses this to choose "Add an email address" vs "Connect email".
+      capability: cap,
+      // Machine-readable capability details distinguish recipient,
+      // global provider, approval, sender, and stream blockers. Email
+      // never advertises a workspace mailbox connection.
       requiresConfig:
         !cap.available &&
-        (cap.reason ?? "").toLowerCase().includes("configured"),
+        cap.blockedCode === "EMAIL_PROVIDER_NOT_CONFIGURED",
     });
   }
 

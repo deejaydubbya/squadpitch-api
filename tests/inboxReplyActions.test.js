@@ -64,6 +64,11 @@ beforeEach(() => {
     POSTMARK_SERVER_TOKEN: "test-token",
     INBOX_EMAIL_FROM: "Squadpitch Inbox <inbox@mail.squadpitch.com>",
     INBOX_EMAIL_REPLY_DOMAIN: "mail.squadpitch.com",
+    POSTMARK_MESSAGE_STREAM: "outbound",
+    POSTMARK_INBOUND_WEBHOOK_SECRET: "test-secret",
+    POSTMARK_ACCOUNT_APPROVED: true,
+    POSTMARK_SENDER_VERIFIED: true,
+    POSTMARK_DELIVERY_VERIFIED: true,
     TWILIO_ACCOUNT_SID: null,
     TWILIO_AUTH_TOKEN: null,
     TWILIO_FROM_NUMBER: null,
@@ -78,6 +83,9 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     const send = findAction(actions, "SEND_EMAIL");
     expect(send).toBeTruthy();
     expect(send.available).toBe(true);
+    expect(send.capability.channelEligible).toBe(true);
+    expect(send.capability.recipientAvailable).toBe(true);
+    expect(send.capability.canSend).toBe(true);
     expect(send.reason).toBeNull();
     expect(send.requiresConfig).toBe(false);
   });
@@ -86,7 +94,10 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     const actions = getAvailableReplyActions(makeConversation({ email: null }));
     const send = findAction(actions, "SEND_EMAIL");
     expect(send.available).toBe(false);
-    expect(send.reason).toMatch(/no email address/i);
+    expect(send.capability.channelEligible).toBe(true);
+    expect(send.capability.recipientAvailable).toBe(false);
+    expect(send.capability.blockedCode).toBe("EMAIL_RECIPIENT_MISSING");
+    expect(send.reason).toMatch(/add an email address/i);
     expect(send.requiresConfig).toBe(false);
   });
 

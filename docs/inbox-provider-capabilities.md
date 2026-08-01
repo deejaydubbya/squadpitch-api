@@ -51,10 +51,10 @@ exist for that surface.
 
 ### Email (Postmark) — proven ✅
 
-- **Outbound:** `sendInboxEmail()` in `domains/inbox/inbox.outbound.email.service.js` — Postmark `sendEmail`. RFC threading + idempotency + retry + auditable Message rows.
+- **Outbound:** `sendInboxEmail()` in `domains/inbox/inbox.outbound.email.service.js` — central verified Squadpitch Postmark sender. RFC threading + idempotency + retry + auditable Message rows. Provider-aware `availableReplyActions` is authoritative; social conversations do not gain email merely because a contact email exists.
 - **Inbound:** `processInboundEmail()` in `domains/inbox/inbox.inbound.email.service.js` — Postmark inbound webhook keyed off `reply+<conversationId>@<INBOX_EMAIL_REPLY_DOMAIN>`.
 - **Closed conversations reopen** on inbound reply (unless spam); SYSTEM audit message records the event.
-- **Open items:** Postmark account approval to swap `INBOX_EMAIL_FROM` to `inbox@mail.squadpitch.com` (currently sandbox-pinned to `support@squadpitch.com`).
+- **Open items:** Postmark account approval, sender verification, and a controlled non-customer delivery must each be recorded explicitly. Gmail/Microsoft connected-mailbox sending is not implemented or required for controlled beta.
 
 ---
 

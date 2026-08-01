@@ -65,16 +65,77 @@ export function emailSendBlocker({ conversation, contact, providerConfigured }) 
  * into thinking it's allowed.
  */
 export function emailCapabilityFor({ conversation, contact }) {
-  const providerConfigured = isEmailProviderConfigured();
-  const blocker = emailSendBlocker({ conversation, contact, providerConfigured });
+  const details = emailCapabilityDetailsFor({ conversation, contact });
   return {
-    available: blocker === null,
-    reason: blocker,
+    available: details.canSend,
+    reason: details.blockedReason,
+    ...details,
   };
 }
 
 export function isEmailProviderConfigured() {
   return Boolean(env.POSTMARK_SERVER_TOKEN && env.INBOX_EMAIL_FROM);
+}
+
+export function emailOperationalStatus(env_ = env) {
+  const providerConfigured = Boolean(
+    env_.POSTMARK_SERVER_TOKEN && env_.INBOX_EMAIL_FROM,
+  );
+  return {
+    providerConfigured,
+    accountApproved: env_.POSTMARK_ACCOUNT_APPROVED === true,
+    senderVerified: env_.POSTMARK_SENDER_VERIFIED === true,
+    outboundStreamReady: Boolean(env_.POSTMARK_MESSAGE_STREAM),
+    inboundRoutingReady: Boolean(
+      env_.INBOX_EMAIL_REPLY_DOMAIN && env_.POSTMARK_INBOUND_WEBHOOK_SECRET,
+    ),
+    deliveryVerified: env_.POSTMARK_DELIVERY_VERIFIED === true,
+  };
+}
+
+export function emailCapabilityDetailsFor({
+  conversation,
+  contact,
+  channelEligible = true,
+  env: env_ = env,
+} = {}) {
+  const status = emailOperationalStatus(env_);
+  const recipientAvailable = Boolean(contact?.email);
+  let blockedCode = null;
+  let blockedReason = null;
+
+  if (!channelEligible) {
+    blockedCode = "EMAIL_CHANNEL_UNSUPPORTED";
+    blockedReason = "Email is not supported for this conversation channel.";
+  } else if (!status.providerConfigured) {
+    blockedCode = "EMAIL_PROVIDER_NOT_CONFIGURED";
+    blockedReason = "Email sending is not configured for Squadpitch.";
+  } else if (!status.accountApproved) {
+    blockedCode = "EMAIL_ACCOUNT_APPROVAL_PENDING";
+    blockedReason =
+      "Email sending is temporarily limited while the email provider account is being approved.";
+  } else if (!status.senderVerified) {
+    blockedCode = "EMAIL_SENDER_UNVERIFIED";
+    blockedReason = "The configured sending address is not verified.";
+  } else if (!status.outboundStreamReady) {
+    blockedCode = "EMAIL_PROVIDER_UNAVAILABLE";
+    blockedReason = "The email provider's outbound stream is unavailable.";
+  } else if (!recipientAvailable) {
+    blockedCode = "EMAIL_RECIPIENT_MISSING";
+    blockedReason = "Add an email address to this contact before sending.";
+  } else if (conversation?.spam) {
+    blockedCode = "EMAIL_CONVERSATION_SPAM";
+    blockedReason = "Conversation is marked as spam — unmark before sending.";
+  }
+
+  return {
+    ...status,
+    recipientAvailable,
+    channelEligible,
+    canSend: blockedCode === null,
+    blockedCode,
+    blockedReason,
+  };
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -228,6 +289,35 @@ export function buildPostmarkUserMessage(errorCode, rawMessage) {
   }
   // Default: pass through Postmark's own message — usually clear.
   return rawMessage || "Email provider rejected the message.";
+}
+
+export function classifyPostmarkFailure(errorCode, httpStatus) {
+  if (errorCode === 412)
+    return { classification: "ACCOUNT_APPROVAL_PENDING", retryable: false };
+  if (errorCode === 422)
+    return { classification: "SENDER_UNVERIFIED", retryable: false };
+  if (errorCode === 406)
+    return { classification: "RECIPIENT_INACTIVE", retryable: false };
+  if (errorCode === 300)
+    return { classification: "RECIPIENT_INVALID", retryable: false };
+  if (errorCode === 405)
+    return { classification: "MESSAGE_TOO_LARGE", retryable: false };
+  if (typeof httpStatus === "number" && httpStatus >= 500) {
+    return { classification: "PROVIDER_UNAVAILABLE", retryable: true };
+  }
+  if (errorCode === null && (httpStatus === null || httpStatus === undefined)) {
+    return { classification: "PROVIDER_UNAVAILABLE", retryable: true };
+  }
+  return { classification: "PROVIDER_REJECTED", retryable: false };
+}
+
+export function sanitizedProviderFailure(errorCode, httpStatus) {
+  const detail = classifyPostmarkFailure(errorCode, httpStatus);
+  const code =
+    errorCode === null || errorCode === undefined
+      ? "unknown"
+      : String(errorCode);
+  return `postmark:${detail.classification}:code=${code}:retryable=${detail.retryable}`;
 }
 
 // Convert a plain-text body into a very simple HTML body. Newlines
@@ -447,16 +537,14 @@ export async function sendInboxEmail(
     }
   }
 
-  const providerConfigured = isEmailProviderConfigured();
-  const blocker = emailSendBlocker({
+  const emailCapability = emailCapabilityDetailsFor({
     conversation,
     contact: conversation.contact,
-    providerConfigured,
   });
-  if (blocker) {
-    const err = new Error(blocker);
+  if (!emailCapability.canSend) {
+    const err = new Error(emailCapability.blockedReason);
     err.status = 412;
-    err.code = providerConfigured ? "EMAIL_NOT_AVAILABLE" : "EMAIL_NOT_CONFIGURED";
+    err.code = emailCapability.blockedCode;
     throw err;
   }
 
@@ -658,6 +746,7 @@ export async function sendInboxEmail(
     const httpStatus = rawErr?.statusCode ?? rawErr?.status;
     const errorName = rawErr?.name ?? "Error";
     const rawMessage = rawErr?.message || String(rawErr).slice(0, 1000);
+    const safeFailure = sanitizedProviderFailure(postmarkErrorCode, httpStatus);
 
     console.error("[INBOX_OUTBOUND_EMAIL] Postmark sendEmail threw:", {
       messageId: messageRow.id,
@@ -667,7 +756,7 @@ export async function sendInboxEmail(
       toDomain: emailDomainForLog(postmarkPayload.To),
       stream: postmarkPayload.MessageStream,
       errorName,
-      errorMessage: rawMessage,
+      errorClassification: safeFailure,
       errorCode: postmarkErrorCode,
       statusCode: httpStatus,
       stack: rawErr?.stack?.split("\n").slice(0, 5).join("\n"),
@@ -676,11 +765,7 @@ export async function sendInboxEmail(
       where: { id: messageRow.id },
       data: {
         deliveryStatus: "FAILED",
-        errorReason:
-          (postmarkErrorCode !== null
-            ? `${postmarkErrorCode}: ${rawMessage}`
-            : `${errorName}: ${rawMessage}`
-          ).slice(0, 4000),
+        errorReason: safeFailure,
       },
     });
 
@@ -696,7 +781,7 @@ export async function sendInboxEmail(
       const err = new Error(userFacing);
       err.status = 502;
       err.code = "PROVIDER_FAILED";
-      err.providerError = rawMessage;
+      err.providerError = safeFailure;
       err.postmarkErrorCode = postmarkErrorCode;
       throw err;
     }
@@ -705,7 +790,7 @@ export async function sendInboxEmail(
     const err = new Error("Email provider is unreachable. Try again in a minute.");
     err.status = 503;
     err.code = "PROVIDER_UNREACHABLE";
-    err.providerError = rawMessage;
+    err.providerError = safeFailure;
     throw err;
   }
 
@@ -714,6 +799,10 @@ export async function sendInboxEmail(
   // unsubscribed recipient, etc.). Treat as FAILED.
   if (providerResponse?.ErrorCode && providerResponse.ErrorCode !== 0) {
     const reason = providerResponse.Message || `ErrorCode ${providerResponse.ErrorCode}`;
+    const safeFailure = sanitizedProviderFailure(
+      providerResponse.ErrorCode,
+      400,
+    );
     console.error("[INBOX_OUTBOUND_EMAIL] Postmark rejected:", {
       messageId: messageRow.id,
       conversationId,
@@ -722,19 +811,21 @@ export async function sendInboxEmail(
       toDomain: emailDomainForLog(postmarkPayload.To),
       stream: postmarkPayload.MessageStream,
       errorCode: providerResponse.ErrorCode,
-      message: providerResponse.Message,
+      errorClassification: safeFailure,
     });
     await prisma.message.update({
       where: { id: messageRow.id },
       data: {
         deliveryStatus: "FAILED",
-        errorReason: `${providerResponse.ErrorCode}: ${reason}`,
+        errorReason: safeFailure,
       },
     });
-    const err = new Error(reason);
+    const err = new Error(
+      buildPostmarkUserMessage(providerResponse.ErrorCode, reason),
+    );
     err.status = 502;
     err.code = "PROVIDER_FAILED";
-    err.providerError = reason;
+    err.providerError = safeFailure;
     throw err;
   }
 
