@@ -150,7 +150,10 @@ export async function runProductionReadinessChecks({
       ["database.connectivity", "Database"],
       ["database.migrations", "Migration/schema state"],
       ["redis.connectivity", "Redis/queues/workers"],
-      ["worker.connectivity", "Redis/queues/workers"],
+      ["AUTOMATED_WORKER_HEALTH_URL_CONFIGURED", "Worker health"],
+      ["AUTOMATED_WORKER_HEALTH_REACHABLE", "Worker health"],
+      ["WORKER_HEALTH_RESPONSE_VALID", "Worker health"],
+      ["WORKER_HEALTH_PRODUCTION_STATUS", "Worker health"],
       ["api.connectivity", "Runtime/environment"],
       ["web.connectivity", "Runtime/environment"],
       ["sites.connectivity", "Sites runtime"],
@@ -233,25 +236,10 @@ export async function runProductionReadinessChecks({
       redisProbe,
       { env },
     ),
-    env.SQUADPITCH_WORKER_HEALTH_URL
-      ? await httpCheck({
-          id: "worker.connectivity",
-          group: "Redis/queues/workers",
-          url: env.SQUADPITCH_WORKER_HEALTH_URL,
-          core: true,
-          fetchImpl,
-          remediation:
-            "Check the worker Fly machines, process health endpoint, Redis, and logs.",
-        })
-      : check(
-          "worker.connectivity",
-          "Redis/queues/workers",
-          "connectivity",
-          "BLOCKED",
-          "P0",
-          "SQUADPITCH_WORKER_HEALTH_URL is not configured for an automated worker probe",
-          "Set a read-only worker health URL or verify Fly worker machines/logs manually.",
-        ),
+    ...(await workerHealthEndpointChecks({
+      url: env.SQUADPITCH_WORKER_HEALTH_URL,
+      fetchImpl,
+    })),
     await httpCheck({
       id: "api.connectivity",
       group: "Runtime/environment",
@@ -731,6 +719,185 @@ async function httpCheck({ id, group, url, core, fetchImpl, remediation }) {
       remediation,
     );
   }
+}
+
+export async function workerHealthEndpointChecks({
+  url,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 8_000,
+  now = new Date(),
+} = {}) {
+  const group = "Worker health";
+  const remediation =
+    "Check the private production configuration, API /ready endpoint, Redis, and worker heartbeats.";
+  const configured = Boolean(url?.trim());
+  const checks = [
+    check(
+      "AUTOMATED_WORKER_HEALTH_URL_CONFIGURED",
+      group,
+      "configuration",
+      configured ? "PASS" : "BLOCKED",
+      "P0",
+      configured
+        ? "Automated worker-health endpoint is configured"
+        : "SQUADPITCH_WORKER_HEALTH_URL is not configured",
+      "Configure the existing read-only production worker-health endpoint.",
+    ),
+  ];
+  if (!configured) {
+    for (const id of [
+      "AUTOMATED_WORKER_HEALTH_REACHABLE",
+      "WORKER_HEALTH_RESPONSE_VALID",
+      "WORKER_HEALTH_PRODUCTION_STATUS",
+    ]) {
+      checks.push(
+        check(
+          id,
+          group,
+          "connectivity",
+          "BLOCKED",
+          "P0",
+          "Worker-health probe is blocked by missing private configuration",
+          remediation,
+        ),
+      );
+    }
+    return checks;
+  }
+
+  let response;
+  let body;
+  try {
+    response = await fetchImpl(url, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: "follow",
+    });
+    body = await response.json().catch(() => null);
+  } catch (error) {
+    const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+    checks.push(
+      check(
+        "AUTOMATED_WORKER_HEALTH_REACHABLE",
+        group,
+        "connectivity",
+        "BLOCKED",
+        "P0",
+        timedOut
+          ? `Worker-health probe timed out after ${timeoutMs}ms`
+          : "Worker-health transport or DNS probe failed",
+        remediation,
+      ),
+    );
+    for (const id of [
+      "WORKER_HEALTH_RESPONSE_VALID",
+      "WORKER_HEALTH_PRODUCTION_STATUS",
+    ]) {
+      checks.push(
+        check(
+          id,
+          group,
+          "connectivity",
+          "BLOCKED",
+          "P0",
+          "No worker-health response was available to classify",
+          remediation,
+        ),
+      );
+    }
+    return checks;
+  }
+
+  const unauthorized = response.status === 401 || response.status === 403;
+  checks.push(
+    check(
+      "AUTOMATED_WORKER_HEALTH_REACHABLE",
+      group,
+      "connectivity",
+      unauthorized ? "BLOCKED" : "PASS",
+      "P0",
+      unauthorized
+        ? `Worker-health endpoint requires unavailable authentication (HTTP ${response.status})`
+        : `Worker-health endpoint responded (HTTP ${response.status})`,
+      remediation,
+    ),
+  );
+  if (unauthorized) {
+    for (const id of [
+      "WORKER_HEALTH_RESPONSE_VALID",
+      "WORKER_HEALTH_PRODUCTION_STATUS",
+    ]) {
+      checks.push(
+        check(
+          id,
+          group,
+          "connectivity",
+          "BLOCKED",
+          "P0",
+          "Worker-health response is unavailable without authorized access",
+          remediation,
+        ),
+      );
+    }
+    return checks;
+  }
+
+  const valid =
+    body?.service === "squadpitch-api" &&
+    ["ready", "not_ready"].includes(body?.status) &&
+    typeof body?.dependencies?.db === "boolean" &&
+    typeof body?.dependencies?.redis === "boolean" &&
+    ["healthy", "degraded", "blocked"].includes(
+      body?.dependencies?.workers,
+    );
+  checks.push(
+    check(
+      "WORKER_HEALTH_RESPONSE_VALID",
+      group,
+      "connectivity",
+      valid ? "PASS" : "FAIL",
+      "P0",
+      valid
+        ? "Worker-health response matches the safe readiness schema"
+        : "Worker-health response schema is invalid",
+      remediation,
+    ),
+  );
+  if (!valid) {
+    checks.push(
+      check(
+        "WORKER_HEALTH_PRODUCTION_STATUS",
+        group,
+        "connectivity",
+        "FAIL",
+        "P0",
+        "Worker-health state cannot be trusted because the response schema is invalid",
+        remediation,
+      ),
+    );
+    return checks;
+  }
+
+  const workerStatus = body.dependencies.workers;
+  const status =
+    workerStatus === "healthy"
+      ? "PASS"
+      : workerStatus === "degraded"
+        ? "WARN"
+        : "FAIL";
+  checks.push(
+    check(
+      "WORKER_HEALTH_PRODUCTION_STATUS",
+      group,
+      "connectivity",
+      status,
+      status === "FAIL" ? "P0" : "P2",
+      `Observed ${now.toISOString()}: production worker status is ${workerStatus}`,
+      remediation,
+    ),
+  );
+  return checks;
 }
 
 async function stripeCheck(env, fetchImpl) {

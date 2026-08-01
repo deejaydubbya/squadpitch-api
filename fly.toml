@@ -43,6 +43,7 @@ primary_region = "ord"
   AI_PROVENANCE_RESPONSE_HEADERS_ENABLED = "true"
   PUBLIC_SITES_BASE_DOMAIN = "squadpitchsites.com"
   STRIPE_EXPECTED_MODE = "live"
+  SQUADPITCH_WORKER_HEALTH_URL = "https://squadpitch-api.fly.dev/ready"
 
 [[vm]]
   size = "performance-1x"

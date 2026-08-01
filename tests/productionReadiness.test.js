@@ -7,6 +7,7 @@ import {
 } from "../scripts/production-readiness/classifier.js";
 import { runProductionReadinessChecks } from "../scripts/production-readiness/checks.js";
 import { classifyCanaryEvidence } from "../scripts/production-readiness/checks.js";
+import { workerHealthEndpointChecks } from "../scripts/production-readiness/checks.js";
 
 const configuredEnv = {
   NODE_ENV: "production",
@@ -96,6 +97,98 @@ describe("production readiness classification", () => {
 });
 
 describe("production readiness checks", () => {
+  const healthyWorkerResponse = {
+    status: "ready",
+    service: "squadpitch-api",
+    dependencies: { db: true, redis: true, workers: "healthy" },
+  };
+
+  it("validates a configured, reachable and healthy worker endpoint", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      status: 200,
+      json: async () => healthyWorkerResponse,
+    }));
+    const checks = await workerHealthEndpointChecks({
+      url: "https://internal.example.test/ready?credential=secret-value",
+      fetchImpl,
+      now: new Date("2026-08-01T18:30:00.000Z"),
+    });
+    expect(checks.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: "AUTOMATED_WORKER_HEALTH_URL_CONFIGURED", status: "PASS" },
+      { id: "AUTOMATED_WORKER_HEALTH_REACHABLE", status: "PASS" },
+      { id: "WORKER_HEALTH_RESPONSE_VALID", status: "PASS" },
+      { id: "WORKER_HEALTH_PRODUCTION_STATUS", status: "PASS" },
+    ]);
+    expect(JSON.stringify(checks)).not.toContain("credential");
+    expect(JSON.stringify(checks)).not.toContain("secret-value");
+    expect(fetchImpl.mock.calls[0][1].method).toBe("GET");
+    expect(fetchImpl.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    expect(summarizeReadiness(checks)).toMatchObject({
+      status: "READY",
+      pass: 4,
+      warn: 0,
+      blocked: 0,
+      fail: 0,
+    });
+  });
+
+  it("blocks all worker endpoint evidence when the URL is missing", async () => {
+    const checks = await workerHealthEndpointChecks({ url: "" });
+    expect(checks).toHaveLength(4);
+    expect(checks.every((item) => item.status === "BLOCKED")).toBe(true);
+  });
+
+  it.each([
+    ["TimeoutError", "timed out"],
+    ["TypeError", "transport or DNS"],
+  ])("separates %s transport failure from worker state", async (name, message) => {
+    const error = Object.assign(new Error("private transport detail"), { name });
+    const checks = await workerHealthEndpointChecks({
+      url: "https://internal.example.test/ready",
+      fetchImpl: vi.fn(async () => { throw error; }),
+      timeoutMs: 25,
+    });
+    expect(checks[1]).toMatchObject({ status: "BLOCKED" });
+    expect(checks[1].message).toContain(message);
+    expect(JSON.stringify(checks)).not.toContain("private transport detail");
+  });
+
+  it.each([401, 403])("blocks on HTTP %s without claiming worker failure", async (status) => {
+    const checks = await workerHealthEndpointChecks({
+      url: "https://internal.example.test/ready",
+      fetchImpl: vi.fn(async () => ({ status, json: async () => ({}) })),
+    });
+    expect(checks[1]).toMatchObject({ status: "BLOCKED" });
+    expect(checks.slice(2).every((item) => item.status === "BLOCKED")).toBe(true);
+  });
+
+  it("fails an invalid response schema", async () => {
+    const checks = await workerHealthEndpointChecks({
+      url: "https://internal.example.test/ready",
+      fetchImpl: vi.fn(async () => ({ status: 200, json: async () => ({ status: "ok" }) })),
+    });
+    expect(checks[2]).toMatchObject({ status: "FAIL" });
+    expect(checks[3]).toMatchObject({ status: "FAIL" });
+  });
+
+  it.each([
+    ["degraded", "WARN"],
+    ["blocked", "FAIL"],
+  ])("classifies %s worker state as %s", async (workers, expected) => {
+    const checks = await workerHealthEndpointChecks({
+      url: "https://internal.example.test/ready",
+      fetchImpl: vi.fn(async () => ({
+        status: workers === "blocked" ? 503 : 200,
+        json: async () => ({
+          ...healthyWorkerResponse,
+          status: workers === "blocked" ? "not_ready" : "ready",
+          dependencies: { ...healthyWorkerResponse.dependencies, workers },
+        }),
+      })),
+    });
+    expect(checks[3]).toMatchObject({ status: expected });
+  });
+
   it("derives distinct canary and hosted-AI evidence from real result fields", () => {
     const checks = classifyCanaryEvidence({
       workspaceId: "synthetic-workspace",

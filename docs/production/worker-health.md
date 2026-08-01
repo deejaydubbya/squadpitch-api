@@ -58,6 +58,13 @@ coarse worker state (`healthy`, `degraded`, or `blocked`) and does not expose
 queue names, counts, job identifiers, or payloads. Detailed aggregate evidence
 is returned only through the authenticated, exact-workspace production canary.
 
+The broader production verifier uses `SQUADPITCH_WORKER_HEALTH_URL` to query
+this existing `GET /ready` endpoint with an eight-second timeout. No token is
+required because the response is deliberately limited to safe coarse state.
+The verifier validates the response schema and classifies healthy as `PASS`,
+degraded as `WARN`, blocked as `FAIL`, and transport/authentication inability as
+`BLOCKED`. It never prints the configured URL.
+
 With a short-lived normal synthetic-user session configured locally:
 
 ```text
