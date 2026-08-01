@@ -23,6 +23,7 @@ import { pinterestApiUrl } from "../../oauth/pinterestApi.js";
 
 const PIN_TITLE_MAX = 100;
 const PIN_DESCRIPTION_MAX = 500;
+const PIN_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
 
 // Pinterest's documented error code for "Trial app cannot create Pins
 // in production — use sandbox instead". HTTP 403 + this code means the
@@ -103,6 +104,46 @@ function deriveDescription(draft) {
   return combined.slice(0, PIN_DESCRIPTION_MAX - 1).replace(/\s+\S*$/, "") + "…";
 }
 
+async function cloudinaryBase64MediaSource(mediaUrl) {
+  let url;
+  try {
+    url = new URL(mediaUrl);
+  } catch {
+    return null;
+  }
+  // Draft media is normally hosted here. Restrict the server-side fallback
+  // to that trusted host so a user-controlled URL cannot turn publishing
+  // into an internal-network fetch.
+  if (url.protocol !== "https:" || url.hostname !== "res.cloudinary.com") return null;
+
+  const response = await fetch(url.toString(), {
+    headers: { Accept: "image/jpeg,image/png" },
+  });
+  if (!response.ok) return null;
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase();
+  if (!new Set(["image/jpeg", "image/png"]).has(contentType)) return null;
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length === 0 || bytes.length > PIN_IMAGE_MAX_BYTES) return null;
+  return {
+    source_type: "image_base64",
+    content_type: contentType,
+    data: bytes.toString("base64"),
+    is_standard: true,
+  };
+}
+
+async function sendPin(token, body) {
+  const response = await fetch(pinterestApiUrl("/v5/pins"), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  return { response, responseBody: await response.json().catch(() => ({})) };
+}
+
 export const pinterestAdapter = {
   channel: "PINTEREST",
 
@@ -160,16 +201,22 @@ export const pinterestAdapter = {
     const link = safeDestinationLink(client?.websiteUrl);
     if (link) body.link = link;
 
-    const res = await fetch(pinterestApiUrl("/v5/pins"), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    let { response: res, responseBody: respBody } = await sendPin(token, body);
 
-    const respBody = await res.json().catch(() => ({}));
+    // Pinterest occasionally returns a generic validation 400 after its
+    // crawler fails to ingest an otherwise-public image URL. For media that
+    // Squadpitch itself hosts on Cloudinary, retry the failed request once
+    // using Pinterest's documented base64 source. A 400 cannot have created
+    // a Pin, so this cannot duplicate a successful publication.
+    if (res.status === 400 && body.media_source.source_type === "image_url") {
+      const fallbackSource = await cloudinaryBase64MediaSource(draft.mediaUrl);
+      if (fallbackSource) {
+        ({ response: res, responseBody: respBody } = await sendPin(token, {
+          ...body,
+          media_source: fallbackSource,
+        }));
+      }
+    }
 
     // Pinterest gates Trial-access apps from creating Pins on the
     // production host. Catch this specific case BEFORE the generic

@@ -494,6 +494,64 @@ describe("pinterest.adapter — publishPost", () => {
     ).rejects.toMatchObject({ transient: true });
   });
 
+  it("retries a rejected Cloudinary image with Pinterest's base64 media source", async () => {
+    const { pinterestAdapter } = await import(
+      "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"
+    );
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({ code: 15, message: "Invalid board or media source" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "image/jpeg" }),
+        arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({ id: "98765" }),
+      });
+
+    const result = await pinterestAdapter.publishPost({
+      draft: {
+        body: "A listing",
+        mediaUrl: "https://res.cloudinary.com/squadpitch/image/upload/listing.jpg",
+      },
+      connection: { accessToken: "token", externalAccountId: "1234567890" },
+    });
+
+    expect(result.externalPostId).toBe("98765");
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+    const retryBody = JSON.parse(global.fetch.mock.calls[2][1].body);
+    expect(retryBody.media_source).toEqual({
+      source_type: "image_base64",
+      content_type: "image/jpeg",
+      data: "AQID",
+      is_standard: true,
+    });
+  });
+
+  it("does not server-fetch or retry non-Cloudinary image URLs", async () => {
+    const { pinterestAdapter } = await import(
+      "../domains/studio/publishing/channelAdapters/pinterest.adapter.js"
+    );
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ code: 15, message: "Invalid board or media source" }),
+    });
+
+    await expect(pinterestAdapter.publishPost({
+      draft: { body: "A listing", mediaUrl: "https://example.com/listing.jpg" },
+      connection: { accessToken: "token", externalAccountId: "1234567890" },
+    })).rejects.toMatchObject({ code: "PINTEREST_INVALID_BOARD" });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("maps Trial-access code 29 to PINTEREST_TRIAL_PRODUCTION_BLOCKED (not AUTH_FAILED)", async () => {
     // Pinterest code 29 = "Apps with Trial access may not create Pins
     // in production". Should NOT be AUTH_FAILED — that would tell the
