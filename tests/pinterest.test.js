@@ -430,6 +430,7 @@ describe("pinterest.adapter — publishPost", () => {
     expect(body.media_source).toEqual({
       source_type: "image_url",
       url: "https://squadpitch.com/media-proxy/image/upload/v123/foo.jpg",
+      is_standard: true,
     });
     expect(body.title.length).toBeLessThanOrEqual(100);
     expect(body.description).toContain("#realestate");

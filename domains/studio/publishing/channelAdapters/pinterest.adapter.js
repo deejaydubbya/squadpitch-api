@@ -126,6 +126,9 @@ export const pinterestAdapter = {
       media_source: {
         source_type: "image_url",
         url: draft.mediaUrl,
+        // Required by Pinterest's current image_url media-source schema.
+        // Standard organic Pins must explicitly opt into this variant.
+        is_standard: true,
       },
     };
 
