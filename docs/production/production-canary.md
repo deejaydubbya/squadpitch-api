@@ -12,6 +12,8 @@ workspace ID and requires its name to begin with `[SYNTHETIC CANARY]`.
 - Postgres write/read inside a transaction that is deliberately rolled back
 - Billing entitlement/usage lookup without checkout or charge
 - Hosted `squadpitch-ai` dry-run operations and provenance
+- Hosted source classification and Node-to-Python trace correlation for every
+  verification operation
 - Explicit fallback status
 - A dedicated BullMQ queue job that is enqueued, consumed and removed
 - SquadSites runtime health
@@ -99,3 +101,9 @@ into command history on shared systems.
 Retain JSON output with release SHA, operator, start/end time and dashboard
 links. Do not claim provider approval or end-to-end publishing from a
 configuration-presence PASS.
+
+The production-readiness verifier runs this same authenticated canary when the
+`SQUADPITCH_CANARY_*` inputs are supplied. Its nine `CANARY_*` and `AI_*`
+evidence checks are derived from live result fields, not configuration presence.
+At least one operation must return `source=squadpitch-ai`; intentionally local
+or shadow operations remain labeled as such and are never relabeled as hosted.

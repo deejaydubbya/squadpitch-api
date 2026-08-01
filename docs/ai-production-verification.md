@@ -7,10 +7,11 @@ accepted the hosted `squadpitch-ai` result or a Node/Python fallback:
 npm run verify:ai-production
 ```
 
-The verifier calls an admin/developer-only endpoint on `squadpitch-api`. The API
-then executes fixed synthetic inputs through the normal signed Node-to-Python
-control plane. It never publishes, sends messages, invokes social integrations,
-or creates drafts.
+The standalone verifier calls an admin/developer-only endpoint on
+`squadpitch-api`. The production canary can execute the same fixed synthetic
+operations through its exact-workspace allowlist and normal owner session. The
+API uses the normal signed Node-to-Python control plane. It never publishes,
+sends messages, invokes social integrations, or creates drafts.
 
 ## Status meanings
 
@@ -76,12 +77,15 @@ npm run test:ai-provenance
 The current endpoint verifies:
 
 - Campaign Ops using a proposal-only synthetic snapshot.
+- Retrieval using a synthetic, tenant-scoped snapshot and citations.
+- Action Proposal in explicit dry-run mode with `persistence=false`.
 - Autopilot ranking using two synthetic, non-persistent candidates.
 - Brand Quality using sanitized synthetic copy.
 
-Retrieval is reported as skipped because no deployed Node-to-Python retrieval
-query path exists. Action Proposal is skipped because its current preview path
-persists a proposal record.
+Every operation carries a request-derived trace ID through the signed envelope.
+The canary requires all returned provenance trace IDs to correlate. A hosted
+PASS requires at least one usable `source=squadpitch-ai` result; intentional
+shadow/local results retain their real source and execution mode.
 
 To add an operation, add a fixed read-only adapter to
 `domains/aiPlatform/productionVerification.service.js`, validate a minimally
