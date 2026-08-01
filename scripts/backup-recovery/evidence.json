@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "backup-recovery-evidence.v1",
+  "schemaVersion": "backup-recovery-evidence.v2",
   "observedAt": "2026-08-01T12:55:40.932Z",
   "provider": "Fly Postgres (unmanaged)",
   "runbookPresent": true,
@@ -9,6 +9,8 @@
   "backupMechanism": "Fly encrypted volume snapshot",
   "retentionDays": 5,
   "pitrConfirmed": false,
+  "snapshotOnlyRecoveryAcceptedForControlledBeta": true,
+  "acceptedWarning": "Controlled beta temporarily accepts snapshot-only Postgres recovery. Worst-case data loss may approach one daily snapshot interval. PITR, a 15-minute RPO, and full recovery readiness are not proven; public acquisition remains blocked until PITR or an equivalent capability is restored and tested.",
   "restoreTestCompleted": true,
   "restoreValidationPassed": true,
   "restoreTarget": "squadpitch-restore-validation-20260731",
@@ -18,6 +20,7 @@
   "restoreDurationSeconds": 237.206,
   "totalValidationDurationSeconds": 484.656,
   "recoveryPointGapSeconds": 23558.276,
-  "cleanupStatus": "Machine stopped; Machine, encrypted volume, app, and staged secrets retained pending explicit cleanup approval",
+  "cleanupStatus": "Completed 2026-08-01; temporary Machine, restored volume, app, and staged secrets deleted",
+  "cleanupCompleted": true,
   "evidenceDocument": "docs/production/restore-tests/2026-07-31.md"
 }

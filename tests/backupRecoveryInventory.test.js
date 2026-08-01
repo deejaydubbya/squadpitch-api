@@ -47,7 +47,13 @@ describe("backup and recovery inventory", () => {
     const report = JSON.parse(output);
     expect(report.valid).toBe(true);
     expect(report.recoveryReady).toBe(false);
-    expect(report.finalStatus).toBe("BLOCKED");
+    expect(report.controlledBetaReady).toBe(true);
+    expect(report.publicAcquisitionReady).toBe(false);
+    expect(report.finalStatus).toBe("WARN");
+    expect(report.launchClassification).toEqual({
+      controlledBeta: "ALLOWED_WITH_ACCEPTED_WARNING",
+      publicAcquisition: "BLOCKED",
+    });
     expect(
       Object.fromEntries(report.checks.map(({ id, passed }) => [id, passed])),
     ).toMatchObject({
@@ -57,6 +63,13 @@ describe("backup and recovery inventory", () => {
       PITR_CONFIRMED: false,
       RESTORE_TEST_COMPLETED: true,
       RESTORE_VALIDATION_PASSED: true,
+    });
+    expect(
+      report.checks.find(({ id }) => id === "PITR_CONFIRMED"),
+    ).toMatchObject({
+      passed: false,
+      acceptedWarning: true,
+      status: "ACCEPTED_WARNING",
     });
   });
 });

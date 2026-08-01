@@ -36,7 +36,21 @@ target and PostgreSQL became ready in 3 minutes 57 seconds; aggregate-only
 validation completed in 8 minutes 5 seconds. WAL/PITR backups remain disabled,
 so no earliest PITR point exists. The measured timings prove this snapshot
 restore path, not full application recovery or the target RPO/RTO. See the
-linked evidence for scope and retained cleanup resources.
+linked evidence for scope and cleanup outcome.
+
+### Accepted controlled-beta warning
+
+> Controlled beta temporarily accepts snapshot-only Postgres recovery.
+> Worst-case data loss may approach one daily snapshot interval. PITR, a
+> 15-minute RPO, and full recovery readiness are not proven; public acquisition
+> remains blocked until PITR or an equivalent capability is restored and tested.
+
+This is an explicit, time-limited risk acceptance for a very small controlled
+beta. It does not classify backup/recovery as fully ready. Daily snapshots and
+the tested restore path are proven; PITR, full application RTO, Cloudinary
+restore, Redis queue recovery, and full AI rebuild duration are not. Follow the
+[managed Postgres migration plan](managed-postgres-migration.md) before broader
+customer acquisition.
 
 ## Inventory and recovery properties
 

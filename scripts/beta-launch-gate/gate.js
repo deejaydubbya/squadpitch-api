@@ -4,6 +4,7 @@ import {
   integrationCapabilityMatrix,
   validateIntegrationCapabilityMatrix,
 } from "../../domains/integrations/integrationCapabilityMatrix.js";
+import backupRecoveryEvidence from "../backup-recovery/evidence.json" with { type: "json" };
 
 const manualCriteria = Object.freeze([
   ["fresh-signup", "BETA_GATE_FRESH_SIGNUP_EVIDENCE"],
@@ -23,6 +24,7 @@ export function evaluateBetaLaunchGate({
   env = process.env,
   apiRoot = resolve("."),
   webRoot = resolve("..", "squadpitch-web"),
+  recoveryEvidence = backupRecoveryEvidence,
 } = {}) {
   const results = [
     automated(
@@ -39,12 +41,15 @@ export function evaluateBetaLaunchGate({
     automated(
       "automated.tenant-isolation",
       existsSync(resolve(apiRoot, "tests", "tenantIsolation.test.js")) &&
-        existsSync(resolve(apiRoot, "tests", "workspaceLifecycleIsolation.test.js")),
+        existsSync(
+          resolve(apiRoot, "tests", "workspaceLifecycleIsolation.test.js"),
+        ),
       "Tenant and lifecycle isolation regression suites exist.",
     ),
     automated(
       "automated.integration-labels",
-      validateIntegrationCapabilityMatrix(integrationCapabilityMatrix).length === 0,
+      validateIntegrationCapabilityMatrix(integrationCapabilityMatrix)
+        .length === 0,
       "Integration capability labels are approval-gated.",
     ),
     automated(
@@ -58,8 +63,15 @@ export function evaluateBetaLaunchGate({
           "metaDemoPublish.js",
         ),
       ) &&
-        !read(resolve(apiRoot, "domains", "studio", "publishing", "publishingService.js"))
-          .includes("simulateMetaDemoPublish"),
+        !read(
+          resolve(
+            apiRoot,
+            "domains",
+            "studio",
+            "publishing",
+            "publishingService.js",
+          ),
+        ).includes("simulateMetaDemoPublish"),
       "Synthetic Meta publish path is absent from production publishing.",
     ),
     automated(
@@ -68,10 +80,12 @@ export function evaluateBetaLaunchGate({
         !read(resolve(apiRoot, "config", "env.js")).includes("ADMIN_USER_IDS"),
       "Authorization no longer exposes the legacy environment allowlist middleware.",
     ),
+    recoveryPolicy(recoveryEvidence),
   ];
 
   for (const [id, variable] of manualCriteria) {
-    const present = typeof env[variable] === "string" && env[variable].trim() !== "";
+    const present =
+      typeof env[variable] === "string" && env[variable].trim() !== "";
     results.push({
       id: `manual.${id}`,
       status: present ? "PASS" : "WARN",
@@ -87,18 +101,75 @@ export function evaluateBetaLaunchGate({
       results.filter((item) => item.status === status).length,
     ]),
   );
+  const acceptedWarnings = results.filter(
+    (item) => item.status === "WARN" && item.acceptedWarning,
+  ).length;
+  const incompleteWarnings = counts.warn - acceptedWarnings;
+  const controlledBetaAllowed = counts.fail === 0 && incompleteWarnings === 0;
+  const publicAcquisitionAllowed =
+    controlledBetaAllowed && recoveryEvidence.pitrConfirmed === true;
+  const snapshotRecoveryAccepted = results.some(
+    (item) =>
+      item.id === "automated.backup-recovery-policy" &&
+      (item.status === "PASS" || item.acceptedWarning),
+  );
   return {
-    schemaVersion: "beta-launch-gate.v1",
+    schemaVersion: "beta-launch-gate.v2",
     generatedAt: new Date().toISOString(),
     summary: {
       status: counts.fail
         ? "NOT_READY"
-        : counts.warn
+        : incompleteWarnings
           ? "NOT_READY_EVIDENCE_INCOMPLETE"
-          : "READY_FOR_CONTROLLED_BETA",
+          : acceptedWarnings
+            ? "CONTROLLED_BETA_ALLOWED_WITH_ACCEPTED_WARNING"
+            : "READY_FOR_CONTROLLED_BETA",
+      controlledBeta: controlledBetaAllowed ? "ALLOWED" : "BLOCKED",
+      publicAcquisition: publicAcquisitionAllowed ? "ALLOWED" : "BLOCKED",
+      recoveryPolicy: {
+        controlledBeta: snapshotRecoveryAccepted
+          ? recoveryEvidence.pitrConfirmed
+            ? "ALLOWED"
+            : "ALLOWED_WITH_ACCEPTED_WARNING"
+          : "BLOCKED",
+        publicAcquisition:
+          recoveryEvidence.pitrConfirmed === true ? "ALLOWED" : "BLOCKED",
+      },
+      acceptedWarnings,
+      incompleteWarnings,
       ...counts,
     },
     results,
+  };
+}
+
+function recoveryPolicy(evidence) {
+  if (evidence?.pitrConfirmed === true) {
+    return {
+      id: "automated.backup-recovery-policy",
+      status: "PASS",
+      acceptedWarning: false,
+      message: "PITR is confirmed for public acquisition.",
+    };
+  }
+  if (
+    evidence?.restoreTestCompleted === true &&
+    evidence?.restoreValidationPassed === true &&
+    evidence?.snapshotOnlyRecoveryAcceptedForControlledBeta === true
+  ) {
+    return {
+      id: "automated.backup-recovery-policy",
+      status: "WARN",
+      acceptedWarning: true,
+      message: evidence.acceptedWarning,
+    };
+  }
+  return {
+    id: "automated.backup-recovery-policy",
+    status: "FAIL",
+    acceptedWarning: false,
+    message:
+      "Neither PITR nor an explicitly accepted, proven snapshot-restore policy is present.",
   };
 }
 

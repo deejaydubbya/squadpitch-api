@@ -35,17 +35,17 @@ or social OAuth.
 
 ## Journey coverage
 
-| Journey | Automated proof |
-| --- | --- |
-| Landing/pricing → signup/login | Web public-access, auth-flow and signup-route tests; Playwright smoke |
-| Plan continuation | Web plan handoff plus API billing integrity |
-| Workspace/onboarding | Web redirect/persistence plus API tenant isolation |
-| Billing entitlement | Stripe webhook signature, ordering/dedup and entitlement integrity simulations |
-| Content generation | Hosted AI production-verification contract and provenance/fallback classification |
-| Integration state | Capability matrix plus signed OAuth state replay/tamper/expiry tests |
-| Scheduling/publishing boundary | Publishing service state, ownership and idempotency tests; no public post |
-| Notifications/support | Postmark/Twilio production configuration and disabled-send safety |
-| Billing/account lifecycle | Subscription invariants, lifecycle dry-run/isolation and audit behavior |
+| Journey                        | Automated proof                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------- |
+| Landing/pricing → signup/login | Web public-access, auth-flow and signup-route tests; Playwright smoke             |
+| Plan continuation              | Web plan handoff plus API billing integrity                                       |
+| Workspace/onboarding           | Web redirect/persistence plus API tenant isolation                                |
+| Billing entitlement            | Stripe webhook signature, ordering/dedup and entitlement integrity simulations    |
+| Content generation             | Hosted AI production-verification contract and provenance/fallback classification |
+| Integration state              | Capability matrix plus signed OAuth state replay/tamper/expiry tests              |
+| Scheduling/publishing boundary | Publishing service state, ownership and idempotency tests; no public post         |
+| Notifications/support          | Postmark/Twilio production configuration and disabled-send safety                 |
+| Billing/account lifecycle      | Subscription invariants, lifecycle dry-run/isolation and audit behavior           |
 
 Failure paths include invalid/expired OAuth state, cross-tenant references,
 invalid Stripe signatures, duplicate/out-of-order Stripe events, disconnected
@@ -93,6 +93,23 @@ email, SMS or provider approval is ready.
 `LAUNCH_AUTO_CHARGE_CARDS=true` is also forbidden and fails the launch report.
 No credentials, card data, tokens, message bodies, or customer identifiers may
 appear in test reports.
+
+## Tracked recovery blocker
+
+| Field                   | Value                                                                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Item                    | Enable PITR or migrate to managed Postgres before public acquisition                                                                               |
+| Owner                   | Squadpitch product/engineering owner                                                                                                               |
+| Priority                | P0 before public acquisition                                                                                                                       |
+| Status                  | Open; snapshot-only recovery accepted for controlled beta                                                                                          |
+| Accepted temporary risk | Worst-case Postgres data loss may approach one daily snapshot interval; full application recovery remains unproved                                 |
+| Completion trigger      | PITR/equivalent enabled with retention documented, isolated restore tested, verifier `PITR_CONFIRMED: PASS`, and public-acquisition gate unblocked |
+| Review milestone        | Review by 2026-08-15 and at every beta expansion decision                                                                                          |
+| Plan                    | [`managed-postgres-migration.md`](managed-postgres-migration.md)                                                                                   |
+
+The gate may report `CONTROLLED_BETA_ALLOWED_WITH_ACCEPTED_WARNING` when all
+other evidence is complete. It must report `PUBLIC_ACQUISITION: BLOCKED` until
+PITR is proven.
 
 ## Live acceptance checklist
 

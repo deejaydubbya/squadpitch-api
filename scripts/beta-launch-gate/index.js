@@ -14,5 +14,8 @@ if (json) {
     `\nPASS ${report.summary.pass} | WARN ${report.summary.warn} | FAIL ${report.summary.fail}`,
   );
   console.log(`Overall: ${report.summary.status}`);
+  console.log(
+    `Recovery policy — CONTROLLED_BETA: ${report.summary.recoveryPolicy.controlledBeta} | PUBLIC_ACQUISITION: ${report.summary.recoveryPolicy.publicAcquisition}`,
+  );
 }
 if (report.summary.fail) process.exitCode = 1;
