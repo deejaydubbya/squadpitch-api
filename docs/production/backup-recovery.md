@@ -12,18 +12,30 @@ The incident commander owns sequencing, the database owner owns Postgres, the
 application owner owns reconciliation, and the security owner controls secret
 release and rotation.
 
-| System | Data role | Classification | Assumed RPO | Assumed RTO |
-| --- | --- | --- | --- | --- |
-| Postgres | Application system of record, encrypted provider tokens, billing mirror, inbox, audit and idempotency rows | Irreplaceable | 15 minutes | 4 hours |
-| Cloudinary | Uploaded and generated media bytes | Irreplaceable | 24 hours | 8 hours |
-| Redis/BullMQ | Cache, locks, OAuth nonces, rate state, delayed/retry jobs and repeat schedules | Mixed | 1 hour | 2 hours |
-| Secrets/config | Encryption keys, provider credentials, signing secrets and deployment configuration | Irreplaceable | Every change | 2 hours |
-| Stripe | Payments, invoices, customers and subscriptions | External system of record | Provider-managed | 4 hours to reconcile |
-| Auth0 | Identities, credentials, roles, Actions, applications and connections | External system of record | 24 hours | 8 hours |
-| AI retrieval/index | Current implementation is an in-process derived index | Rebuildable from authoritative sources | None independently | 8 hours after Postgres |
+| System             | Data role                                                                                                  | Classification                         | Assumed RPO        | Assumed RTO            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------ | ---------------------- |
+| Postgres           | Application system of record, encrypted provider tokens, billing mirror, inbox, audit and idempotency rows | Irreplaceable                          | 15 minutes         | 4 hours                |
+| Cloudinary         | Uploaded and generated media bytes                                                                         | Irreplaceable                          | 24 hours           | 8 hours                |
+| Redis/BullMQ       | Cache, locks, OAuth nonces, rate state, delayed/retry jobs and repeat schedules                            | Mixed                                  | 1 hour             | 2 hours                |
+| Secrets/config     | Encryption keys, provider credentials, signing secrets and deployment configuration                        | Irreplaceable                          | Every change       | 2 hours                |
+| Stripe             | Payments, invoices, customers and subscriptions                                                            | External system of record              | Provider-managed   | 4 hours to reconcile   |
+| Auth0              | Identities, credentials, roles, Actions, applications and connections                                      | External system of record              | 24 hours           | 8 hours                |
+| AI retrieval/index | Current implementation is an in-process derived index                                                      | Rebuildable from authoritative sources | None independently | 8 hours after Postgres |
 
 Missing any RPO is a data-loss window, not a promise. Do not publish these
 targets as an SLA until two consecutive quarterly drills meet them.
+
+## Current production evidence (2026-07-31)
+
+The read-only provider audit is recorded in
+[`restore-tests/2026-07-31.md`](restore-tests/2026-07-31.md). Production uses a
+single-node unmanaged Fly Postgres instance in `ord` on one encrypted 3 GB
+volume. Five successful daily volume snapshots were visible with five-day
+retention; the latest was 2026-07-31 06:13:58 UTC. WAL/PITR backups are disabled,
+no earliest PITR point exists, and no restore has been performed. Consequently,
+the table above remains a set of targets: there is no proven end-to-end RPO or
+RTO. The observed snapshot interval is approximately 24 hours, but snapshot
+restorability is still untested.
 
 ## Inventory and recovery properties
 
@@ -217,6 +229,9 @@ These are dashboard actions and must be completed by authorized operators:
 
 ## Safe metadata validation
 
-Run `npm run verify:backup-recovery`. It validates the declared recovery-system
-inventory and emits JSON. It does not connect to or mutate Postgres, Redis,
-Cloudinary, Fly, Stripe, Auth0, or any provider.
+Run `npm run verify:backup-recovery` for human-readable status or
+`npm run verify:backup-recovery:json` for machine-readable output. It reports
+runbook, provider-backup, recent-backup, PITR, restore-test and restore-validation
+evidence separately. It reads recorded evidence and does not connect to or
+mutate Postgres, Redis, Cloudinary, Fly, Stripe, Auth0, or any provider. A
+runbook or snapshot alone never produces full recovery readiness.
