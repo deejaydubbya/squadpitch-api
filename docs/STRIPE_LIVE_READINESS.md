@@ -4,15 +4,17 @@
 
 Launch self-service plans and enforced post limits are Solo/`STARTER` at
 $29/month and 30 posts, Pro/`PRO` at $59/month and 150 posts, and
-Team/`GROWTH` at $149/month and 500 posts. Agency remains an existing internal
+legacy Team/`GROWTH` at $149/month and 500 posts. Team is closed to new
+self-service purchase until collaboration exists. Agency remains an existing internal
 entitlement but has no normal Checkout or Portal plan option.
 
 - Production requires `STRIPE_EXPECTED_MODE=live` and an `sk_live_` secret.
 - The readiness verifier retrieves the three self-service prices and requires
   each to match its expected live Product, amount, USD currency, monthly
   interval, interval count, recurring type, and active status.
-- Browsers send only plan keys. The API maps `STARTER`, `PRO`, `GROWTH`, and
-  public aliases to the server-held `STARTER`, `PRO`, and `GROWTH` Price IDs.
+- Browsers send only plan keys. The API accepts `STARTER` and `PRO` for new
+  self-service purchases. `GROWTH` remains mapped only for existing subscription
+  reconciliation and webhook processing.
   `AGENCY` remains a valid internal entitlement but is not self-service.
 - Checkout and Customer Portal returns must use the exact `APP_URL` origin.
 - Checkout accepts an optional UUID idempotency key and scopes it to the API
@@ -51,13 +53,15 @@ Do not commit these values. Set them through Fly secrets and verify names with
 Perform these in **live mode**, not the Dashboard test-mode toggle:
 
 1. **Product catalog:** create/confirm one recurring monthly Price for Solo,
-   Pro, and Team. Agency is assisted/internal and must not appear as a normal
+   Pro. Team and Agency must not appear as normal new-purchase choices;
+   existing Team subscriptions remain serviceable.
    self-service Portal option.
 2. **Checkout:** enable the intended card/payment methods, collect billing
    details required by the business, configure customer emails, and confirm
    the Squadpitch branding and support links.
 3. **Customer Portal:** enable payment-method updates, invoice history,
-   cancellation behavior, and Solo/Pro/Team plan switching. Do not expose
+   cancellation behavior and Solo/Pro plan switching. Confirm legacy Team
+   subscriptions still reconcile without exposing Team for new purchase. Do not expose
    Agency or legacy/test Prices.
 4. **Webhook endpoint:** create
    `https://squadpitch-api.fly.dev/api/v1/billing/webhook`, select the current

@@ -6,7 +6,7 @@
 // Merge priority (field-level):
 //   Tier 1 (highest): user-provided ("manual")
 //   Tier 2: extracted ("url", "csv", "listing_feed")
-//   Tier 3 (lowest): API-enriched ("realtymole", "mock")
+//   Tier 3 (lowest): API-enriched (named real provider, or explicit local mock)
 
 import { prisma } from "../../prisma.js";
 import { mockProvider } from "./providers/mock.provider.js";
@@ -14,6 +14,7 @@ import { realtymoleProvider } from "./providers/realtymole.provider.js";
 import { attomProvider } from "./providers/attom.provider.js";
 import { estatedProvider } from "./providers/estated.provider.js";
 import { rentcastProvider } from "./providers/rentcast.provider.js";
+import { env } from "../../config/env.js";
 
 // Fields that can be enriched from property APIs
 const ENRICHABLE_FIELDS = [
@@ -39,16 +40,61 @@ const SOURCE_TIERS = {
 
 const providers = [realtymoleProvider, attomProvider, estatedProvider, rentcastProvider, mockProvider];
 
-function getActiveProvider() {
-  const configured = process.env.PROPERTY_API_PROVIDER || "mock";
+function mockIsAllowed() {
+  return (
+    env.NODE_ENV === "test" ||
+    env.NODE_ENV === "development" ||
+    env.PROPERTY_SYNTHETIC_DEMO_MODE
+  );
+}
 
-  // Try the configured provider first
-  for (const p of providers) {
-    if (p.name === configured && p.isAvailable()) return p;
+function unavailable(message) {
+  return Object.assign(new Error(message), {
+    status: 503,
+    code: "PROPERTY_ENRICHMENT_UNAVAILABLE",
+  });
+}
+
+function getActiveProvider() {
+  if (!env.PROPERTY_ENRICHMENT_ENABLED) {
+    throw unavailable("Property enrichment is disabled");
   }
 
-  // Fall back to mock
-  return mockProvider;
+  const configured = env.PROPERTY_API_PROVIDER;
+  const provider = providers.find((candidate) => candidate.name === configured);
+
+  if (!provider) {
+    throw unavailable("Configured property enrichment provider is unsupported");
+  }
+  if (provider.name === "mock" && !mockIsAllowed()) {
+    throw unavailable("Mock property enrichment is forbidden in this environment");
+  }
+  if (!provider.isAvailable()) {
+    throw unavailable("Configured property enrichment provider is unavailable");
+  }
+  return provider;
+}
+
+export function getPropertyEnrichmentStatus() {
+  if (!env.PROPERTY_ENRICHMENT_ENABLED) {
+    return { enabled: false, ready: true, provider: "disabled" };
+  }
+  try {
+    const provider = getActiveProvider();
+    return {
+      enabled: true,
+      ready: true,
+      provider: provider.name,
+      synthetic: provider.name === "mock",
+    };
+  } catch (error) {
+    return {
+      enabled: true,
+      ready: false,
+      provider: env.PROPERTY_API_PROVIDER || "unconfigured",
+      reason: error.code || "PROPERTY_ENRICHMENT_UNAVAILABLE",
+    };
+  }
 }
 
 /**
@@ -73,7 +119,7 @@ export function mergeListing(existingDataJson, enrichmentResult) {
   const merged = { ...existingDataJson };
   const fieldSources = { ...(existingDataJson._fieldSources || {}) };
   const fieldsAdded = [];
-  const providerName = enrichmentResult.provider || "mock";
+  const providerName = enrichmentResult.provider || "unknown";
   const providerTier = SOURCE_TIERS[providerName] || 3;
 
   for (const field of ENRICHABLE_FIELDS) {
@@ -148,6 +194,12 @@ export async function enrichListing(dataItem) {
 
   if (!result) {
     return { enriched: false, fieldsAdded: [], provider: provider.name };
+  }
+  if (result.provider !== provider.name) {
+    throw unavailable("Property enrichment result provenance is invalid");
+  }
+  if (result.provider === "mock" && !mockIsAllowed()) {
+    throw unavailable("Synthetic property enrichment cannot be persisted here");
   }
 
   const { mergedDataJson, fieldsAdded } = mergeListing(dj, result);

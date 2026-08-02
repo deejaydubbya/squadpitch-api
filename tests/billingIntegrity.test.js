@@ -459,11 +459,27 @@ describe("Abandoned checkout does not grant paid-tier limits", () => {
       billing.createCheckoutSession({
         userId: "user-1",
         email: "u@example.com",
-        tier: "GROWTH",
+        tier: "PRO",
         successUrl: "https://app.squadpitch.com/success",
         cancelUrl: "https://app.squadpitch.com/cancel",
       }),
     ).rejects.toMatchObject({ status: 409 });
+    expect(stripeCheckoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects legacy Team checkout before calling Stripe", async () => {
+    await expect(
+      billing.createCheckoutSession({
+        userId: "user-1",
+        email: "u@example.com",
+        tier: "GROWTH",
+        successUrl: "https://app.squadpitch.com/success",
+        cancelUrl: "https://app.squadpitch.com/cancel",
+      }),
+    ).rejects.toMatchObject({
+      message: "Plan is not available for self-service purchase",
+      status: 400,
+    });
     expect(stripeCheckoutCreate).not.toHaveBeenCalled();
   });
 

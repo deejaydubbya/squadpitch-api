@@ -256,11 +256,8 @@ model Client {
   // allow-list in `lib/languages.js`. Existing rows default to
   // "en" via this column default.
   defaultLanguage      String       @default("en")
-  // Inbox contact retention window. Documentary only today —
-  // there is NO auto-purge worker; manual purge requires an
-  // explicit DELETE call. Stored so a future retention worker
-  // (and the workspace settings UI) can show the policy without
-  // a schema change.
+  // Inbox contact retention window. Null/zero disables automatic retention;
+  // positive values are enforced daily using a canonical UTC cutoff.
   contactRetentionDays Int?
   createdBy            String
   createdAt            DateTime     @default(now())

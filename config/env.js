@@ -359,6 +359,15 @@ export const env = {
 
   // Property data providers — set PROPERTY_DATA_PROVIDER to "rentcast" or "attom"
   PROPERTY_DATA_PROVIDER: process.env.PROPERTY_DATA_PROVIDER ?? "rentcast",
+  PROPERTY_API_PROVIDER:
+    process.env.PROPERTY_API_PROVIDER ??
+    (process.env.NODE_ENV === "production" ? "rentcast" : "mock"),
+  PROPERTY_ENRICHMENT_ENABLED:
+    String(process.env.PROPERTY_ENRICHMENT_ENABLED ?? "true").toLowerCase() ===
+    "true",
+  PROPERTY_SYNTHETIC_DEMO_MODE:
+    String(process.env.PROPERTY_SYNTHETIC_DEMO_MODE ?? "false").toLowerCase() ===
+    "true",
 
   // RentCast
   RENTCAST_API_KEY: process.env.RENTCAST_API_KEY,

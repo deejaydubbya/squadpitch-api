@@ -4,7 +4,10 @@ import {
   summarizeCanaryResults,
   validateCanaryInvocation,
 } from "../domains/canary/canaryPolicy.js";
-import { verifyProductionCanary } from "../scripts/production-canary/runner.js";
+import {
+  exchangeCanaryRefreshToken,
+  verifyProductionCanary,
+} from "../scripts/production-canary/runner.js";
 import { summarizeAiCanaryResults } from "../domains/canary/canary.service.js";
 
 describe("production canary policy", () => {
@@ -127,6 +130,29 @@ describe("production canary AI evidence", () => {
 });
 
 describe("production canary client", () => {
+  it("exchanges a rotating Auth0 refresh token without returning it", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "short-lived-access-token" }),
+    }));
+    const token = await exchangeCanaryRefreshToken({
+      auth0Domain: "tenant.example.test",
+      clientId: "native-canary",
+      refreshToken: "never-log-refresh-token",
+      audience: "https://api.example.test",
+      fetchImpl,
+    });
+    expect(token).toBe("short-lived-access-token");
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe("https://tenant.example.test/oauth/token");
+    expect(JSON.parse(init.body)).toMatchObject({
+      grant_type: "refresh_token",
+      client_id: "native-canary",
+      refresh_token: "never-log-refresh-token",
+    });
+  });
+
   it("uses normal bearer authorization and synthetic acknowledgement", async () => {
     const fetchImpl = vi.fn(async (_url, init) => ({
       status: 200,

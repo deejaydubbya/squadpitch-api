@@ -9,7 +9,7 @@
 //   FREE    → "Free"
 //   STARTER → "Solo"     (do NOT show "Starter" to users)
 //   PRO     → "Pro"
-//   GROWTH  → "Team"     (do NOT show "Growth" to users)
+//   GROWTH  → "Team"     (legacy existing-subscription label only)
 //   AGENCY  → "Agency"
 //
 // Required env vars before this code is useful in production:
@@ -17,7 +17,7 @@
 //   STRIPE_WEBHOOK_SECRET
 //   STRIPE_STARTER_PRICE_ID  → Stripe price for Solo  ($29/mo)
 //   STRIPE_PRO_PRICE_ID      → Stripe price for Pro   ($59/mo)
-//   STRIPE_GROWTH_PRICE_ID   → Stripe price for Team  ($149/mo)
+//   STRIPE_GROWTH_PRICE_ID   → legacy Team price (existing subscriptions only)
 // Agency remains a valid internal entitlement but is not self-service.
 // STRIPE_AGENCY_PRICE_ID is optional and reserved for assisted migrations.
 //
@@ -118,8 +118,13 @@ export const TIER_ORDER = ["FREE", "STARTER", "PRO", "GROWTH", "AGENCY"];
 /** All paid tiers (i.e. tiers that require an active Stripe subscription). */
 export const PAID_TIERS = ["STARTER", "PRO", "GROWTH", "AGENCY"];
 
-/** Plans a customer may purchase or switch to without staff assistance. */
-export const SELF_SERVICE_TIERS = ["STARTER", "PRO", "GROWTH"];
+/**
+ * Plans a customer may purchase or switch to without staff assistance.
+ * GROWTH remains a valid entitlement so existing subscriptions continue to
+ * reconcile, but it is deliberately closed to new self-service purchases
+ * until multi-user workspace collaboration exists.
+ */
+export const SELF_SERVICE_TIERS = ["STARTER", "PRO"];
 
 const PUBLIC_TIER_ALIASES = {
   SOLO: "STARTER",
@@ -132,7 +137,8 @@ const PUBLIC_TIER_ALIASES = {
 /** Normalize public plan names to canonical internal self-service tiers. */
 export function normalizeSelfServiceTier(value) {
   if (typeof value !== "string") return null;
-  return PUBLIC_TIER_ALIASES[value.trim().toUpperCase()] ?? null;
+  const tier = PUBLIC_TIER_ALIASES[value.trim().toUpperCase()] ?? null;
+  return SELF_SERVICE_TIERS.includes(tier) ? tier : null;
 }
 
 export function getLimitsForTier(tier) {
@@ -157,7 +163,6 @@ export function assertStripeEnvConfigured(env) {
   if (!env.STRIPE_WEBHOOK_SECRET) missing.push("STRIPE_WEBHOOK_SECRET");
   if (!env.STRIPE_STARTER_PRICE_ID) missing.push("STRIPE_STARTER_PRICE_ID");
   if (!env.STRIPE_PRO_PRICE_ID) missing.push("STRIPE_PRO_PRICE_ID");
-  if (!env.STRIPE_GROWTH_PRICE_ID) missing.push("STRIPE_GROWTH_PRICE_ID");
   if (missing.length > 0) {
     console.warn(
       `[BILLING] Missing Stripe env vars: ${missing.join(", ")}. ` +

@@ -77,7 +77,7 @@ export async function getPlans() {
     return _plansCache;
 
   const s = requireStripe();
-  const tiers = ["STARTER", "PRO", "GROWTH"];
+  const tiers = SELF_SERVICE_TIERS;
   const plans = [
     {
       tier: "FREE",
@@ -155,6 +155,11 @@ export async function createCheckoutSession({
   idempotencyKey,
 }) {
   const s = requireStripe();
+  if (!SELF_SERVICE_TIERS.includes(tier)) {
+    throw Object.assign(new Error("Plan is not available for self-service purchase"), {
+      status: 400,
+    });
+  }
   const existingSubscription = await prisma.subscription.findUnique({
     where: { userId },
   });
@@ -261,6 +266,12 @@ export async function resumeSignupCheckout({ userId, email }) {
     throw Object.assign(new Error("Select a plan before starting checkout"), {
       status: 409,
     });
+  }
+  if (!SELF_SERVICE_TIERS.includes(intent.desiredTier)) {
+    throw Object.assign(
+      new Error("Selected plan is no longer available for self-service purchase"),
+      { status: 400 },
+    );
   }
 
   const s = requireStripe();
@@ -566,8 +577,6 @@ export function buildQuotaError(limitType, current, allowed, tier) {
   const NEXT_TIER = {
     FREE: "STARTER",
     STARTER: "PRO",
-    PRO: "GROWTH",
-    GROWTH: "AGENCY",
   };
   const nextTier = NEXT_TIER[tier];
   const nextLimits = nextTier ? getLimitsForTier(nextTier) : null;
@@ -661,6 +670,12 @@ export async function changePlan({ userId, newTier }) {
       ),
       { status: 400 },
     );
+  }
+
+  if (!SELF_SERVICE_TIERS.includes(newTier)) {
+    throw Object.assign(new Error("Plan is not available for self-service purchase"), {
+      status: 400,
+    });
   }
 
   const newPriceId = TIER_PRICE_MAP[newTier];

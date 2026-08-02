@@ -33,7 +33,7 @@ describe("PLAN_TIERS — pricing matches the launch contract", () => {
     expect(PLAN_TIERS.PRO.label).toBe("Pro");
   });
 
-  it("GROWTH (Team) is $149/mo and shown as 'Team'", () => {
+  it("keeps the legacy GROWTH entitlement for existing Team subscriptions", () => {
     expect(PLAN_TIERS.GROWTH.priceMonthly).toBe(14900);
     expect(PLAN_TIERS.GROWTH.label).toBe("Team");
     expect(PLAN_TIERS.GROWTH.label).not.toBe("Growth");
@@ -52,12 +52,12 @@ describe("Tier helpers", () => {
   });
 
   it("keeps Agency internal and normalizes public plan aliases", () => {
-    expect(SELF_SERVICE_TIERS).toEqual(["STARTER", "PRO", "GROWTH"]);
+    expect(SELF_SERVICE_TIERS).toEqual(["STARTER", "PRO"]);
     expect(normalizeSelfServiceTier("SOLO")).toBe("STARTER");
     expect(normalizeSelfServiceTier("starter")).toBe("STARTER");
     expect(normalizeSelfServiceTier("PRO")).toBe("PRO");
-    expect(normalizeSelfServiceTier("TEAM")).toBe("GROWTH");
-    expect(normalizeSelfServiceTier("growth")).toBe("GROWTH");
+    expect(normalizeSelfServiceTier("TEAM")).toBeNull();
+    expect(normalizeSelfServiceTier("growth")).toBeNull();
     expect(normalizeSelfServiceTier("AGENCY")).toBeNull();
     expect(normalizeSelfServiceTier("price_123")).toBeNull();
   });

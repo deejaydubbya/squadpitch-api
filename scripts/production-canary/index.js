@@ -1,20 +1,23 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { verifyProductionCanary } from "./runner.js";
+import { exchangeCanaryRefreshToken, verifyProductionCanary } from "./runner.js";
 
 const json = process.argv.includes("--json");
-const cookie = process.env.SQUADPITCH_CANARY_COOKIE;
-const baseUrl =
-  process.env.SQUADPITCH_CANARY_BASE_URL ??
-  (cookie ? "https://app.squadpitch.com" : "https://squadpitch-api.fly.dev");
+const baseUrl = process.env.SQUADPITCH_CANARY_BASE_URL ?? "https://squadpitch-api.fly.dev";
 const runId = process.env.SQUADPITCH_CANARY_RUN_ID ?? randomUUID();
 
 try {
+  const token = process.env.SQUADPITCH_CANARY_TOKEN ??
+    await exchangeCanaryRefreshToken({
+      auth0Domain: process.env.SQUADPITCH_CANARY_AUTH0_DOMAIN,
+      clientId: process.env.SQUADPITCH_CANARY_AUTH0_CLIENT_ID,
+      refreshToken: process.env.SQUADPITCH_CANARY_AUTH0_REFRESH_TOKEN,
+      audience: process.env.SQUADPITCH_CANARY_AUTH0_AUDIENCE,
+    });
   const report = await verifyProductionCanary({
     baseUrl,
     workspaceId: process.env.SQUADPITCH_CANARY_WORKSPACE_ID,
-    token: process.env.SQUADPITCH_CANARY_TOKEN,
-    cookie,
+    token,
     runId,
   });
   console.log(json ? JSON.stringify(report, null, 2) : render(report));

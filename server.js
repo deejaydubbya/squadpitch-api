@@ -192,11 +192,20 @@ app.get("/ready", async (req, res) => {
   const workerHealth = redisOk
     ? await inspectWorkerHealth()
     : { status: "blocked" };
-  const ready = dbOk && redisOk;
+  const { getPropertyEnrichmentStatus } = await import(
+    "./domains/industry/propertyEnrichment.service.js"
+  );
+  const enrichment = getPropertyEnrichmentStatus();
+  const ready = dbOk && redisOk && enrichment.ready;
   res.status(ready ? 200 : 503).json({
     status: ready ? "ready" : "not_ready",
     service: "squadpitch-api",
-    dependencies: { db: dbOk, redis: redisOk, workers: workerHealth.status },
+    dependencies: {
+      db: dbOk,
+      redis: redisOk,
+      workers: workerHealth.status,
+      propertyEnrichment: enrichment.ready,
+    },
   });
 });
 
@@ -325,6 +334,7 @@ let facebookCommentPollerWorker;
 let instagramCommentPollerWorker;
 let autopilotEvaluatorWorker;
 let workerHealthWorker;
+let contactRetentionWorker;
 
 let server;
 (async () => {
@@ -420,6 +430,10 @@ let server;
       const { startAutopilotEvaluatorWorker } =
         await import("./workers/autopilotEvaluatorWorker.js");
       autopilotEvaluatorWorker = startAutopilotEvaluatorWorker();
+
+      const { startContactRetentionWorker } =
+        await import("./workers/contactRetentionWorker.js");
+      contactRetentionWorker = startContactRetentionWorker();
     }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
@@ -429,6 +443,9 @@ let server;
 
 const shutdown = (sig) => async () => {
   console.log(`[SHUTDOWN] ${sig} received, closing server...`);
+  try {
+    if (contactRetentionWorker) await contactRetentionWorker.close();
+  } catch {}
   try {
     if (scheduledPublishWorker) await scheduledPublishWorker.close();
   } catch {}

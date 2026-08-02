@@ -11,13 +11,11 @@ describe("billing self-service tier schemas", () => {
     ["SOLO", "STARTER"],
     ["STARTER", "STARTER"],
     ["PRO", "PRO"],
-    ["TEAM", "GROWTH"],
-    ["GROWTH", "GROWTH"],
   ])("normalizes %s to %s", (input, expected) => {
     expect(SignupPlanSchema.parse({ tier: input }).tier).toBe(expected);
   });
 
-  it.each(["AGENCY", "FREE", "price_123", "UNKNOWN"])(
+  it.each(["TEAM", "GROWTH", "AGENCY", "FREE", "price_123", "UNKNOWN"])(
     "rejects non-self-service value %s",
     (tier) => {
       expect(SignupPlanSchema.safeParse({ tier }).success).toBe(false);

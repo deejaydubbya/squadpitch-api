@@ -19,7 +19,9 @@ Paid pricing CTA
   -> /onboarding
 ```
 
-The supported browser plan keys are `STARTER`, `PRO`, `GROWTH`, and `AGENCY`.
+The supported paid browser plan keys are `STARTER` and `PRO`. `GROWTH` is a
+legacy entitlement for existing Team subscriptions and `AGENCY` is assisted;
+neither is accepted by self-service signup or checkout.
 The API maps those keys to server-side Stripe price IDs. Price IDs and return
 URLs are never accepted from the signup continuation page.
 
