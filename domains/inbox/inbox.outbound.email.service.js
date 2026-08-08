@@ -117,6 +117,10 @@ export function emailCapabilityDetailsFor({
   } else if (!status.senderVerified) {
     blockedCode = "EMAIL_SENDER_UNVERIFIED";
     blockedReason = "The configured sending address is not verified.";
+  } else if (!status.deliveryVerified) {
+    blockedCode = "EMAIL_DELIVERY_UNVERIFIED";
+    blockedReason =
+      "Email sending remains disabled until the controlled outbound and reply verification is complete.";
   } else if (!status.outboundStreamReady) {
     blockedCode = "EMAIL_PROVIDER_UNAVAILABLE";
     blockedReason = "The email provider's outbound stream is unavailable.";

@@ -118,6 +118,18 @@ describe("getAvailableReplyActions — SquadSites (form intake)", () => {
     expect(send.reason).toMatch(/spam/i);
   });
 
+  it("keeps SEND_EMAIL disabled until outbound delivery and reply are verified", () => {
+    envOverrides.POSTMARK_DELIVERY_VERIFIED = false;
+    const send = findAction(
+      getAvailableReplyActions(makeConversation()),
+      "SEND_EMAIL",
+    );
+    expect(send.available).toBe(false);
+    expect(send.capability.blockedCode).toBe("EMAIL_DELIVERY_UNVERIFIED");
+    expect(send.reason).toMatch(/outbound and reply verification/i);
+    expect(send.requiresConfig).toBe(false);
+  });
+
   it("offers SEND_SMS as a placeholder with requiresConfig when Twilio isn't wired", () => {
     const actions = getAvailableReplyActions(makeConversation());
     const sms = findAction(actions, "SEND_SMS");
