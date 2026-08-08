@@ -29,6 +29,7 @@ import { metaThreadsWebhookRouter } from "./domains/integrations/metaThreadsWebh
 import { publicSitesRouter } from "./domains/sites/public.routes.js";
 import { sitesDashboardRouter } from "./domains/sites/sites.dashboard.routes.js";
 import { inboxRouter } from "./domains/inbox/inbox.routes.js";
+import { postmarkCanaryRouter } from "./domains/inbox/postmarkCanary.routes.js";
 import { inboxWebhookRouter } from "./domains/inbox/inbox.webhook.routes.js";
 import { adsRouter } from "./domains/ads/ads.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
@@ -241,6 +242,10 @@ app.use(publicSitesRouter);
 // deliver parsed lead replies. Verified via shared-secret
 // (POSTMARK_INBOUND_WEBHOOK_SECRET); no Bearer auth.
 app.use(inboxWebhookRouter);
+
+// Dedicated synthetic Postmark authorization and exact server-side scope.
+// This is intentionally separate from normal customer JWT/Inbox sending.
+app.use(postmarkCanaryRouter);
 
 // Auth + user upsert for all /api/* routes EXCEPT the Stripe webhook
 app.use("/api", (req, res, next) => {

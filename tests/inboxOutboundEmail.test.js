@@ -446,6 +446,31 @@ describe("emailCapabilityFor — UI-facing capability snapshot", () => {
     expect(result.blockedCode).toBe("EMAIL_RECIPIENT_MISSING");
   });
 
+  it("keeps normal email blocked while the dedicated canary service can persist a threaded send", async () => {
+    envOverrides = { POSTMARK_DELIVERY_VERIFIED: false };
+    await expect(
+      outbound.sendInboxEmail(CLIENT_A, "conv-a", "auth0|u1", { body: "hi" }),
+    ).rejects.toMatchObject({
+      status: 412,
+      code: "EMAIL_DELIVERY_UNVERIFIED",
+    });
+
+    const pm = stubPostmark({ MessageID: "pm-canary" });
+    outbound.__setPostmarkClientForTest(pm);
+    const result = await outbound.sendSyntheticCanaryEmail(CLIENT_A, "conv-a", {
+      body: "[SYNTHETIC CANARY] controlled verification",
+      subject: "[SYNTHETIC CANARY] Postmark verification",
+      idempotencyKey: "123e4567-e89b-42d3-a456-426614174000",
+    });
+    expect(result).toMatchObject({
+      deliveryStatus: "SENT",
+      providerMessageId: "pm-canary",
+    });
+    expect(pm.sendEmail.mock.calls[0][0].ReplyTo).toBe(
+      "reply+conv-a@mail.squadpitch.com",
+    );
+  });
+
   it("distinguishes account approval and sender verification", () => {
     envOverrides = { POSTMARK_ACCOUNT_APPROVED: false };
     const pending = outbound.emailCapabilityFor({ conversation: {}, contact: { email: "x@example.com" } });

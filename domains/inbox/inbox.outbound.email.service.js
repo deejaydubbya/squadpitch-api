@@ -492,6 +492,42 @@ export async function sendInboxEmail(
   userId,
   { body, subject, fromSuggestionId, idempotencyKey } = {},
 ) {
+  return sendInboxEmailInternal(clientId, conversationId, userId, {
+    body,
+    subject,
+    fromSuggestionId,
+    idempotencyKey,
+    allowUnverifiedDelivery: false,
+  });
+}
+
+// Dedicated service seam for the separately authenticated, exactly scoped
+// production canary. Normal Inbox sends always use sendInboxEmail above.
+export async function sendSyntheticCanaryEmail(
+  clientId,
+  conversationId,
+  { body, subject, idempotencyKey } = {},
+) {
+  return sendInboxEmailInternal(clientId, conversationId, null, {
+    body,
+    subject,
+    idempotencyKey,
+    allowUnverifiedDelivery: true,
+  });
+}
+
+async function sendInboxEmailInternal(
+  clientId,
+  conversationId,
+  userId,
+  {
+    body,
+    subject,
+    fromSuggestionId,
+    idempotencyKey,
+    allowUnverifiedDelivery,
+  } = {},
+) {
   if (!body || typeof body !== "string" || body.trim().length === 0) {
     const err = new Error("Body is required");
     err.status = 400;
@@ -544,6 +580,9 @@ export async function sendInboxEmail(
   const emailCapability = emailCapabilityDetailsFor({
     conversation,
     contact: conversation.contact,
+    env: allowUnverifiedDelivery
+      ? { ...env, POSTMARK_DELIVERY_VERIFIED: true }
+      : env,
   });
   if (!emailCapability.canSend) {
     const err = new Error(emailCapability.blockedReason);

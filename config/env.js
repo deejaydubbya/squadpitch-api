@@ -273,6 +273,13 @@ export const env = {
   POSTMARK_DELIVERY_VERIFIED:
     String(process.env.POSTMARK_DELIVERY_VERIFIED ?? "false").toLowerCase() ===
     "true",
+  POSTMARK_CANARY_ACCESS_TOKEN: process.env.POSTMARK_CANARY_ACCESS_TOKEN,
+  POSTMARK_CANARY_ALLOWED_WORKSPACE_ID:
+    process.env.POSTMARK_CANARY_ALLOWED_WORKSPACE_ID,
+  POSTMARK_CANARY_CONVERSATION_ID:
+    process.env.POSTMARK_CANARY_CONVERSATION_ID,
+  POSTMARK_CANARY_ALLOWED_RECIPIENT:
+    process.env.POSTMARK_CANARY_ALLOWED_RECIPIENT,
   // Per-workspace daily send cap. Conservative default so a runaway
   // workspace (or a bug) can't blast a Postmark account dry.
   INBOX_EMAIL_DAILY_CAP: Number.isFinite(

@@ -42,8 +42,12 @@ the token or values in source or command history.
 `POSTMARK_CANARY_WORKSPACE_ID`, `POSTMARK_CANARY_ALLOWED_WORKSPACE_ID`,
 `POSTMARK_CANARY_CONVERSATION_ID`, `POSTMARK_CANARY_RECIPIENT`, and
 `POSTMARK_CANARY_ALLOWED_RECIPIENT` are required. The two workspace values and
-two recipient values must match exactly. The token must resolve the synthetic
-owner and is never printed.
+two recipient values must match exactly. The dedicated token is never printed.
+The API must separately configure `POSTMARK_CANARY_ACCESS_TOKEN`,
+`POSTMARK_CANARY_ALLOWED_WORKSPACE_ID`, `POSTMARK_CANARY_CONVERSATION_ID`, and
+`POSTMARK_CANARY_ALLOWED_RECIPIENT`. The tool uses the synthetic-only
+`POST /api/v1/internal/canary/postmark/send` route; the Inbox UI never uses it,
+and normal email remains blocked by `EMAIL_DELIVERY_UNVERIFIED`.
 
 1. Run `npm run verify:postmark-delivery -- send`.
 2. Confirm the Gmail recipient receives the message in Inbox; also record spam

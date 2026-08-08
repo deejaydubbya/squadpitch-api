@@ -70,21 +70,30 @@ async function getConversation(config) {
 }
 
 export async function sendSynthetic(config, correlationId = randomUUID()) {
-  await getConversation(config);
   const text = `${SYNTHETIC_MARKER} Postmark outbound and reply verification. Correlation: ${correlationId}. Reply to this message without removing the correlation marker.`;
+  const subject = `${SYNTHETIC_MARKER} Postmark outbound verification`;
   const body = await api(
     config,
-    `/api/v1/workspaces/${encodeURIComponent(config.workspaceId)}/inbox/conversations/${encodeURIComponent(config.conversationId)}/send-email`,
+    "/api/v1/internal/canary/postmark/send",
     {
       method: "POST",
-      headers: { "idempotency-key": correlationId },
-      body: JSON.stringify({ body: text }),
+      body: JSON.stringify({
+        workspaceId: config.workspaceId,
+        conversationId: config.conversationId,
+        recipient: config.recipient,
+        body: text,
+        subject,
+        correlationId,
+      }),
     },
   );
-  if (body.message?.deliveryStatus !== "SENT" || !body.message?.providerMessageId) {
+  if (body.status !== "SENT" || body.providerMessageIdPersisted !== true) {
     throw new Error("Postmark did not produce a SENT message with a provider ID");
   }
-  return { correlationId, messageId: body.message.id };
+  if (!body.senderConfigured || !body.replyToThreadingConfigured) {
+    throw new Error("Postmark sender or reply threading evidence is incomplete");
+  }
+  return { correlationId, messageId: body.messageId };
 }
 
 export async function verifySynthetic(config, correlationId) {
