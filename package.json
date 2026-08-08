@@ -4,6 +4,10 @@
   "type": "module",
   "scripts": {
     "start": "node --import ./instrument.js server.js",
+    "start:worker": "node --import ./instrument.js worker.js",
+    "diagnose:redis-topology": "node scripts/redis-topology.js",
+    "diagnose:redis-storage": "node scripts/redis-storage/measure.js",
+    "cleanup:redis-history": "node scripts/redis-storage/cleanup.js",
     "dev": "NODE_ENV=development node --import ./instrument.js --watch server.js",
     "test": "vitest run",
     "test:watch": "vitest",

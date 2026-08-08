@@ -14,7 +14,8 @@ import {
 } from "./lib/sentry.js";
 import { prisma, isConnected, reconnectPrisma } from "./prisma.js";
 import { getRedis, redisPing } from "./redis.js";
-import { inspectWorkerHealth } from "./domains/workerHealth/workerHealth.service.js";
+import { inspectWorkerReadiness } from "./domains/workerHealth/workerHealth.service.js";
+import { assertProcessRole } from "./lib/processRole.js";
 
 // Domain routers
 import { studioRouter } from "./domains/studio/studio.routes.js";
@@ -46,6 +47,7 @@ import { requireUser } from "./middleware/requireUser.js";
 // ===== Boot warnings =====
 assertProductionConfig(env);
 bootEnvWarnings();
+assertProcessRole("api");
 
 // ===== Sentry (optional — controlled by SENTRY_DSN) =====
 // Production startup uses `node --import ./instrument.js server.js`,
@@ -168,7 +170,13 @@ app.get("/health", (_req, res) => {
 
 // Readiness: safe, read-only dependency checks. Fly traffic checks should use
 // this endpoint; external uptime checks should monitor both /health and /ready.
+let readinessCache = { expiresAt: 0, value: null };
 app.get("/ready", async (req, res) => {
+  if (readinessCache.value && readinessCache.expiresAt > Date.now()) {
+    return res
+      .status(readinessCache.value.ready ? 200 : 503)
+      .json(readinessCache.value.body);
+  }
   let dbOk = await isConnected();
   // Self-heal: when the Prisma engine loses its DB connection, this failing
   // health check is the ONLY thing that keeps firing — Fly pulls the machine
@@ -190,14 +198,14 @@ app.get("/ready", async (req, res) => {
   }
   const redisOk = env.REDIS_URL ? await redisPing() : false;
   const workerHealth = redisOk
-    ? await inspectWorkerHealth()
+    ? await inspectWorkerReadiness()
     : { status: "blocked" };
   const { getPropertyEnrichmentStatus } = await import(
     "./domains/industry/propertyEnrichment.service.js"
   );
   const enrichment = getPropertyEnrichmentStatus();
   const ready = dbOk && redisOk && enrichment.ready;
-  res.status(ready ? 200 : 503).json({
+  const body = {
     status: ready ? "ready" : "not_ready",
     service: "squadpitch-api",
     dependencies: {
@@ -206,7 +214,12 @@ app.get("/ready", async (req, res) => {
       workers: workerHealth.status,
       propertyEnrichment: enrichment.ready,
     },
-  });
+  };
+  readinessCache = {
+    expiresAt: Date.now() + 60_000,
+    value: { ready, body },
+  };
+  return res.status(ready ? 200 : 503).json(body);
 });
 
 // Public notification routes (no auth) — VAPID key
@@ -318,24 +331,6 @@ app.use((err, req, res, _next) => {
 
 // ===== Boot & graceful shutdown =====
 const httpServer = createServer(app);
-let scheduledPublishWorker;
-let mediaGenWorker;
-let videoGenWorker;
-let notificationWorker;
-let weeklyDigestWorker;
-let metricsSyncWorker;
-let recalculateAnalyticsWorker;
-let refreshInsightsWorker;
-let personaTrainingWorker;
-let gbpReviewPollerWorker;
-let youtubeCommentPollerWorker;
-let threadsReplyPollerWorker;
-let facebookCommentPollerWorker;
-let instagramCommentPollerWorker;
-let autopilotEvaluatorWorker;
-let workerHealthWorker;
-let contactRetentionWorker;
-
 let server;
 (async () => {
   try {
@@ -366,75 +361,6 @@ let server;
       console.log(`Squadpitch API listening on port ${env.PORT}`);
     });
 
-    if (env.ENABLE_WORKERS) {
-      const { startWorkerHealthWorker } =
-        await import("./domains/workerHealth/workerHealth.service.js");
-      workerHealthWorker = startWorkerHealthWorker();
-
-      const { startScheduledPublishWorker } =
-        await import("./workers/scheduledPublishWorker.js");
-      scheduledPublishWorker = startScheduledPublishWorker();
-
-      const { startMediaGenWorker } =
-        await import("./workers/mediaGenWorker.js");
-      mediaGenWorker = startMediaGenWorker();
-
-      const { startVideoGenWorker } =
-        await import("./workers/videoGenWorker.js");
-      videoGenWorker = startVideoGenWorker();
-
-      const { startNotificationWorker } =
-        await import("./workers/notificationWorker.js");
-      notificationWorker = startNotificationWorker();
-
-      const { startWeeklyDigestWorker } =
-        await import("./workers/weeklyDigestWorker.js");
-      weeklyDigestWorker = startWeeklyDigestWorker();
-
-      const { startMetricsSyncWorker } =
-        await import("./workers/metricsSyncWorker.js");
-      metricsSyncWorker = startMetricsSyncWorker();
-
-      const { startRecalculateAnalyticsWorker } =
-        await import("./workers/recalculateAnalyticsWorker.js");
-      recalculateAnalyticsWorker = startRecalculateAnalyticsWorker();
-
-      const { startRefreshInsightsWorker } =
-        await import("./workers/refreshInsightsWorker.js");
-      refreshInsightsWorker = startRefreshInsightsWorker();
-
-      const { startPersonaTrainingWorker } =
-        await import("./workers/personaTrainingWorker.js");
-      personaTrainingWorker = startPersonaTrainingWorker();
-
-      const { startGbpReviewPollerWorker } =
-        await import("./workers/gbpReviewPollerWorker.js");
-      gbpReviewPollerWorker = startGbpReviewPollerWorker();
-
-      const { startYouTubeCommentPollerWorker } =
-        await import("./workers/youtubeCommentPollerWorker.js");
-      youtubeCommentPollerWorker = startYouTubeCommentPollerWorker();
-
-      const { startThreadsReplyPollerWorker } =
-        await import("./workers/threadsReplyPollerWorker.js");
-      threadsReplyPollerWorker = startThreadsReplyPollerWorker();
-
-      const { startFacebookCommentPollerWorker } =
-        await import("./workers/facebookCommentPollerWorker.js");
-      facebookCommentPollerWorker = startFacebookCommentPollerWorker();
-
-      const { startInstagramCommentPollerWorker } =
-        await import("./workers/instagramCommentPollerWorker.js");
-      instagramCommentPollerWorker = startInstagramCommentPollerWorker();
-
-      const { startAutopilotEvaluatorWorker } =
-        await import("./workers/autopilotEvaluatorWorker.js");
-      autopilotEvaluatorWorker = startAutopilotEvaluatorWorker();
-
-      const { startContactRetentionWorker } =
-        await import("./workers/contactRetentionWorker.js");
-      contactRetentionWorker = startContactRetentionWorker();
-    }
   } catch (e) {
     console.error("[BOOT] Failed to start server:", e);
     process.exit(1);
@@ -443,58 +369,6 @@ let server;
 
 const shutdown = (sig) => async () => {
   console.log(`[SHUTDOWN] ${sig} received, closing server...`);
-  try {
-    if (contactRetentionWorker) await contactRetentionWorker.close();
-  } catch {}
-  try {
-    if (scheduledPublishWorker) await scheduledPublishWorker.close();
-  } catch {}
-  try {
-    if (mediaGenWorker) await mediaGenWorker.close();
-  } catch {}
-  try {
-    if (videoGenWorker) await videoGenWorker.close();
-  } catch {}
-  try {
-    if (notificationWorker) await notificationWorker.close();
-  } catch {}
-  try {
-    if (weeklyDigestWorker) await weeklyDigestWorker.close();
-  } catch {}
-  try {
-    if (metricsSyncWorker) await metricsSyncWorker.close();
-  } catch {}
-  try {
-    if (recalculateAnalyticsWorker) await recalculateAnalyticsWorker.close();
-  } catch {}
-  try {
-    if (refreshInsightsWorker) await refreshInsightsWorker.close();
-  } catch {}
-  try {
-    if (personaTrainingWorker) await personaTrainingWorker.close();
-  } catch {}
-  try {
-    if (gbpReviewPollerWorker) await gbpReviewPollerWorker.close();
-  } catch {}
-  try {
-    if (youtubeCommentPollerWorker) await youtubeCommentPollerWorker.close();
-  } catch {}
-  try {
-    if (threadsReplyPollerWorker) await threadsReplyPollerWorker.close();
-  } catch {}
-  try {
-    if (facebookCommentPollerWorker) await facebookCommentPollerWorker.close();
-  } catch {}
-  try {
-    if (instagramCommentPollerWorker)
-      await instagramCommentPollerWorker.close();
-  } catch {}
-  try {
-    if (autopilotEvaluatorWorker) await autopilotEvaluatorWorker.close();
-  } catch {}
-  try {
-    if (workerHealthWorker) await workerHealthWorker.close();
-  } catch {}
   try {
     await new Promise((resolve) => server?.close?.(() => resolve()));
   } catch {}

@@ -16,6 +16,7 @@ function validProductionConfig() {
     RUNTIME_REVALIDATE_URL: "https://sites.squadpitch.com/api/revalidate",
     ALLOWED_ORIGINS: "https://app.squadpitch.com",
     ENABLE_WORKERS: true,
+    PROCESS_ROLE: "api",
     PINTEREST_USE_SANDBOX: false,
     SMS_SENDING_ENABLED: false,
     SMS_A2P_APPROVED: false,
@@ -62,7 +63,7 @@ describe("production configuration hardening", () => {
       APP_URL: "http://localhost:3000",
       ALLOWED_ORIGINS: "https://app.squadpitch.com,http://127.0.0.1:3000",
       PINTEREST_USE_SANDBOX: true,
-      ENABLE_WORKERS: false,
+      PROCESS_ROLE: "invalid",
       SMS_SENDING_ENABLED: true,
       SMS_A2P_APPROVED: false,
     };
@@ -79,7 +80,9 @@ describe("production configuration hardening", () => {
     expect(errors).toContain(
       "SMS_SENDING_ENABLED requires SMS_A2P_APPROVED=true",
     );
-    expect(errors).toContain("ENABLE_WORKERS must be true in production");
+    expect(errors).toContain(
+      "PROCESS_ROLE must be api, worker, or cli in production",
+    );
   });
 
   it("keeps observability and explicit fallback availability as warnings", () => {

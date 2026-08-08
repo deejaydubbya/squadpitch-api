@@ -8,6 +8,7 @@
 
 import { Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 import { prisma } from "../prisma.js";
 import { submitGeneration } from "../lib/fal.js";
 import { getVideoStorageService } from "../services/storage/imageStorage.js";
@@ -161,7 +162,7 @@ export function startVideoGenWorker() {
   const worker = new Worker(
     "sp-video-gen",
     async (job) => processJob(job.data.assetId, job.data.aspectRatio, job.data.duration),
-    { connection, concurrency: 1 }
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS }
   );
 
   worker.on("completed", (job) => {

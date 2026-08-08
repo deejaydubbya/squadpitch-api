@@ -13,6 +13,7 @@
 
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 
 const QUEUE_NAME = "sp-youtube-comment-poll";
 const POLL_INTERVAL_MS = 15 * 60_000; // 15 minutes
@@ -24,7 +25,7 @@ export function startYouTubeCommentPollerWorker() {
     return { close: async () => {} };
   }
 
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
 
   // Upsert the repeating poll job.
   queue
@@ -58,7 +59,7 @@ export function startYouTubeCommentPollerWorker() {
         }
       }
     },
-    { connection, concurrency: 1 },
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS },
   );
 
   worker.on("error", (err) => {
@@ -85,7 +86,7 @@ export async function enqueueYouTubeCommentPollForConnection(connectionId) {
       code: "QUEUE_UNAVAILABLE",
     });
   }
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
   try {
     await queue.add(
       "poll-connection",

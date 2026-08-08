@@ -6,6 +6,7 @@
 
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 import { prisma } from "../prisma.js";
 import { sendEmail } from "../domains/notifications/providers/postmarkEmailProvider.js";
 import { buildDigestEmail } from "../domains/notifications/digestTemplate.js";
@@ -145,11 +146,12 @@ export function startWeeklyDigestWorker() {
     return null;
   }
 
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
 
   // Seed repeating job — every Monday at 8:00 AM UTC
   queue.add("run-weekly-digest", {}, {
     repeat: { pattern: "0 8 * * 1" },
+    jobId: "weekly-digest-repeat",
   });
 
   const worker = new Worker(
@@ -157,7 +159,7 @@ export function startWeeklyDigestWorker() {
     async () => {
       await processTick();
     },
-    { connection, concurrency: 1 }
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS }
   );
 
   worker.on("failed", (job, err) => {

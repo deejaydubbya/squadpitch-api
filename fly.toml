@@ -26,6 +26,7 @@ primary_region = "ord"
   auto_stop_machines = "off"
   auto_start_machines = true
   min_machines_running = 1
+  processes = ["api"]
 
   # Health check — Fly restarts the machine if this fails 3 times in a row.
   # Keep traffic routing on process liveness. Monitor /ready separately for
@@ -39,7 +40,7 @@ primary_region = "ord"
 
 [env]
   NODE_ENV = "production"
-  ENABLE_WORKERS = "true"
+  PROCESS_ROLE = "api"
   AI_PROVENANCE_RESPONSE_HEADERS_ENABLED = "true"
   PUBLIC_SITES_BASE_DOMAIN = "squadpitchsites.com"
   STRIPE_EXPECTED_MODE = "live"
@@ -49,3 +50,7 @@ primary_region = "ord"
   size = "performance-1x"
   memory = "2gb"
   swap_size_mb = 512
+
+[processes]
+  api = "node --import ./instrument.js server.js"
+  worker = "sh -c 'PROCESS_ROLE=worker node --import ./instrument.js worker.js'"

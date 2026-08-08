@@ -12,6 +12,7 @@
 
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 
 const QUEUE_NAME = "sp-gbp-review-poll";
 const POLL_INTERVAL_MS = 10 * 60_000; // 10 minutes
@@ -23,7 +24,7 @@ export function startGbpReviewPollerWorker() {
     return { close: async () => {} };
   }
 
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
 
   // Upsert the repeating poll job.
   queue
@@ -57,7 +58,7 @@ export function startGbpReviewPollerWorker() {
         }
       }
     },
-    { connection, concurrency: 1 },
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS },
   );
 
   worker.on("error", (err) => {

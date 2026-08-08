@@ -16,8 +16,14 @@ export const env = {
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET,
 
   REDIS_URL: process.env.REDIS_URL,
+  PROCESS_ROLE:
+    process.env.PROCESS_ROLE ||
+    (process.env.NODE_ENV === "test" ? "test" : "api"),
   ENABLE_WORKERS:
     String(process.env.ENABLE_WORKERS ?? "false").toLowerCase() === "true",
+  ALLOW_EXTERNAL_REDIS_IN_TEST:
+    String(process.env.ALLOW_EXTERNAL_REDIS_IN_TEST ?? "false").toLowerCase() ===
+    "true",
   PRODUCTION_CANARY_WORKSPACE_ID: process.env.PRODUCTION_CANARY_WORKSPACE_ID,
   PRODUCTION_CANARY_MEDIA_ENABLED:
     String(

@@ -19,6 +19,7 @@
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
 import { env } from "../config/env.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 
 const QUEUE_NAME = "sp-autopilot-evaluator";
 
@@ -36,7 +37,7 @@ export function startAutopilotEvaluatorWorker() {
   const intervalMin = Math.max(env.AUTOPILOT_SCHEDULER_INTERVAL_MIN ?? 360, 5);
   const intervalMs = intervalMin * 60_000;
 
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
 
   // Upsert the repeating tick job.
   queue
@@ -69,7 +70,7 @@ export function startAutopilotEvaluatorWorker() {
         console.error("[AUTOPILOT_SCHED] tick threw:", err?.message);
       }
     },
-    { connection, concurrency: 1 },
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS },
   );
 
   worker.on("error", (err) => {

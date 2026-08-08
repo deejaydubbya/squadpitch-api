@@ -3,13 +3,14 @@ import { Queue, QueueEvents, Worker } from "bullmq";
 import { env } from "../../config/env.js";
 import { getAllQueues } from "../../lib/queues.js";
 import { captureWorkerHealthIncident } from "../../lib/sentry.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../../lib/bullmqOptions.js";
 import { getRedis, getRedisConnection, redisSetNX } from "../../redis.js";
 
 export const WORKER_HEALTH_QUEUE = "sp-worker-health";
 export const WORKER_HEALTH_JOB = "[SYNTHETIC CANARY] worker-health";
 export const WORKER_HEALTH_THRESHOLDS = Object.freeze({
   heartbeatStaleMs: 5 * 60_000,
-  heartbeatTtlSeconds: 360,
+  heartbeatTtlSeconds: 600,
   waitingWarn: 25,
   waitingCritical: 100,
   oldestWaitingWarnMs: 5 * 60_000,
@@ -34,7 +35,7 @@ export function startWorkerHealthWorker({
   const worker = new Worker(
     WORKER_HEALTH_QUEUE,
     (job) => processWorkerHealthJob(job, { redis, now }),
-    { connection, concurrency: 1 },
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS },
   );
 
   const writeHeartbeat = async () => {
@@ -62,7 +63,7 @@ export function startWorkerHealthWorker({
   void writeHeartbeat();
   const heartbeatTimer = setInterval(
     () => void writeHeartbeat().catch(() => {}),
-    30_000,
+    120_000,
   );
   heartbeatTimer.unref?.();
 
@@ -132,7 +133,7 @@ export async function runWorkerHealthRoundTrip({
     await closeRedis(eventsConnection);
     throw new Error("Redis connection unavailable");
   }
-  const queue = new Queue(WORKER_HEALTH_QUEUE, { connection: queueConnection });
+  const queue = new Queue(WORKER_HEALTH_QUEUE, boundedQueueOptions(queueConnection));
   const events = new QueueEvents(WORKER_HEALTH_QUEUE, {
     connection: eventsConnection,
   });
@@ -148,7 +149,7 @@ export async function runWorkerHealthRoundTrip({
       jobId: `worker-health-${correlationId}`,
       attempts: 1,
       removeOnComplete: false,
-      removeOnFail: false,
+      removeOnFail: { age: 14 * 24 * 60 * 60, count: 500 },
     },
   );
   try {
@@ -186,7 +187,7 @@ export async function inspectWorkerHealth({
     if (!queues && !healthConnection)
       return blockedReport(now, "Redis is unavailable");
     const healthQueue = healthConnection
-      ? new Queue(WORKER_HEALTH_QUEUE, { connection: healthConnection })
+      ? new Queue(WORKER_HEALTH_QUEUE, boundedQueueOptions(healthConnection))
       : null;
     const queueEntries = queues ?? [
       ...getAllQueues(),
@@ -199,6 +200,34 @@ export async function inspectWorkerHealth({
     return report;
   } catch {
     return blockedReport(now, "Worker health inspection failed");
+  }
+}
+
+// Readiness deliberately avoids queue enumeration and job-history scans. The
+// detailed inspector above is reserved for explicit operator diagnostics.
+export async function inspectWorkerReadiness({
+  redis = getRedis(),
+  now = Date.now(),
+} = {}) {
+  if (!redis) return { status: "blocked" };
+  try {
+    const heartbeats = await readHeartbeats(redis, now);
+    const apiFresh = heartbeats.some(
+      (item) =>
+        item.service === "api-worker" &&
+        item.ageMs <= WORKER_HEALTH_THRESHOLDS.heartbeatStaleMs,
+    );
+    const aiFresh = heartbeats.some(
+      (item) =>
+        item.service === "squadpitch-ai-worker" &&
+        item.ageMs <= WORKER_HEALTH_THRESHOLDS.heartbeatStaleMs,
+    );
+    return {
+      status: apiFresh && aiFresh ? "healthy" : "blocked",
+      services: { apiWorkerFresh: apiFresh, aiWorkerFresh: aiFresh },
+    };
+  } catch {
+    return { status: "blocked" };
   }
 }
 

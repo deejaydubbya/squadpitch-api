@@ -2,6 +2,7 @@ import { Queue, Worker } from "bullmq";
 import { prisma } from "../../prisma.js";
 import { env } from "../../config/env.js";
 import { getRedisConnection } from "../../redis.js";
+import { boundedQueueOptions } from "../../lib/bullmqOptions.js";
 import { getUsage } from "../billing/billing.service.js";
 import { runProductionAiVerification } from "../aiPlatform/productionVerification.service.js";
 import { integrationCapabilityMatrix } from "../integrations/integrationCapabilityMatrix.js";
@@ -302,7 +303,7 @@ async function queueRoundTripProbe(runId) {
   }
   const queueName = "sp-production-canary";
   const jobId = `canary-${runId.replaceAll(":", "_")}`;
-  const queue = new Queue(queueName, { connection: producer });
+  const queue = new Queue(queueName, boundedQueueOptions(producer));
   let worker;
   try {
     const consumed = new Promise((resolve, reject) => {

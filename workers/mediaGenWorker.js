@@ -8,6 +8,7 @@
 
 import { Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 import { prisma } from "../prisma.js";
 import { submitGeneration } from "../lib/fal.js";
 import { fal } from "@fal-ai/client";
@@ -1600,7 +1601,7 @@ export function startMediaGenWorker() {
   const worker = new Worker(
     "sp-media-gen",
     async (job) => processJob(job.data.assetId, job.data.overrides),
-    { connection, concurrency: 2 }
+    { connection, concurrency: 2, ...CONSERVATIVE_WORKER_OPTIONS }
   );
 
   worker.on("completed", (job) => {

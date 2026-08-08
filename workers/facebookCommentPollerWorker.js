@@ -23,6 +23,7 @@
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
 import { env } from "../config/env.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 
 const QUEUE_NAME = "sp-facebook-comments-poll";
 const POLL_INTERVAL_MS = env.META_COMMENT_POLLING_INTERVAL_MINUTES * 60_000;
@@ -34,7 +35,7 @@ export function startFacebookCommentPollerWorker() {
     return { close: async () => {} };
   }
 
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
 
   if (env.META_COMMENT_POLLING_ENABLED) {
     queue
@@ -95,7 +96,7 @@ export function startFacebookCommentPollerWorker() {
         });
       }
     },
-    { connection, concurrency: 1 },
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS },
   );
 
   worker.on("error", (err) => {
@@ -125,7 +126,7 @@ export async function enqueueFacebookCommentPollForConnection(connectionId) {
       code: "QUEUE_UNAVAILABLE",
     });
   }
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
   try {
     await queue.add(
       "poll-connection",

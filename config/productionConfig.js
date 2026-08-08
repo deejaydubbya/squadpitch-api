@@ -94,8 +94,8 @@ export function inspectProductionConfig(config) {
       "PINTEREST_USE_SANDBOX is enabled; Pinterest remains beta-only",
     );
   }
-  if (!config.ENABLE_WORKERS) {
-    errors.push("ENABLE_WORKERS must be true in production");
+  if (!new Set(["api", "worker", "cli"]).has(config.PROCESS_ROLE || "api")) {
+    errors.push("PROCESS_ROLE must be api, worker, or cli in production");
   }
   const stripeErrors = validateStripeMode(config);
   const stripeLiveModeMessage =

@@ -1,5 +1,6 @@
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 import { prisma } from "../prisma.js";
 import { publishDraft } from "../domains/studio/publishing/publishingService.js";
 import { transitionDraft } from "../domains/studio/draftWorkflow.service.js";
@@ -308,13 +309,16 @@ export function startScheduledPublishWorker() {
     return null;
   }
 
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
 
   // Seed the repeating job (idempotent — BullMQ deduplicates by repeat key)
   queue.add(
     "poll-scheduled-drafts",
     {},
-    { repeat: { every: POLL_INTERVAL_MS } }
+    {
+      repeat: { every: POLL_INTERVAL_MS },
+      jobId: "poll-scheduled-drafts-repeat",
+    }
   );
 
   const worker = new Worker(
@@ -322,7 +326,7 @@ export function startScheduledPublishWorker() {
     async () => {
       await processTick();
     },
-    { connection, concurrency: 1 }
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS }
   );
 
   worker.on("failed", (job, err) => {

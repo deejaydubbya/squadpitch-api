@@ -5,6 +5,7 @@
 
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 import {
   getClientsNeedingInsightsRefresh,
   createDailySnapshot,
@@ -51,7 +52,7 @@ export function startRefreshInsightsWorker() {
     return { close: async () => {} };
   }
 
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
 
   // Add repeating job
   queue
@@ -71,7 +72,7 @@ export function startRefreshInsightsWorker() {
         await processRefreshTick();
       }
     },
-    { connection, concurrency: 1 }
+    { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS }
   );
 
   worker.on("error", (err) => {

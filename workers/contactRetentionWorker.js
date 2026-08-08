@@ -1,6 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection, redisDel, redisSetNX } from "../redis.js";
 import { runContactRetention } from "../domains/inbox/contactRetention.service.js";
+import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 
 const QUEUE_NAME = "sp-contact-retention";
 const LOCK_KEY = "sp:lock:contact-retention";
@@ -11,7 +12,7 @@ export function startContactRetentionWorker() {
     console.warn("[CONTACT_RETENTION] No Redis — worker disabled");
     return null;
   }
-  const queue = new Queue(QUEUE_NAME, { connection });
+  const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
   queue.add("daily-contact-retention", {}, {
     repeat: { pattern: "17 3 * * *" },
     jobId: "daily-contact-retention-repeat",
@@ -30,7 +31,7 @@ export function startContactRetentionWorker() {
     } finally {
       await redisDel(LOCK_KEY);
     }
-  }, { connection, concurrency: 1 });
+  }, { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS });
   worker.on("failed", (job, error) => {
     console.error("[CONTACT_RETENTION] job failed", { jobId: job?.id, error: error?.message });
   });

@@ -21,6 +21,7 @@
 
 import { Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 import { prisma } from "../prisma.js";
 import { sendEmail } from "../domains/notifications/providers/postmarkEmailProvider.js";
 import { sendSms } from "../domains/notifications/providers/twilioSmsProvider.js";
@@ -519,6 +520,7 @@ export function startNotificationWorker() {
   const worker = new Worker("sp-notification", processJob, {
     connection,
     concurrency: 5,
+    ...CONSERVATIVE_WORKER_OPTIONS,
   });
 
   worker.on("completed", (job) => {

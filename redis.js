@@ -3,6 +3,20 @@ import { env } from "./config/env.js";
 
 let redis = null;
 
+export function assertRedisTestSafety({
+  nodeEnv = env.NODE_ENV,
+  redisUrl = env.REDIS_URL,
+  allowExternal = env.ALLOW_EXTERNAL_REDIS_IN_TEST,
+} = {}) {
+  if (nodeEnv !== "test" || !redisUrl || allowExternal) return;
+  const hostname = new URL(redisUrl).hostname.toLowerCase();
+  if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) {
+    throw new Error(
+      "External Redis is blocked in test mode; set ALLOW_EXTERNAL_REDIS_IN_TEST=true only for an intentional integration test",
+    );
+  }
+}
+
 export function getRedis() {
   if (redis) return redis;
 
@@ -10,6 +24,7 @@ export function getRedis() {
     console.warn("[REDIS] No REDIS_URL configured — Redis features disabled");
     return null;
   }
+  assertRedisTestSafety();
 
   redis = new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: 3,
@@ -110,6 +125,7 @@ export function getRedisConnection() {
     console.warn("[REDIS] No REDIS_URL configured — BullMQ connection unavailable");
     return null;
   }
+  assertRedisTestSafety();
 
   const conn = new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: null,

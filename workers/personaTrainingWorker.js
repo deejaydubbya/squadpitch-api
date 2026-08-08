@@ -11,6 +11,7 @@
 
 import { Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
+import { CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
 import { prisma } from "../prisma.js";
 import {
   checkTrainingStatus,
@@ -214,6 +215,7 @@ export function startPersonaTrainingWorker() {
     {
       connection,
       concurrency: 1,
+      ...CONSERVATIVE_WORKER_OPTIONS,
       limiter: { max: 1, duration: 60_000 }, // max 1 training per minute
     }
   );
