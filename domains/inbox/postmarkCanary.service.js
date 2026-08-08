@@ -259,16 +259,42 @@ export async function verifyPostmarkSyntheticCanary({
       "Conversation is not synthetic",
     );
   }
-  const matching = (conversation.messages ?? []).filter((message) =>
-    String(message.body ?? "").includes(correlationId),
+  const messages = conversation.messages ?? [];
+  const outbound = messages.filter(
+    (message) =>
+      message.party === "WORKSPACE" &&
+      message.channel === "EMAIL" &&
+      String(message.body ?? "").includes(correlationId),
   );
-  const outbound = matching.filter((message) => message.party === "WORKSPACE");
-  const inbound = matching.filter((message) => message.party === "CONTACT");
-  if (outbound.length !== 1 || inbound.length !== 1) {
+  if (outbound.length !== 1 || !outbound[0].externalMessageId) {
     throw canaryError(
       409,
       "POSTMARK_CANARY_EVIDENCE_INCOMPLETE",
-      "Expected exactly one outbound and one inbound synthetic message",
+      "Expected exactly one synthetic outbound message with RFC threading evidence",
+    );
+  }
+
+  // Gmail strips quoted text before Squadpitch persists the human reply, so
+  // the correlation UUID in the outbound body is not expected to survive in
+  // Message.body. Correlate the reply through the RFC thread identifiers that
+  // the inbound parser explicitly whitelists into payloadJson.
+  const outboundRfcId = outbound[0].externalMessageId;
+  const inbound = messages.filter((message) => {
+    if (message.party !== "CONTACT" || message.channel !== "EMAIL") return false;
+    if (String(message.body ?? "").includes(correlationId)) return true;
+    const inReplyTo = String(message.payloadJson?.inReplyTo ?? "").trim();
+    const references = String(message.payloadJson?.references ?? "")
+      .split(/\s+/)
+      .filter(Boolean);
+    return inReplyTo === outboundRfcId || references.includes(outboundRfcId);
+  });
+  if (inbound.length !== 1) {
+    throw canaryError(
+      409,
+      inbound.length > 1
+        ? "POSTMARK_CANARY_EVIDENCE_DUPLICATE"
+        : "POSTMARK_CANARY_EVIDENCE_INCOMPLETE",
+      "Expected exactly one RFC-threaded inbound synthetic message",
     );
   }
   if (!outbound[0].providerMessageId || !inbound[0].externalMessageId) {

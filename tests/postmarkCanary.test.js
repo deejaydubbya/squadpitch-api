@@ -153,13 +153,20 @@ describe("Postmark synthetic canary authorization", () => {
       messages: [
         {
           party: "WORKSPACE",
+          channel: "EMAIL",
           body: `outbound ${correlationId}`,
           providerMessageId: "provider-id",
+          externalMessageId: "<synthetic-outbound@example.test>",
         },
         {
           party: "CONTACT",
-          body: `inbound ${correlationId}`,
+          channel: "EMAIL",
+          body: "Thanks, this is the unquoted Gmail reply.",
           externalMessageId: "external-id",
+          payloadJson: {
+            inReplyTo: "<synthetic-outbound@example.test>",
+            references: "<root@example.test> <synthetic-outbound@example.test>",
+          },
         },
       ],
     };
@@ -179,5 +186,37 @@ describe("Postmark synthetic canary authorization", () => {
         dependencies: dependencies(scopedConversation),
       }),
     ).rejects.toMatchObject({ code: "POSTMARK_CANARY_UNAUTHORIZED" });
+  });
+
+  it("rejects multiple distinct inbound replies in the same RFC thread", async () => {
+    const threadedReply = {
+      party: "CONTACT",
+      channel: "EMAIL",
+      body: "Unquoted reply",
+      externalMessageId: "external-one",
+      payloadJson: { inReplyTo: "<synthetic-outbound@example.test>" },
+    };
+    const duplicateConversation = {
+      ...conversation,
+      messages: [
+        {
+          party: "WORKSPACE",
+          channel: "EMAIL",
+          body: `outbound ${correlationId}`,
+          providerMessageId: "provider-id",
+          externalMessageId: "<synthetic-outbound@example.test>",
+        },
+        threadedReply,
+        { ...threadedReply, externalMessageId: "external-two" },
+      ],
+    };
+    await expect(
+      verifyPostmarkSyntheticCanary({
+        token: "dedicated-secret",
+        input,
+        env: baseEnv,
+        dependencies: dependencies(duplicateConversation),
+      }),
+    ).rejects.toMatchObject({ code: "POSTMARK_CANARY_EVIDENCE_DUPLICATE" });
   });
 });
