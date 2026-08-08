@@ -1,6 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import { getRedisConnection } from "../redis.js";
 import { boundedQueueOptions, CONSERVATIVE_WORKER_OPTIONS } from "../lib/bullmqOptions.js";
+import { findDuplicateSchedulerKeys } from "../lib/repeatScheduler.js";
 import { prisma } from "../prisma.js";
 import { publishDraft } from "../domains/studio/publishing/publishingService.js";
 import { transitionDraft } from "../domains/studio/draftWorkflow.service.js";
@@ -302,7 +303,7 @@ async function processTick() {
 // Worker bootstrap
 // ---------------------------------------------------------------------------
 
-export function startScheduledPublishWorker() {
+export async function startScheduledPublishWorker() {
   const connection = getRedisConnection();
   if (!connection) {
     console.warn("[SP-WORKER] No Redis — scheduled publish worker disabled");
@@ -312,7 +313,7 @@ export function startScheduledPublishWorker() {
   const queue = new Queue(QUEUE_NAME, boundedQueueOptions(connection));
 
   // Seed the repeating job (idempotent — BullMQ deduplicates by repeat key)
-  queue.add(
+  const repeatJob = await queue.add(
     "poll-scheduled-drafts",
     {},
     {
@@ -320,6 +321,19 @@ export function startScheduledPublishWorker() {
       jobId: "poll-scheduled-drafts-repeat",
     }
   );
+
+  // Adding a jobId changes BullMQ's repeat key. Remove only older schedulers
+  // for this exact job and cadence so a rollout cannot leave two ticks running
+  // every minute. This is a startup-only reconciliation, not recurring work.
+  const schedulers = await queue.getJobSchedulers(0, -1, true);
+  const duplicateKeys = findDuplicateSchedulerKeys(schedulers, {
+    keepKey: repeatJob.repeatJobKey,
+    name: "poll-scheduled-drafts",
+    every: POLL_INTERVAL_MS,
+  });
+  for (const schedulerKey of duplicateKeys) {
+    await queue.removeJobScheduler(schedulerKey);
+  }
 
   const worker = new Worker(
     QUEUE_NAME,
