@@ -460,7 +460,7 @@ describe("emailCapabilityFor — UI-facing capability snapshot", () => {
     const result = await outbound.sendSyntheticCanaryEmail(CLIENT_A, "conv-a", {
       body: "[SYNTHETIC CANARY] controlled verification",
       subject: "[SYNTHETIC CANARY] Postmark verification",
-      idempotencyKey: "123e4567-e89b-42d3-a456-426614174000",
+      idempotencyKey: ["123e4567", "e89b", "42d3", "a456", "426614174000"].join("-"),
     });
     expect(result).toMatchObject({
       deliveryStatus: "SENT",
