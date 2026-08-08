@@ -196,3 +196,87 @@ export async function runPostmarkSyntheticCanary({
     replyToThreadingConfigured: true,
   };
 }
+
+export async function verifyPostmarkSyntheticCanary({
+  token,
+  input,
+  env: env_ = env,
+  dependencies = {},
+} = {}) {
+  const config = loadPostmarkCanaryServerConfig(env_);
+  if (!validCanaryToken(token, config.token)) {
+    throw canaryError(
+      401,
+      "POSTMARK_CANARY_UNAUTHORIZED",
+      "Invalid canary authorization",
+    );
+  }
+  const workspaceId = String(input?.workspaceId ?? "").trim();
+  const conversationId = String(input?.conversationId ?? "").trim();
+  const recipient = String(input?.recipient ?? "").trim().toLowerCase();
+  const correlationId = String(input?.correlationId ?? "").trim();
+  if (
+    workspaceId !== config.workspaceId ||
+    conversationId !== config.conversationId ||
+    !recipient ||
+    recipient !== config.recipient
+  ) {
+    throw canaryError(
+      403,
+      "POSTMARK_CANARY_SCOPE_MISMATCH",
+      "Canary scope is not allowlisted",
+    );
+  }
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      correlationId,
+    )
+  ) {
+    throw canaryError(
+      400,
+      "POSTMARK_CANARY_CORRELATION_REQUIRED",
+      "A valid correlation ID is required",
+    );
+  }
+
+  const prisma_ = dependencies.prisma ?? prisma;
+  const conversation = await prisma_.conversation.findFirst({
+    where: { id: conversationId, clientId: workspaceId },
+    include: { contact: true, messages: true },
+  });
+  const label = `${conversation?.subject ?? ""} ${
+    conversation?.contact?.name ?? ""
+  }`;
+  if (
+    !conversation ||
+    String(conversation.contact?.email ?? "").trim().toLowerCase() !==
+      config.recipient ||
+    !label.includes(POSTMARK_CANARY_MARKER)
+  ) {
+    throw canaryError(
+      403,
+      "POSTMARK_CANARY_CONVERSATION_REQUIRED",
+      "Conversation is not synthetic",
+    );
+  }
+  const matching = (conversation.messages ?? []).filter((message) =>
+    String(message.body ?? "").includes(correlationId),
+  );
+  const outbound = matching.filter((message) => message.party === "WORKSPACE");
+  const inbound = matching.filter((message) => message.party === "CONTACT");
+  if (outbound.length !== 1 || inbound.length !== 1) {
+    throw canaryError(
+      409,
+      "POSTMARK_CANARY_EVIDENCE_INCOMPLETE",
+      "Expected exactly one outbound and one inbound synthetic message",
+    );
+  }
+  if (!outbound[0].providerMessageId || !inbound[0].externalMessageId) {
+    throw canaryError(
+      409,
+      "POSTMARK_CANARY_EVIDENCE_INCOMPLETE",
+      "Provider message evidence is incomplete",
+    );
+  }
+  return { outboundCount: 1, inboundCount: 1, verified: true };
+}

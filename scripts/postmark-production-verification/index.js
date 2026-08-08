@@ -60,15 +60,6 @@ async function api(config, path, init = {}) {
   return body;
 }
 
-async function getConversation(config) {
-  const body = await api(
-    config,
-    `/api/v1/workspaces/${encodeURIComponent(config.workspaceId)}/inbox/conversations/${encodeURIComponent(config.conversationId)}`,
-  );
-  assertSyntheticScope(config, body.conversation);
-  return body.conversation;
-}
-
 export async function sendSynthetic(config, correlationId = randomUUID()) {
   const text = `${SYNTHETIC_MARKER} Postmark outbound and reply verification. Correlation: ${correlationId}. Reply to this message without removing the correlation marker.`;
   const subject = `${SYNTHETIC_MARKER} Postmark outbound verification`;
@@ -97,19 +88,15 @@ export async function sendSynthetic(config, correlationId = randomUUID()) {
 }
 
 export async function verifySynthetic(config, correlationId) {
-  const conversation = await getConversation(config);
-  const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
-  const matching = messages.filter((message) =>
-    String(message.body || "").includes(correlationId),
-  );
-  const outbound = matching.filter((message) => message.party === "WORKSPACE");
-  const inbound = matching.filter((message) => message.party === "CONTACT");
-  if (outbound.length !== 1) throw new Error("Expected exactly one synthetic outbound message");
-  if (inbound.length !== 1) throw new Error("Expected exactly one synthetic inbound reply");
-  if (!outbound[0].providerMessageId || !inbound[0].externalMessageId) {
-    throw new Error("Provider message evidence is incomplete");
-  }
-  return { outboundCount: 1, inboundCount: 1, verified: true };
+  return api(config, "/api/v1/internal/canary/postmark/verify", {
+    method: "POST",
+    body: JSON.stringify({
+      workspaceId: config.workspaceId,
+      conversationId: config.conversationId,
+      recipient: config.recipient,
+      correlationId,
+    }),
+  });
 }
 
 async function main() {

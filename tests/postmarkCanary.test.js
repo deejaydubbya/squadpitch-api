@@ -3,6 +3,7 @@ import {
   loadPostmarkCanaryServerConfig,
   runPostmarkSyntheticCanary,
   validCanaryToken,
+  verifyPostmarkSyntheticCanary,
 } from "../domains/inbox/postmarkCanary.service.js";
 import { emailCapabilityDetailsFor } from "../domains/inbox/inbox.outbound.email.service.js";
 
@@ -144,5 +145,39 @@ describe("Postmark synthetic canary authorization", () => {
         POSTMARK_SENDER_VERIFIED: false,
       }),
     ).toThrow(/not verified/i);
+  });
+
+  it("verifies reply evidence through the same dedicated exact scope", async () => {
+    const scopedConversation = {
+      ...conversation,
+      messages: [
+        {
+          party: "WORKSPACE",
+          body: `outbound ${correlationId}`,
+          providerMessageId: "provider-id",
+        },
+        {
+          party: "CONTACT",
+          body: `inbound ${correlationId}`,
+          externalMessageId: "external-id",
+        },
+      ],
+    };
+    await expect(
+      verifyPostmarkSyntheticCanary({
+        token: "dedicated-secret",
+        input,
+        env: baseEnv,
+        dependencies: dependencies(scopedConversation),
+      }),
+    ).resolves.toEqual({ outboundCount: 1, inboundCount: 1, verified: true });
+    await expect(
+      verifyPostmarkSyntheticCanary({
+        token: "wrong",
+        input,
+        env: baseEnv,
+        dependencies: dependencies(scopedConversation),
+      }),
+    ).rejects.toMatchObject({ code: "POSTMARK_CANARY_UNAUTHORIZED" });
   });
 });
