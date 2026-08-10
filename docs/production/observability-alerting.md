@@ -34,9 +34,12 @@ requires it.
   touch dependencies and returns 200.
 - `GET /ready` is traffic readiness: it checks Postgres and Redis read-only,
   returning 503 with boolean dependency status when unavailable.
-- Fly's service check targets `/ready`. An external uptime monitor should check
-  `/health` separately so responders can distinguish process death from
-  dependency failure.
+- Fly's API service check currently targets liveness-only `/health`, so a
+  database or Redis outage does not remove every API machine from service.
+  `/ready` is available and checks Postgres, Redis, and worker heartbeat state,
+  but no independently verified external monitor currently polls it. Add an
+  external `/ready` monitor while retaining Fly's `/health` process check so
+  responders can distinguish dependency failure from process death.
 - AI health/readiness must retain the same distinction. Do not make liveness
   depend on a model vendor.
 
@@ -130,9 +133,11 @@ launch, page only user-impacting P1s and ticket P2s.
 
 ### Fly and datastore providers
 
-1. In Fly, keep `/ready` as the traffic check and add an independent external
-   `/health` uptime check. Create log-derived metrics for the event names in the
-   catalog and a machine restart/crash alert.
+1. In Fly, keep `/health` as the API process check and add an independent
+   external `/ready` dependency monitor. Create log-derived metrics for the
+   event names in the catalog and a machine restart/crash alert. The web app
+   and both worker apps also need independently verified process/heartbeat
+   monitors because they currently have no Fly service checks.
 2. Configure Postgres alerts for availability, connections, CPU, storage and
    sustained latency. Configure Redis alerts for availability, memory,
    evictions and persistence failures.
