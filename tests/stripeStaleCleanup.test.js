@@ -116,6 +116,21 @@ describe("guarded stale Stripe billing cleanup", () => {
     expect(db.committed).toBe(false);
   });
 
+  it("removes Agency only after explicit stale-sandbox confirmation", async () => {
+    const agency = row({ tier: "AGENCY" });
+    const db = database(agency);
+    await expect(
+      guardedDelete({
+        db,
+        stripeState: absent,
+        row: agency,
+        expected: expected(agency),
+        agencyIntent: "confirmed_stale",
+      }),
+    ).resolves.toMatchObject({ deleted: true });
+    expect(db.committed).toBe(true);
+  });
+
   it("enforces the exact-one-row guard", async () => {
     const value = row();
     const db = database(value, 0);

@@ -4,7 +4,7 @@ import { prisma } from "../../prisma.js";
 import { STRIPE_API_VERSION } from "../../domains/billing/stripeSafety.js";
 import { assertExpectedState, guardedDelete, opaqueRef } from "./cleanup.js";
 
-const EXPECTED = {
+export const EXPECTED = {
   a8ec8e2ff400: {
     tier: "PRO",
     updatedAt: new Date("2026-07-04T17:31:39.165Z"),
@@ -27,7 +27,7 @@ async function retrieveState(call) {
   }
 }
 
-async function liveBillingState(stripe, row, email) {
+export async function liveBillingState(stripe, row, email) {
   const metadataQuery = `metadata['userId']:'${row.userId.replaceAll("'", "\\'")}'`;
   const [
     customerExists,
@@ -78,7 +78,7 @@ async function liveBillingState(stripe, row, email) {
   };
 }
 
-function dbAdapter() {
+export function dbAdapter() {
   return {
     transaction: (operation) =>
       prisma.$transaction((tx) =>
