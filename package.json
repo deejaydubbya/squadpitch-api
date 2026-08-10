@@ -39,6 +39,8 @@
     "stripe:migration:inspect": "node scripts/stripe-migration/inspect.js",
     "stripe:migration:inspect:json": "node scripts/stripe-migration/inspect.js --json",
     "stripe:migration:reset": "node scripts/stripe-migration/reset.js",
+    "verify:stripe-reconciliation": "node scripts/stripe-reconciliation/index.js",
+    "cleanup:stripe-stale": "node scripts/stripe-stale-cleanup/index.js",
     "db:push": "npx prisma db push",
     "db:generate": "npx prisma generate",
     "db:migrate": "npx prisma migrate deploy",
