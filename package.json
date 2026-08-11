@@ -29,6 +29,8 @@
     "verify:backup-recovery": "node scripts/backup-recovery/validate.js",
     "verify:backup-recovery:json": "node scripts/backup-recovery/validate.js --json",
     "verify:observability": "node scripts/observability/validate.js",
+    "verify:uptime": "node scripts/uptime/verify.js",
+    "verify:rentcast": "node scripts/rentcast-verification/index.js",
     "verify:sentry": "node scripts/verify-sentry.js",
     "verify:worker-health": "node scripts/worker-health/index.js",
     "verify:worker-health:json": "node scripts/worker-health/index.js --json",

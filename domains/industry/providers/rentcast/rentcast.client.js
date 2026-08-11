@@ -15,7 +15,10 @@ const bucket = { tokens: 20, max: 20, refillRate: 20, lastRefill: Date.now() };
 function refillBucket() {
   const now = Date.now();
   const elapsed = (now - bucket.lastRefill) / 1000;
-  bucket.tokens = Math.min(bucket.max, bucket.tokens + elapsed * bucket.refillRate);
+  bucket.tokens = Math.min(
+    bucket.max,
+    bucket.tokens + elapsed * bucket.refillRate,
+  );
   bucket.lastRefill = now;
 }
 
@@ -76,7 +79,9 @@ export async function rentcastRequest(path, params = {}) {
 
     try {
       const count = trackRequest();
-      console.log(`[RentCast] ${path} (attempt ${attempt + 1}, monthly #${count})`);
+      console.log(
+        `[RentCast] ${path} (attempt ${attempt + 1}, monthly #${count})`,
+      );
 
       const response = await fetch(url, {
         method: "GET",
@@ -94,22 +99,30 @@ export async function rentcastRequest(path, params = {}) {
       }
 
       // Retry on 429 or 5xx
-      if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
+      if (
+        (response.status === 429 || response.status >= 500) &&
+        attempt < MAX_RETRIES
+      ) {
         const delay = RETRY_DELAYS[attempt] ?? 4000;
-        console.warn(`[RentCast] ${path} returned ${response.status}, retrying in ${delay}ms`);
+        console.warn(
+          `[RentCast] ${path} returned ${response.status}, retrying in ${delay}ms`,
+        );
         await new Promise((resolve) => setTimeout(resolve, delay));
         lastError = new Error(`RentCast API ${response.status}`);
         continue;
       }
 
       // Non-retryable error
-      const body = await response.text().catch(() => "");
-      throw new Error(`RentCast API ${response.status}: ${body.slice(0, 200)}`);
+      // Provider error bodies can echo address/query details. Keep production
+      // logs and upstream errors status-only.
+      throw new Error(`RentCast API ${response.status}`);
     } catch (err) {
       clearTimeout(timeout);
 
       if (err.name === "AbortError") {
-        lastError = new Error(`[RentCast] ${path} timed out after ${TIMEOUT_MS}ms`);
+        lastError = new Error(
+          `[RentCast] ${path} timed out after ${TIMEOUT_MS}ms`,
+        );
         if (attempt < MAX_RETRIES) {
           const delay = RETRY_DELAYS[attempt] ?? 4000;
           console.warn(`[RentCast] ${path} timed out, retrying in ${delay}ms`);
@@ -122,7 +135,9 @@ export async function rentcastRequest(path, params = {}) {
         lastError = err;
         if (attempt < MAX_RETRIES) {
           const delay = RETRY_DELAYS[attempt] ?? 4000;
-          console.warn(`[RentCast] ${path} failed: ${err.message}, retrying in ${delay}ms`);
+          console.warn(
+            `[RentCast] ${path} failed: ${err.message}, retrying in ${delay}ms`,
+          );
           await new Promise((resolve) => setTimeout(resolve, delay));
           continue;
         }
