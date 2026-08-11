@@ -5,7 +5,7 @@ import { getImageStorageService, getVideoStorageService } from "../../services/s
 const RETRY_MS = 24 * 60 * 60 * 1000;
 
 async function deleteAuth0User(subject, fetchImpl = globalThis.fetch) {
-  const domain = process.env.AUTH0_DOMAIN;
+  const domain = process.env.AUTH0_MANAGEMENT_DOMAIN ?? process.env.AUTH0_DOMAIN;
   const clientId = process.env.AUTH0_DELETION_CLIENT_ID;
   const clientSecret = process.env.AUTH0_DELETION_CLIENT_SECRET;
   if (!domain || !clientId || !clientSecret) throw Object.assign(new Error("Auth0 deletion credential unavailable"), { code: "AUTH0_DELETION_NOT_CONFIGURED" });

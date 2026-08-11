@@ -71,6 +71,36 @@ describe("account deletion state machine", () => {
 });
 
 describe("provider cleanup", () => {
+  it("uses the Auth0 tenant domain for the management token and delete calls", async () => {
+    const previous = {
+      domain: process.env.AUTH0_MANAGEMENT_DOMAIN,
+      id: process.env.AUTH0_DELETION_CLIENT_ID,
+      secret: process.env.AUTH0_DELETION_CLIENT_SECRET,
+    };
+    process.env.AUTH0_MANAGEMENT_DOMAIN = "tenant.us.auth0.com";
+    process.env.AUTH0_DELETION_CLIENT_ID = "client-id";
+    process.env.AUTH0_DELETION_CLIENT_SECRET = "client-secret";
+    const calls = [];
+    const fetchImpl = vi.fn(async (url, options) => {
+      calls.push({ url, body: options.body ? JSON.parse(options.body) : null });
+      if (url.endsWith("/oauth/token")) return { ok: true, json: async () => ({ access_token: "opaque-test-token" }) };
+      return { ok: true, status: 204 };
+    });
+    const db = { accountDeletionProviderTask: { update: vi.fn(async args => args.data) } };
+    try {
+      const result = await processProviderTask({ id: "t", provider: "AUTH0", targetEncrypted: "encrypted:auth0|subject", status: "PENDING" }, { now, prismaClient: db, fetchImpl });
+      expect(result.status).toBe("COMPLETED");
+      expect(calls[0].url).toBe("https://tenant.us.auth0.com/oauth/token");
+      expect(calls[0].body.audience).toBe("https://tenant.us.auth0.com/api/v2/");
+      expect(calls[1].url).toBe("https://tenant.us.auth0.com/api/v2/users/auth0%7Csubject");
+      expect(JSON.stringify(calls)).not.toContain("opaque-test-token");
+    } finally {
+      process.env.AUTH0_MANAGEMENT_DOMAIN = previous.domain;
+      process.env.AUTH0_DELETION_CLIENT_ID = previous.id;
+      process.env.AUTH0_DELETION_CLIENT_SECRET = previous.secret;
+    }
+  });
+
   it("records a sanitized retry code without exposing provider error text", async () => {
     const updates = [];
     const db = { accountDeletionProviderTask: { update: vi.fn(async args => { updates.push(args); return args.data; }) } };

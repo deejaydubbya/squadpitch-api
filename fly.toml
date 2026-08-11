@@ -41,6 +41,7 @@ primary_region = "ord"
 [env]
   NODE_ENV = "production"
   PROCESS_ROLE = "api"
+  AUTH0_MANAGEMENT_DOMAIN = "dev-lydwxmh7hokvbp8b.us.auth0.com"
   AI_PROVENANCE_RESPONSE_HEADERS_ENABLED = "true"
   PUBLIC_SITES_BASE_DOMAIN = "squadpitchsites.com"
   STRIPE_EXPECTED_MODE = "live"

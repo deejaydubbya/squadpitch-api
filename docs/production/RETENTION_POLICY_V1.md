@@ -49,7 +49,9 @@ minimized subscription mirror. Provider failures store only sanitized codes,
 retry daily and never reactivate the account. Auth0 deletion runs only after
 application cleanup. Its dedicated Management API client must have only
 `delete:users`, configured as `AUTH0_DELETION_CLIENT_ID` and
-`AUTH0_DELETION_CLIENT_SECRET`.
+`AUTH0_DELETION_CLIENT_SECRET`. `AUTH0_MANAGEMENT_DOMAIN` must be the Auth0
+tenant domain (for example, `tenant.us.auth0.com`), not the custom login
+domain, because the Management API audience is tenant-specific.
 
 ## Recovery and operator procedure
 
