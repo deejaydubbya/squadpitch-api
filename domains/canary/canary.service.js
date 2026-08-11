@@ -38,7 +38,7 @@ export async function runProductionCanary({
   results.push(await databaseRollbackProbe({ workspaceId, runId }));
 
   try {
-    const usage = await getUsage(userId);
+    const usage = await getUsage(userId, workspaceId);
     results.push(
       result(
         "billing.status-lookup",

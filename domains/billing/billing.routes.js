@@ -29,6 +29,7 @@ import {
 // elevated access after role revocation in Auth0, and a developer-role
 // user shouldn't pause AI generation for the whole platform.
 import { requireAdminRole } from "../../middleware/requireRole.js";
+import { writeAudit } from "../../lib/auditLog.js";
 
 export const billingRouter = express.Router();
 
@@ -38,8 +39,18 @@ const BASE = "/api/v1/billing";
 
 billingRouter.get(`${BASE}/subscription`, async (req, res, next) => {
   try {
-    const sub = await billingService.getSubscription(req.user.id);
-    res.json({ subscription: sub });
+    const clientId = typeof req.query.clientId === "string" ? req.query.clientId : null;
+    if (!clientId) {
+      const sub = await billingService.getSubscription(req.user.id);
+      return res.json({ subscription: sub, billingSource: sub ? "STRIPE" : "FREE" });
+    }
+    const entitlement = await billingService.getEffectiveEntitlement(req.user.id, clientId);
+    res.json({
+      subscription: entitlement.subscription,
+      effectiveTier: entitlement.tier,
+      billingSource: entitlement.source,
+      internalEntitlement: entitlement.internalEntitlement ?? null,
+    });
   } catch (err) {
     next(err);
   }
@@ -60,12 +71,73 @@ billingRouter.get(`${BASE}/plans`, async (req, res, next) => {
 
 billingRouter.get(`${BASE}/usage`, async (req, res, next) => {
   try {
-    const usage = await billingService.getUsage(req.user.id);
+    const clientId = typeof req.query.clientId === "string" ? req.query.clientId : null;
+    const usage = await billingService.getUsage(req.user.id, clientId);
     res.json(usage);
   } catch (err) {
     next(err);
   }
 });
+
+// Internal entitlements are deliberately separate from Stripe state. These
+// routes require an Auth0 admin role and an immutable workspace ID.
+billingRouter.put(
+  `${BASE}/admin/internal-entitlements/:clientId`,
+  requireAdminRole,
+  async (req, res, next) => {
+    try {
+      const tier = typeof req.body?.tier === "string" ? req.body.tier : "";
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (!tier || !reason || reason.length < 8 || reason.length > 500) {
+        return sendError(res, 400, "VALIDATION_ERROR", "A paid tier and reason (8-500 characters) are required");
+      }
+      const grant = await billingService.grantInternalEntitlement({
+        clientId: req.params.clientId,
+        tier,
+        reason,
+        actorSub: req.auth?.payload?.sub ?? "unknown",
+        actorEmail: req.user?.email ?? null,
+      });
+      await writeAudit(req, {
+        action: "internal_entitlement.grant",
+        resourceType: "InternalEntitlement",
+        resourceId: grant.id,
+        metadata: { clientId: req.params.clientId, tier, reason },
+      });
+      res.json({ clientId: grant.clientId, tier: grant.tier, active: grant.active });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+billingRouter.delete(
+  `${BASE}/admin/internal-entitlements/:clientId`,
+  requireAdminRole,
+  async (req, res, next) => {
+    try {
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+      if (reason.length < 8 || reason.length > 500) {
+        return sendError(res, 400, "VALIDATION_ERROR", "A revoke reason (8-500 characters) is required");
+      }
+      const grant = await billingService.revokeInternalEntitlement({
+        clientId: req.params.clientId,
+        reason,
+        actorSub: req.auth?.payload?.sub ?? "unknown",
+        actorEmail: req.user?.email ?? null,
+      });
+      await writeAudit(req, {
+        action: "internal_entitlement.revoke",
+        resourceType: "InternalEntitlement",
+        resourceId: grant?.id ?? null,
+        metadata: { clientId: req.params.clientId, reason, wasActive: Boolean(grant?.active) },
+      });
+      res.json({ clientId: req.params.clientId, active: false });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ── Create checkout session ──────────────────────────────────────────────
 

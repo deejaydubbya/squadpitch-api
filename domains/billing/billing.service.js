@@ -57,12 +57,50 @@ function hasExistingBillableSubscription(sub) {
   );
 }
 
-export function getEffectiveTier(sub) {
+export function getEffectiveTier(sub, internalEntitlement = null) {
+  if (
+    internalEntitlement?.active === true &&
+    PAID_TIERS.includes(internalEntitlement.tier)
+  ) {
+    return internalEntitlement.tier;
+  }
   if (!sub) return "FREE";
   if (!sub.stripeSubscriptionId) return "FREE";
   if (!ACTIVE_STATUSES.has(sub.status)) return "FREE";
   if (!PAID_TIERS.includes(sub.tier)) return "FREE";
   return sub.tier;
+}
+
+export async function getEffectiveEntitlement(userId, clientId) {
+  const sub = await prisma.subscription.findUnique({ where: { userId } });
+  if (!clientId) {
+    return { tier: getEffectiveTier(sub), source: sub ? "STRIPE" : "FREE", subscription: sub };
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { auth0Sub: true },
+  });
+  const client = user
+    ? await prisma.client.findFirst({
+        where: { id: clientId, createdBy: user.auth0Sub },
+        select: { internalEntitlement: true },
+      })
+    : null;
+  if (!client) {
+    throw Object.assign(new Error("Workspace not found"), { status: 404 });
+  }
+
+  const internal = client.internalEntitlement;
+  const tier = getEffectiveTier(sub, internal);
+  return {
+    tier,
+    source: internal?.active ? "INTERNAL" : sub ? "STRIPE" : "FREE",
+    subscription: sub,
+    internalEntitlement: internal?.active
+      ? { tier: internal.tier, status: "COMPED", grantedAt: internal.grantedAt }
+      : null,
+  };
 }
 
 // ── Plans (fetch prices from Stripe) ─────────────────────────────────────
@@ -370,7 +408,7 @@ export async function getSubscription(userId) {
 
 // ── Usage ────────────────────────────────────────────────────────────────
 
-export async function getUsage(userId) {
+export async function getUsage(userId, clientId = null) {
   const now = new Date();
   const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -379,8 +417,13 @@ export async function getUsage(userId) {
     where: { userId_periodStart: { userId, periodStart } },
   });
 
-  const sub = await prisma.subscription.findUnique({ where: { userId } });
-  const tier = getEffectiveTier(sub);
+  const entitlement = clientId
+    ? await getEffectiveEntitlement(userId, clientId)
+    : null;
+  const sub = entitlement
+    ? entitlement.subscription
+    : await prisma.subscription.findUnique({ where: { userId } });
+  const tier = entitlement?.tier ?? getEffectiveTier(sub);
   const limits = getLimitsForTier(tier);
 
   // Compute storage across all user's workspaces
@@ -425,7 +468,38 @@ export async function getUsage(userId) {
     storage: { totalBytes, videoBytes },
     limits,
     tier,
+    billingSource: entitlement?.source ?? (sub ? "STRIPE" : "FREE"),
   };
+}
+
+export async function grantInternalEntitlement({ clientId, tier, reason, actorSub, actorEmail }) {
+  if (!PAID_TIERS.includes(tier)) {
+    throw Object.assign(new Error("Internal entitlement requires a paid tier"), { status: 400 });
+  }
+  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { id: true } });
+  if (!client) throw Object.assign(new Error("Workspace not found"), { status: 404 });
+
+  return prisma.internalEntitlement.upsert({
+    where: { clientId },
+    create: { clientId, tier, reason, grantedBySub: actorSub, grantedByEmail: actorEmail },
+    update: {
+      tier, active: true, reason, grantedBySub: actorSub, grantedByEmail: actorEmail,
+      grantedAt: new Date(), revokedBySub: null, revokedByEmail: null,
+      revokedReason: null, revokedAt: null,
+    },
+  });
+}
+
+export async function revokeInternalEntitlement({ clientId, reason, actorSub, actorEmail }) {
+  const current = await prisma.internalEntitlement.findUnique({ where: { clientId } });
+  if (!current || !current.active) return current;
+  return prisma.internalEntitlement.update({
+    where: { clientId },
+    data: {
+      active: false, revokedBySub: actorSub, revokedByEmail: actorEmail,
+      revokedReason: reason, revokedAt: new Date(),
+    },
+  });
 }
 
 export async function incrementUsage(userId, field) {

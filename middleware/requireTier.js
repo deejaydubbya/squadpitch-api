@@ -1,5 +1,5 @@
 import { sendError } from "../lib/apiErrors.js";
-import { getSubscription, getEffectiveTier } from "../domains/billing/billing.service.js";
+import { getEffectiveEntitlement } from "../domains/billing/billing.service.js";
 import { getTierRank } from "../domains/billing/billing.constants.js";
 
 /**
@@ -15,8 +15,8 @@ export function requireTier(minimumTier) {
 
   return async (req, res, next) => {
     try {
-      const sub = await getSubscription(req.user.id);
-      const currentTier = getEffectiveTier(sub);
+      const clientId = req.params.clientId ?? req.body?.clientId ?? req.query?.clientId;
+      const { tier: currentTier } = await getEffectiveEntitlement(req.user.id, clientId);
       const currentRank = getTierRank(currentTier);
 
       if (currentRank < minRank) {
