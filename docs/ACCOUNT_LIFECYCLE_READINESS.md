@@ -1,5 +1,10 @@
 # Account and workspace lifecycle readiness
 
+> **Policy update:** Retention Policy v1 is approved and implemented. The
+> canonical data map, seven-day export/grace rules, automated purge, provider
+> retries and DR tombstone procedure are in
+> [production/RETENTION_POLICY_V1.md](production/RETENTION_POLICY_V1.md).
+
 ## Identity and ownership map
 
 - Auth0 is the identity provider. Login, logout, password reset, email
@@ -52,7 +57,7 @@ directs the owner to reconnect.
 
 ### Account deletion and export requests
 
-These authenticated endpoints create durable, idempotent operator requests:
+These authenticated endpoints create durable, idempotent lifecycle requests:
 
 ```text
 POST /api/v1/account/deletion-request
@@ -79,7 +84,9 @@ checklist:
    workspace;
 7. document backup expiry rather than attempting selective backup mutation;
 8. mark the lifecycle request completed with operator notes and notify the
-   requester.
+requester. Retention Policy v1 replaces this former manual-only completion
+step with a daily idempotent purge and provider-retry worker. The operator
+checklist remains useful for persistent external failures.
 
 ## Public-policy comparison
 
@@ -96,7 +103,13 @@ UI copy should say **Archive workspace and disconnect integrations**. “Deletio
 completed” may be communicated only after the durable request is marked
 `COMPLETED`.
 
-## Unresolved product and legal decisions
+## Superseded policy questions
+
+The retention durations, export format/expiry, grace period, contact purge,
+Cloudinary target, Auth0 ordering and backup treatment below were unresolved
+when this readiness document was first written. They are now resolved by
+Retention Policy v1. Multi-user ownership remains out of scope because there
+is no membership model.
 
 1. Required retention periods for billing, tax, security, abuse, disputes,
    audit logs, AI traces, and backups.

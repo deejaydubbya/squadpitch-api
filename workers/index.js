@@ -21,6 +21,7 @@ const starters = [
   ["./instagramCommentPollerWorker.js", "startInstagramCommentPollerWorker"],
   ["./autopilotEvaluatorWorker.js", "startAutopilotEvaluatorWorker"],
   ["./contactRetentionWorker.js", "startContactRetentionWorker"],
+  ["./accountLifecycleWorker.js", "startAccountLifecycleWorker"],
 ];
 
 export function startWorkers() {

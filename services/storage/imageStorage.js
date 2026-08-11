@@ -58,7 +58,9 @@ function createCloudinaryService() {
         const result = await cloudinaryV2.uploader.destroy(publicId);
         return result.result === "ok";
       } catch (error) {
-        console.error("Failed to delete image from Cloudinary:", error);
+        console.error("Failed to delete image from Cloudinary", {
+          code: error?.http_code ? `CLOUDINARY_HTTP_${error.http_code}` : "CLOUDINARY_DELETE_FAILED",
+        });
         return false;
       }
     },
@@ -115,7 +117,9 @@ function createCloudinaryVideoService() {
         });
         return result.result === "ok";
       } catch (error) {
-        console.error("Failed to delete video from Cloudinary:", error);
+        console.error("Failed to delete video from Cloudinary", {
+          code: error?.http_code ? `CLOUDINARY_HTTP_${error.http_code}` : "CLOUDINARY_DELETE_FAILED",
+        });
         return false;
       }
     },

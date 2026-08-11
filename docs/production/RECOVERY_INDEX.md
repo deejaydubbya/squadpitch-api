@@ -4,6 +4,11 @@ Use this order for an isolated recovery. Never restore over production and
 never point production callbacks, OAuth redirects, webhooks, email, publishing,
 or billing at the isolated environment.
 
+Before promotion, apply the Retention Policy v1 tombstone check in
+[RETENTION_POLICY_V1.md](RETENTION_POLICY_V1.md). A restored active copy of an
+account with a current deletion tombstone must be purged again and must not be
+reactivated merely because it existed in an older backup.
+
 1. **Postgres:** follow [backup-recovery.md](backup-recovery.md). Restore the
    selected `squadpitch-postgres` snapshot to an isolated target, validate
    Prisma migration history and aggregate tenant counts, and record RPO/RTO.

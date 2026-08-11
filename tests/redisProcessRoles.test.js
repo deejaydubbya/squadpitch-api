@@ -43,7 +43,12 @@ describe("Redis process ownership", () => {
     });
     expect(worker.enabled).toBe(true);
     expect(api.enabled).toBe(false);
-    expect(worker.components).toHaveLength(17);
+    expect(worker.components).toHaveLength(18);
+    expect(worker.components).toContainEqual({
+      queueName: "sp-account-lifecycle",
+      componentType: "worker+scheduler",
+      cadence: "daily",
+    });
   });
 
   it("blocks duplicate initialization and closes registered resources", async () => {

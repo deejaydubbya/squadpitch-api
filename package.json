@@ -31,6 +31,7 @@
     "verify:observability": "node scripts/observability/validate.js",
     "verify:uptime": "node scripts/uptime/verify.js",
     "verify:rentcast": "node scripts/rentcast-verification/index.js",
+    "retention:run": "node scripts/account-lifecycle-maintenance.js",
     "verify:sentry": "node scripts/verify-sentry.js",
     "verify:worker-health": "node scripts/worker-health/index.js",
     "verify:worker-health:json": "node scripts/worker-health/index.js --json",

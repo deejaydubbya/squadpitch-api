@@ -17,6 +17,7 @@ function makePrisma({ existing = null, workspaces = [] } = {}) {
     siteUpdates: [],
     connectionDeletes: [],
     techDeletes: [],
+    userIntegrationDeletes: [],
     workspaceQueries: [],
   };
   const tx = {
@@ -31,7 +32,7 @@ function makePrisma({ existing = null, workspaces = [] } = {}) {
     client: {
       findMany: vi.fn(async (args) => {
         calls.workspaceQueries.push(args);
-        return workspaces.map((id) => ({ id }));
+        return workspaces.map((id) => ({ id, status: "ACTIVE", site: null, drafts: [] }));
       }),
       updateMany: vi.fn(async (args) => {
         calls.clientUpdates.push(args);
@@ -62,6 +63,9 @@ function makePrisma({ existing = null, workspaces = [] } = {}) {
         return { count: 1 };
       }),
     },
+    integration: { deleteMany: vi.fn(async args => { calls.userIntegrationDeletes.push(args); return { count: 0 }; }) },
+    slackConnection: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+    outboundWebhook: { deleteMany: vi.fn(async () => ({ count: 0 })) },
   };
   return {
     calls,
@@ -107,12 +111,15 @@ describe("account lifecycle requests", () => {
       type: "DELETE_ACCOUNT",
     });
     expect(result.created).toBe(true);
+    expect(result.request.status).toBe("GRACE_PERIOD");
+    expect(result.request.graceEndsAt).toBeInstanceOf(Date);
     expect(prismaMock.calls.workspaceQueries[0].where).toEqual({
       createdBy: "auth0|owner-a",
       status: { not: "ARCHIVED" },
     });
     expect(prismaMock.calls.clientUpdates[0].where).toEqual({
       id: { in: ["workspace-a"] },
+      createdBy: "auth0|owner-a",
     });
     expect(prismaMock.calls.draftUpdates[0]).toMatchObject({
       where: {
@@ -124,6 +131,15 @@ describe("account lifecycle requests", () => {
     expect(prismaMock.calls.connectionDeletes[0].where).toEqual({
       clientId: { in: ["workspace-a"] },
     });
+  });
+
+  it("sets a seven-day grace period and snapshots only owned workspaces", async () => {
+    prismaMock = makePrisma({ workspaces: ["workspace-a"] });
+    const now = new Date("2026-08-11T00:00:00Z");
+    const result = await requestAccountLifecycle({ user, auth0Sub: user.auth0Sub, type: "DELETE_ACCOUNT", now });
+    expect(result.request.graceEndsAt.toISOString()).toBe("2026-08-18T00:00:00.000Z");
+    expect(result.request.workspaceSnapshot).toEqual([{ id: "workspace-a", status: "ACTIVE", siteStatus: null, scheduledDraftIds: [] }]);
+    expect(prismaMock.calls.userIntegrationDeletes[0].where).toEqual({ userId: user.id });
   });
 
   it("does not archive workspaces or remove connections for export requests", async () => {

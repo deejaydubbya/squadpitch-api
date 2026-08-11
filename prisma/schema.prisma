@@ -24,8 +24,23 @@ enum AccountLifecycleRequestStatus {
   PENDING
   VERIFIED
   PROCESSING
+  GRACE_PERIOD
+  PURGING
+  PARTIAL_PROVIDER_FAILURE
+  CANCELLED
   COMPLETED
   REJECTED
+}
+
+enum AccountDeletionProvider {
+  CLOUDINARY
+  AUTH0
+}
+
+enum AccountDeletionProviderTaskStatus {
+  PENDING
+  RETRY
+  COMPLETED
 }
 
 enum ClientStatus {
@@ -231,12 +246,43 @@ model AccountLifecycleRequest {
   verifiedAt    DateTime?
   completedAt   DateTime?
   operatorNotes String?                       @db.Text
+  graceEndsAt   DateTime?
+  exportExpiresAt DateTime?
+  tombstoneUntil DateTime?
+  cancelledAt   DateTime?
+  failureCode   String?
+  failureCount  Int                           @default(0)
+  lastAttemptAt DateTime?
+  workspaceSnapshot Json?
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  providerTasks AccountDeletionProviderTask[]
 
   @@index([userId, type, status])
   @@index([status, requestedAt])
   @@map("account_lifecycle_requests")
+}
+
+model AccountDeletionProviderTask {
+  id              String                            @id @default(cuid())
+  requestId       String
+  provider        AccountDeletionProvider
+  targetEncrypted String                            @db.Text
+  targetHash      String
+  resourceType    String?
+  status          AccountDeletionProviderTaskStatus @default(PENDING)
+  attemptCount    Int                               @default(0)
+  nextAttemptAt   DateTime                          @default(now())
+  completedAt     DateTime?
+  lastErrorCode   String?
+  createdAt       DateTime                          @default(now())
+  updatedAt       DateTime                          @updatedAt
+
+  request AccountLifecycleRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, provider, targetHash])
+  @@index([status, nextAttemptAt])
+  @@map("account_deletion_provider_tasks")
 }
 
 // ── Client ─────────────────────────────────────────────────────────────
