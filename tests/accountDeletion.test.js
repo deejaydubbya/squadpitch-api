@@ -1,4 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../lib/tokenCrypto.js", () => ({
+  encryptToken: value => `encrypted:${value}`,
+  decryptToken: value => {
+    if (value === "invalid") throw Object.assign(new Error("Malformed encrypted target"), { code: "TOKEN_DECRYPT_MALFORMED" });
+    return String(value).replace(/^encrypted:/, "");
+  },
+}));
+
 import { cancelDeletion, purgeDeletion } from "../domains/account/accountLifecycle.service.js";
 import { processProviderTask, runAccountLifecycleMaintenance } from "../domains/account/accountDeletionProviders.service.js";
 
