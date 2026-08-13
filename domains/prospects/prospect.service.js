@@ -9,6 +9,7 @@ import { sniffImageMime } from "../../lib/mimeDetect.js";
 import { extractFromImage } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { getProspectPreparationQueue } from "../../lib/queues.js";
+import { logEvent } from "../../lib/logger.js";
 
 const TOKEN_BYTES = 32;
 const DEFAULT_TTL_DAYS = 21;
@@ -216,6 +217,13 @@ export function isUsableProspectListing(listing, confidence = 0) {
 
 const UNSUPPORTED_PROPERTY_COPY = [
   /\b(?:beautiful|charming|desirable|peaceful|stunning)\b/i,
+  /\b(?:welcoming|lovely|serene|tranquil|cozy)\b/i,
+  /\b(?:investment|investor)\s+(?:opportunity|potential)\b/i,
+  /\b(?:great|excellent|fantastic)\s+(?:opportunity|find)\b/i,
+  /\b(?:heart of|growing market|established quality|classic design)\b/i,
+  /\b(?:comfort|comfortable|convenience|practicality)\b/i,
+  /\b(?:entertain|entertaining|family gatherings?|lifestyle)\b/i,
+  /\b(?:imagine|envision)\b/i,
   /friendly neighborhood/i, /close to (?:local )?amenities/i, /fresh finishes/i,
   /thoughtful layout/i, /modern living/i, /perfect for/i, /ideal for/i,
   /future expansion/i, /top-rated schools?/i, /great schools?/i, /open house/i,
@@ -274,6 +282,55 @@ function buildGenerationFacts(item) {
     ["square feet", typeof data.sqft === "number" ? data.sqft : null],
     ["year built", typeof data.yearBuilt === "number" ? data.yearBuilt : null],
   ].filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value]) => `${label}: ${value}`).join("; ");
+}
+
+const SAFE_HOOKS = {
+  INSTAGRAM: "Take a look at this newly available listing",
+  FACEBOOK: "Now available in the local market",
+  LINKEDIN: "Property listing update",
+};
+
+const SAFE_CTAS = {
+  INSTAGRAM: "Message us to request details or schedule a showing.",
+  FACEBOOK: "Contact us to review the complete listing or schedule a showing.",
+  LINKEDIN: "Contact the listing business for complete details and showing information.",
+};
+
+export function buildProspectAttemptGuidance({ item, channel, attempt, rejectedPhrases = [] }) {
+  const allowedFacts = buildGenerationFacts(item);
+  const contract = `Return the existing structured generation object. hooks must contain exactly one neutral hook. body must contain only 2-3 sentences made directly from ALLOWED_FACTS, with no hook, CTA, hashtags, links, or property-quality language. cta must contain one neutral action from the allowed CTA vocabulary. hashtags must be ${channel === "INSTAGRAM" ? "3-6 factual real-estate/location tags" : channel === "FACEBOOK" ? "0-3 factual tags" : "2-4 professional factual tags"}.`;
+  const common = `ALLOWED_FACTS: ${allowedFacts}. ALLOWED_NEUTRAL_FRAMING: just listed; now available; take a look; explore this listing; see the listing photos; learn more; request details; schedule a showing; contact the verified business. FORBIDDEN unless explicitly present in ALLOWED_FACTS: beautiful, charming, spacious, stunning, desirable, peaceful, welcoming, perfect for, ideal for, great for, investment opportunity, family friendly, neighborhood quality, convenience or location quality, lifestyle, condition, renovation, layout, comfort, potential, suitability, community claims, or inferences from photos. Every factual property assertion must map directly to ALLOWED_FACTS. ${contract}`;
+  if (attempt === 1) return `Create a grounded, natural ${channel} listing post. ${common} Platform style: ${channel === "INSTAGRAM" ? "concise visual introduction, verified facts, short CTA, hashtags" : channel === "FACEBOOK" ? "a fuller verified-fact overview and request-details/showing CTA" : "a professional listing update and business-oriented CTA"}.`;
+  const feedback = rejectedPhrases.length ? `REJECTED_PREVIOUSLY: ${[...new Set(rejectedPhrases)].map((phrase) => `"${phrase}"`).join(", ")}.` : "The prior output failed factuality validation.";
+  if (attempt === 2) return `Rewrite the prior ${channel} result under tighter constraints. ${feedback} Remove those claims and their synonyms; do not replace one subjective claim with another. ${common} Required order: neutral hook, verified fact sentences, neutral action sentence, CTA, then permitted hashtags.`;
+  return `STRICT GROUNDED COMPOSITION for ${channel}. ${feedback} Use only these five components: (1) the neutral hook "${SAFE_HOOKS[channel]}", (2) exact verified facts from ALLOWED_FACTS, (3) the neutral transition "See the listing photos and review the verified details.", (4) the CTA "${SAFE_CTAS[channel]}", and (5) permitted factual hashtags. You may vary grammar but may not add any other property description or claim. ${common}`;
+}
+
+export function composeStructuredProspectBody(draft, channel) {
+  if (!draft?.hooks?.length || !draft?.cta) return draft?.body || "";
+  const hashtags = (draft.hashtags || []).map((tag) => `#${String(tag).replace(/^#+/, "")}`).join(" ");
+  return [draft.hooks[0].trim(), draft.body?.trim(), draft.cta.trim(), channel === "FACEBOOK" && !hashtags ? null : hashtags].filter(Boolean).join("\n\n");
+}
+
+export function validateStructuredProspectDraft(draft, item, channel) {
+  if (!draft?.hooks?.length || !draft?.cta || !draft?.body?.trim()) return { valid: false, reason: "INCOMPLETE_OUTPUT_CONTRACT" };
+  const hook = draft.hooks[0].trim();
+  const cta = draft.cta.trim();
+  if (!/just listed|now available|take a look|explore|property listing|listing update/i.test(hook)) return { valid: false, reason: "UNSAFE_HOOK" };
+  if (!/contact|message|request|schedule|learn more|showing|details/i.test(cta)) return { valid: false, reason: "UNSAFE_CTA" };
+  const componentCopy = `${hook}\n${draft.body}\n${cta}`;
+  const unsupported = UNSUPPORTED_PROPERTY_COPY.find((pattern) => pattern.test(componentCopy));
+  if (unsupported) return { valid: false, reason: "UNSUPPORTED_PROPERTY_CLAIM", matchedText: componentCopy.match(unsupported)?.[0] };
+  const data = item.dataJson || {};
+  const allowedNumbers = new Set([data.street?.match(/^\d+/)?.[0], data.zip, data.price, data.bedrooms, data.bathrooms, data.sqft, data.yearBuilt].filter((value) => value !== null && value !== undefined).map((value) => String(value).replace(/[^0-9]/g, "")));
+  const numericClaims = draft.body.match(/\$?[\d][\d,]*/g) || [];
+  const unsupportedNumber = numericClaims.find((value) => !allowedNumbers.has(value.replace(/[^0-9]/g, "")));
+  if (unsupportedNumber) return { valid: false, reason: "UNSUPPORTED_NUMERIC_CLAIM", matchedText: unsupportedNumber };
+  const normalizedBody = draft.body.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const verifiedFactsUsed = [data.street, data.city, data.zip, data.price, data.bedrooms, data.bathrooms, data.sqft, data.yearBuilt].filter((value) => value !== null && value !== undefined && value !== "").filter((value) => normalizedBody.includes(String(value).toLowerCase().replace(/[^a-z0-9]/g, "")));
+  if (verifiedFactsUsed.length < 2) return { valid: false, reason: "INSUFFICIENT_VERIFIED_FACTS" };
+  if (channel === "INSTAGRAM" && (!Array.isArray(draft.hashtags) || draft.hashtags.length < 2)) return { valid: false, reason: "INCOMPLETE_OUTPUT_CONTRACT" };
+  return validateGeneratedPropertyBody(composeStructuredProspectBody(draft, channel), item);
 }
 
 export function listingPhotoKey(url) {
@@ -459,21 +516,26 @@ export async function executeProspectPreparation(runId) {
     await updatePreparationRun(runId, { stage: "GENERATING" });
     let accepted = null;
     const rejectedPhrases = [];
-    const allowedFacts = buildGenerationFacts(item);
+    const generationStartedAt = Date.now();
+    let lastRejectionCategory = null;
+    let acceptedAttempt = null;
     for (let attempt = 1; attempt <= 3 && !accepted; attempt += 1) {
       await updatePlatformRun(runId, channel, { status: attempt === 1 ? "GENERATING" : "RETRYING", attemptCount: attempt, rejectionCategory: null });
-      const retryFeedback = rejectedPhrases.length ? ` Earlier attempts were rejected for these unsupported phrases: ${rejectedPhrases.map((phrase) => `"${phrase}"`).join(", ")}. Do not repeat those claims or close paraphrases.` : "";
-      const draft = await generateDraft({ clientId: prospect.clientId, kind: "POST", channel, bucketKey: "just_listed", templateType: "just_listed", guidance: `Write a substantive, platform-specific ${channel} post for a private NEW_LISTING preview. Allowed verified facts: ${allowedFacts}. Controlled framing you may use: now available; take a look; explore the listing; see the photos; request details; schedule a showing. Include a clear hook, verified listing facts, a distinct CTA, and platform-appropriate hashtags. Do not describe the home's layout, finishes, light, beauty, charm, functionality, potential, suitability, community, parks, shops, dining, schools, amenities, market, financing, or any fact absent from the allowed list. Do not infer anything from photos or replace a rejected adjective with another subjective adjective.${retryFeedback}`, createdBy: adminSub, dataItemId: item.id, contentAngle: "just_listed" });
-      if (!draft || draft.status === "FAILED") continue;
+      const guidance = buildProspectAttemptGuidance({ item, channel, attempt, rejectedPhrases });
+      const draft = await generateDraft({ clientId: prospect.clientId, kind: "POST", channel, bucketKey: "just_listed", templateType: "just_listed", guidance, createdBy: adminSub, dataItemId: item.id, contentAngle: "just_listed" });
+      if (!draft || draft.status === "FAILED") { lastRejectionCategory = "GENERATION_FAILED"; continue; }
       await updatePlatformRun(runId, channel, { status: "VALIDATING", attemptCount: attempt });
-      const validation = validateGeneratedPropertyBody(draft.body, item);
+      const assembledBody = composeStructuredProspectBody(draft, channel);
+      const validation = validateStructuredProspectDraft(draft, item, channel);
       if (!validation.valid) {
+        lastRejectionCategory = validation.reason;
         if (validation.matchedText) rejectedPhrases.push(validation.matchedText.slice(0, 80));
         await prisma.draft.update({ where: { id: draft.id }, data: { status: "FAILED", warnings: { push: `PROSPECT_PROPERTY_FACT_GUARD:${validation.reason}` } } });
         await updatePlatformRun(runId, channel, { status: "RETRYING", attemptCount: attempt, rejectionCategory: validation.reason });
         continue;
       }
-      accepted = await prisma.draft.update({ where: { id: draft.id }, data: { warnings: { push: `prospectProperty:${item.id}` } } });
+      accepted = await prisma.draft.update({ where: { id: draft.id }, data: { body: assembledBody, warnings: { push: `prospectProperty:${item.id}` } } });
+      acceptedAttempt = attempt;
       await updatePlatformRun(runId, channel, { status: "AI_ACCEPTED", attemptCount: attempt, provenance: "AI", rejectionCategory: null });
     }
     if (!accepted) {
@@ -487,6 +549,7 @@ export async function executeProspectPreparation(runId) {
       await updatePlatformRun(runId, channel, { status: "FALLBACK_ACCEPTED", attemptCount: 3, provenance: "FALLBACK", rejectionCategory: rejectedPhrases.length ? "UNSUPPORTED_PROPERTY_CLAIM" : "GENERATION_FAILED" });
     }
     drafts.push(accepted);
+    logEvent("prospect.generation.completed", { platform: channel, attempts: acceptedAttempt || 3, provenance: accepted.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK") ? "FALLBACK" : "AI", rejectionCategory: accepted.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK") ? (lastRejectionCategory || "ATTEMPTS_EXHAUSTED") : null, durationMs: Date.now() - generationStartedAt });
     await updatePreparationRun(runId, { readyCount: drafts.length });
   }
   await updatePreparationRun(runId, { stage: "SELECTING" });
