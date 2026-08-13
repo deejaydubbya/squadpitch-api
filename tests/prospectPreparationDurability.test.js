@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
-import { buildProspectAttemptGuidance, composeStructuredProspectBody, validateGeneratedPropertyBody, validateStructuredProspectDraft } from "../domains/prospects/prospect.service.js";
+import { buildProspectAttemptGuidance, composeStructuredProspectBody, validateGeneratedPropertyBody, validateProspectComposition, validateStructuredProspectDraft } from "../domains/prospects/prospect.service.js";
 
 const root = new URL("..", import.meta.url);
 const read = (path) => fs.readFileSync(new URL(path, root), "utf8");
@@ -56,8 +56,8 @@ describe("Christopher Shepherd progressive generation fixture", () => {
 
   it.each([
     ["INSTAGRAM", "Take a look at this newly available listing", "Message us to request details or schedule a showing.", ["JustListed", "ScottTwp", "RealEstate"]],
-    ["FACEBOOK", "Now available in the local market", "Contact us to review the complete listing or schedule a showing.", []],
-    ["LINKEDIN", "Property listing update", "Contact the listing business for complete details and showing information.", ["RealEstate", "PropertyUpdate"]],
+    ["FACEBOOK", "A new property is now available", "Contact us to review the complete listing or schedule a showing.", []],
+    ["LINKEDIN", "New property listing", "Contact the listing business for complete details and showing information.", ["RealEstate", "PropertyUpdate"]],
   ])("accepts substantive structured %s output from sparse verified facts", (channel, hook, cta, hashtags) => {
     const draft = { hooks: [hook], body: "12823 New Hope White Oak St in Scott Twp, OH 45171 is listed at $464,900. The listing records 4 bathrooms, 3,245 square feet, and a year built of 1998.", cta, hashtags };
     const body = composeStructuredProspectBody(draft, channel);
@@ -73,5 +73,44 @@ describe("Christopher Shepherd progressive generation fixture", () => {
   it.each(["beautiful", "spacious", "desirable", "perfect for", "welcoming", "investment opportunity"])("continues rejecting unsupported %s language", (claim) => {
     const body = `Take a look at 12823 New Hope White Oak St. This ${claim} property is listed at $464,900. Contact us to schedule a showing.`;
     expect(validateGeneratedPropertyBody(body, item)).toMatchObject({ valid: false, reason: "UNSUPPORTED_PROPERTY_CLAIM" });
+  });
+});
+
+describe("Lakewood final copy assembly", () => {
+  const item = { title: "203 Lakewood Lane", summary: "3 bed · 2 bath · 1,620 sqft · $285,000", dataJson: { street: "203 Lakewood Lane", city: "Georgetown", state: "OH", zip: "45121", price: 285000, bedrooms: 3, bathrooms: 2, sqft: 1620, yearBuilt: 1996 } };
+  const drafts = {
+    INSTAGRAM: { hooks: ["New listing in Georgetown"], body: "203 Lakewood Lane is listed at $285,000 with 3 bedrooms, 2 bathrooms, and 1,620 square feet. Built in 1996, browse the listing photos for a closer look.", cta: "Message us for details or to schedule a showing.", hashtags: ["Georgetown", "RealEstate", "Ohio", "JustListed"] },
+    FACEBOOK: { hooks: ["Now available in Georgetown: 203 Lakewood Lane"], body: "The property is listed at $285,000 with 3 bedrooms, 2 bathrooms, and 1,620 square feet. It was built in 1996; browse the listing photos for a closer look.", cta: "Contact us for more information or to schedule a showing.", hashtags: [] },
+    LINKEDIN: { hooks: ["New property listing in Georgetown, Ohio"], body: "203 Lakewood Lane is listed at $285,000 with 3 bedrooms, 2 bathrooms, and 1,620 square feet. The property was built in 1996.", cta: "Contact the listing business for complete details or showing information.", hashtags: ["RealEstate", "PropertyListing"] },
+  };
+
+  it.each(Object.entries(drafts))("assembles one natural, valid %s hook, CTA, and hashtag block", (channel, draft) => {
+    const body = composeStructuredProspectBody(draft, channel);
+    expect(validateStructuredProspectDraft(draft, item, channel)).toEqual({ valid: true });
+    expect(body.split(draft.hooks[0])).toHaveLength(2);
+    expect(body.split(draft.cta)).toHaveLength(2);
+    expect(body.split(/\n\s*\n/).filter((block) => block.startsWith("#"))).toHaveLength(channel === "FACEBOOK" ? 0 : 1);
+    if (channel === "LINKEDIN") expect(body).not.toMatch(/current listing details|professionals and clients/i);
+  });
+
+  it.each([
+    "New listing in Georgetown.\n\nNew listing in Georgetown.\n\n203 Lakewood Lane is listed at $285,000.\n\nContact us for details.",
+    "Take a look at this new listing.\n\nTake a look at this newly available listing.\n\n203 Lakewood Lane is listed at $285,000.\n\nContact us for details.",
+    "203 Lakewood Lane has 3 bedrooms, 2 bathrooms, and 1,620 sq ft.\n\nThis 3-bedroom, 2-bathroom property contains 1,620 sq ft.\n\nContact us for details.",
+    "New listing: 203 Lakewood Lane.\n\nListed at $285,000.\n\nContact us for details.\n\nContact us for details.",
+    "New listing: 203 Lakewood Lane.\n\nListed at $285,000.\n\nContact us for details.\n\n#JustListed #Ohio\n\n#JustListed #Ohio",
+  ])("rejects duplicated post composition", (body) => {
+    expect(validateProspectComposition(body)).toMatchObject({ valid: false, reason: "DUPLICATE_POST_COMPONENT" });
+  });
+
+  it("rejects unsupported condition claims but permits exact source-backed condition text", () => {
+    const unsupported = { ...drafts.FACEBOOK, body: `${drafts.FACEBOOK.body} This well-maintained home is available now.` };
+    expect(validateStructuredProspectDraft(unsupported, item, "FACEBOOK")).toMatchObject({ valid: false, reason: "UNSUPPORTED_PROPERTY_CLAIM" });
+    const verified = { ...item, summary: `${item.summary}. Well-maintained.` };
+    expect(validateGeneratedPropertyBody("Now available: 203 Lakewood Lane. This well-maintained property is listed at $285,000. Contact us for details or a showing.", verified)).toEqual({ valid: true });
+  });
+
+  it.each(["updated", "renovated", "move-in ready", "well cared for", "pristine", "immaculate"])("rejects unsupported %s condition language", (claim) => {
+    expect(validateGeneratedPropertyBody(`Now available: 203 Lakewood Lane. This ${claim} property is listed at $285,000. Contact us for details or a showing.`, item)).toMatchObject({ valid: false, reason: "UNSUPPORTED_PROPERTY_CLAIM" });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPropertyMediaPlan, buildVerifiedPropertyFallback, isUsableProspectListing, listingPhotoKey, rankPropertyAssets } from "../domains/prospects/prospect.service.js";
+import { buildPropertyMediaPlan, buildVerifiedPropertyFallback, isUsableProspectListing, listingPhotoKey, rankPropertyAssets, validateGeneratedPropertyBody, validateProspectComposition } from "../domains/prospects/prospect.service.js";
 
 const item = { title: "10 Main St", dataJson: { street: "10 Main St", city: "Town", state: "OH", zip: "45000", price: 300000, bedrooms: 3, bathrooms: 2, sqft: 1800, yearBuilt: 1990 } };
 
@@ -12,6 +12,8 @@ describe("prospect campaign quality", () => {
       expect(body).toContain("$300,000");
       expect(body).toMatch(/listing|property/i);
       expect(body).not.toMatch(/neighborhood|natural light|modern conveniences|perfect for families/i);
+      expect(validateProspectComposition(body)).toEqual({ valid: true });
+      expect(validateGeneratedPropertyBody(body, item)).toEqual({ valid: true });
     }
   });
 
@@ -35,6 +37,15 @@ describe("prospect campaign quality", () => {
     expect(plan.LINKEDIN).toHaveLength(1);
     expect(new Set(plan.INSTAGRAM.map(({ id }) => id)).size).toBe(plan.INSTAGRAM.length);
     expect(new Set(plan.INSTAGRAM.map(({ id }) => id))).not.toEqual(new Set(plan.FACEBOOK.map(({ id }) => id)));
+  });
+
+  it("prefers useful supporting context over a high-scoring detail for gallery position three", () => {
+    const make = (id, scene, qualityScore = 0) => ({ id, tags: [`prospect-scene:${scene}`], width: 1600, height: 1200, qualityScore });
+    const plan = buildPropertyMediaPlan([make("front", "main_front_exterior"), make("alternate", "alternate_exterior"), make("front-door", "porch_patio_deck", 10), make("living", "living_interior")]);
+    expect(plan.INSTAGRAM.map(({ id }) => id)).toEqual(["front", "alternate", "living"]);
+    expect(plan.INSTAGRAM).toHaveLength(3);
+    expect(plan.FACEBOOK).toHaveLength(3);
+    expect(plan.LINKEDIN).toHaveLength(1);
   });
 
   it("collapses Coldwell transformation variants to one source photo", () => {

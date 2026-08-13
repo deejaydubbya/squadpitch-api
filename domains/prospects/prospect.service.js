@@ -238,6 +238,33 @@ const UNSUPPORTED_PROPERTY_COPY = [
   /\b(?:solid )?opportunity\b/i, /curious about the neighborhood/i,
 ];
 
+const CONDITION_CLAIMS = [
+  /\bwell[- ]maintained\b/i, /\bupdated\b/i, /\brenovated\b/i,
+  /\bmove[- ]in ready\b/i, /\bwell cared for\b/i, /\bpristine\b/i, /\bimmaculate\b/i,
+];
+
+const PROSPECT_BOILERPLATE = [
+  /the current listing details include/i,
+  /for professionals and clients reviewing available properties/i,
+  /review the verified details/i,
+  /the local market/i,
+];
+
+function verifiedSourceText(item) {
+  const data = item.dataJson || {};
+  return [item.summary, data.description, data.listingDescription, data.publicRemarks, data.remarks]
+    .filter((value) => typeof value === "string")
+    .join("\n");
+}
+
+function findUnsupportedPropertyClaim(text, item) {
+  const condition = CONDITION_CLAIMS.find((pattern) => {
+    const match = text.match(pattern)?.[0];
+    return match && !verifiedSourceText(item).toLowerCase().includes(match.toLowerCase());
+  });
+  return condition || UNSUPPORTED_PROPERTY_COPY.find((pattern) => pattern.test(text));
+}
+
 export function validateGeneratedPropertyBody(body, item) {
   const text = String(body || "");
   const normalized = text.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -246,11 +273,11 @@ export function validateGeneratedPropertyBody(body, item) {
     .filter((value) => value !== null && value !== undefined && value !== "")
     .map((value) => String(value).toLowerCase().replace(/[^a-z0-9]/g, ""));
   if (!text.trim() || !facts.some((fact) => fact.length >= 3 && normalized.includes(fact))) return { valid: false, reason: "MISSING_VERIFIED_FACT" };
-  const unsupported = UNSUPPORTED_PROPERTY_COPY.find((pattern) => pattern.test(text));
+  const unsupported = findUnsupportedPropertyClaim(text, item);
   const matchedText = unsupported ? text.match(unsupported)?.[0] : null;
   if (unsupported) return { valid: false, reason: "UNSUPPORTED_PROPERTY_CLAIM", matchedText };
   const blocks = text.split(/\n\s*\n|(?<=[.!?])\s+/).map((part) => part.trim()).filter((part) => part.length >= 12);
-  const hasHook = /just listed|now available|take a look|explore|property listing|listing update|see the details/i.test(text);
+  const hasHook = /just listed|new (?:property )?listing|now available|take a look|explore|property listing|listing update|see the details/i.test(text);
   const hasCta = /contact|message|request|schedule|learn more|complete listing|showing/i.test(text);
   if (blocks.length < 3 || !hasHook || !hasCta) return { valid: false, reason: "INSUFFICIENT_SOCIAL_STRUCTURE" };
   return { valid: true };
@@ -267,9 +294,9 @@ export function buildVerifiedPropertyFallback(item, channel, businessName) {
     typeof data.yearBuilt === "number" ? `Built in ${data.yearBuilt}` : null,
   ].filter(Boolean);
   const detailLine = facts.join(" · ");
-  if (channel === "INSTAGRAM") return `🏡 Take a look at ${address}.\n\nNow available at ${detailLine}.\n\nWant to see the complete listing or schedule a showing? Message ${businessName}.\n\n#JustListed #RealEstate #PropertyTour`;
-  if (channel === "FACEBOOK") return `Now available: ${address}\n\nHere are the key details from the listing:\n${detailLine}\n\nExplore the property photos, then contact ${businessName} to request the complete listing information or schedule a showing.`;
-  return `Property listing update: ${address}\n\nThe current listing details include ${detailLine}.\n\nFor professionals and clients reviewing available properties, ${businessName} can provide the complete listing information and showing details.`;
+  if (channel === "INSTAGRAM") return `🏡 New listing: ${address}.\n\nListed at ${detailLine}. Swipe through the listing photos for a closer look.\n\nMessage ${businessName} for details or to schedule a showing.\n\n#JustListed #RealEstate #PropertyTour`;
+  if (channel === "FACEBOOK") return `Now available: ${address}.\n\nListed at ${detailLine}. Browse the listing photos for a closer look.\n\nContact ${businessName} for more information or to schedule a showing.`;
+  return `New property listing: ${address}.\n\nListed at ${detailLine}.\n\nContact ${businessName} for complete listing details or showing information.\n\n#RealEstate #PropertyListing`;
 }
 
 function buildGenerationFacts(item) {
@@ -285,9 +312,9 @@ function buildGenerationFacts(item) {
 }
 
 const SAFE_HOOKS = {
-  INSTAGRAM: "Take a look at this newly available listing",
-  FACEBOOK: "Now available in the local market",
-  LINKEDIN: "Property listing update",
+  INSTAGRAM: "Take a look at this new listing",
+  FACEBOOK: "A new property is now available",
+  LINKEDIN: "New property listing",
 };
 
 const SAFE_CTAS = {
@@ -298,12 +325,12 @@ const SAFE_CTAS = {
 
 export function buildProspectAttemptGuidance({ item, channel, attempt, rejectedPhrases = [] }) {
   const allowedFacts = buildGenerationFacts(item);
-  const contract = `Return the existing structured generation object. hooks must contain exactly one neutral hook. body must contain only 2-3 sentences made directly from ALLOWED_FACTS, with no hook, CTA, hashtags, links, or property-quality language. cta must contain one neutral action from the allowed CTA vocabulary. hashtags must be ${channel === "INSTAGRAM" ? "3-6 factual real-estate/location tags" : channel === "FACEBOOK" ? "0-3 factual tags" : "2-4 professional factual tags"}.`;
-  const common = `ALLOWED_FACTS: ${allowedFacts}. ALLOWED_NEUTRAL_FRAMING: just listed; now available; take a look; explore this listing; see the listing photos; learn more; request details; schedule a showing; contact the verified business. FORBIDDEN unless explicitly present in ALLOWED_FACTS: beautiful, charming, spacious, stunning, desirable, peaceful, welcoming, perfect for, ideal for, great for, investment opportunity, family friendly, neighborhood quality, convenience or location quality, lifestyle, condition, renovation, layout, comfort, potential, suitability, community claims, or inferences from photos. Every factual property assertion must map directly to ALLOWED_FACTS. ${contract}`;
+  const contract = `Return the existing structured generation object. hooks must contain exactly one opening line and nothing else. body must contain only 2-3 natural sentences made directly from ALLOWED_FACTS; it must not repeat or paraphrase the hook, include the CTA, hashtags, links, or property-quality language. cta must contain only one neutral action from the allowed CTA vocabulary and must not repeat text from body. hashtags must contain only ${channel === "INSTAGRAM" ? "3-6 factual real-estate/location tags" : channel === "FACEBOOK" ? "0-3 factual tags" : "2-4 professional factual tags"}. Do not repeat any sentence or fact block. Avoid boilerplate such as \"the current listing details include\", \"for professionals and clients reviewing available properties\", \"review the verified details\", and \"the local market\".`;
+  const common = `ALLOWED_FACTS: ${allowedFacts}. ALLOWED_NEUTRAL_FRAMING: just listed; now available; take a look; explore this listing; see or browse the listing photos; learn more; request details; schedule a showing; contact the verified business. FORBIDDEN unless explicitly present in ALLOWED_FACTS: beautiful, charming, spacious, stunning, desirable, peaceful, welcoming, perfect for, ideal for, great for, investment opportunity, family friendly, neighborhood quality, convenience or location quality, lifestyle, condition, renovation, layout, comfort, potential, suitability, community claims, or inferences from photos. Every factual property assertion must map directly to ALLOWED_FACTS. ${contract}`;
   if (attempt === 1) return `Create a grounded, natural ${channel} listing post. ${common} Platform style: ${channel === "INSTAGRAM" ? "concise visual introduction, verified facts, short CTA, hashtags" : channel === "FACEBOOK" ? "a fuller verified-fact overview and request-details/showing CTA" : "a professional listing update and business-oriented CTA"}.`;
   const feedback = rejectedPhrases.length ? `REJECTED_PREVIOUSLY: ${[...new Set(rejectedPhrases)].map((phrase) => `"${phrase}"`).join(", ")}.` : "The prior output failed factuality validation.";
-  if (attempt === 2) return `Rewrite the prior ${channel} result under tighter constraints. ${feedback} Remove those claims and their synonyms; do not replace one subjective claim with another. ${common} Required order: neutral hook, verified fact sentences, neutral action sentence, CTA, then permitted hashtags.`;
-  return `STRICT GROUNDED COMPOSITION for ${channel}. ${feedback} Use only these five components: (1) the neutral hook "${SAFE_HOOKS[channel]}", (2) exact verified facts from ALLOWED_FACTS, (3) the neutral transition "See the listing photos and review the verified details.", (4) the CTA "${SAFE_CTAS[channel]}", and (5) permitted factual hashtags. You may vary grammar but may not add any other property description or claim. ${common}`;
+  if (attempt === 2) return `Rewrite the prior ${channel} result under tighter constraints. ${feedback} Remove those claims and their synonyms; do not replace one subjective claim with another. ${common} Required order: neutral hook, verified fact sentences with an optional listing-photo invitation, CTA, then permitted hashtags.`;
+  return `STRICT GROUNDED COMPOSITION for ${channel}. ${feedback} Use only these four components: (1) the neutral hook "${SAFE_HOOKS[channel]}", (2) natural sentences using exact verified facts from ALLOWED_FACTS and, when useful, a neutral invitation to browse the listing photos, (3) the CTA "${SAFE_CTAS[channel]}", and (4) permitted factual hashtags. Each component must be distinct. You may vary grammar but may not add any other property description or claim. ${common}`;
 }
 
 export function composeStructuredProspectBody(draft, channel) {
@@ -312,14 +339,51 @@ export function composeStructuredProspectBody(draft, channel) {
   return [draft.hooks[0].trim(), draft.body?.trim(), draft.cta.trim(), channel === "FACEBOOK" && !hashtags ? null : hashtags].filter(Boolean).join("\n\n");
 }
 
+function normalizedCompositionText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9#]+/g, " ").trim();
+}
+
+function wordSimilarity(left, right) {
+  const a = new Set(normalizedCompositionText(left).split(/\s+/).filter((word) => word.length > 2));
+  const b = new Set(normalizedCompositionText(right).split(/\s+/).filter((word) => word.length > 2));
+  if (!a.size || !b.size) return 0;
+  const shared = [...a].filter((word) => b.has(word)).length;
+  return shared / Math.min(a.size, b.size);
+}
+
+export function validateProspectComposition(body, { hook = null, cta = null } = {}) {
+  const text = String(body || "").trim();
+  const paragraphs = text.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
+  if (!text || paragraphs.some((part) => normalizedCompositionText(part).length < 3)) return { valid: false, reason: "EMPTY_POST_COMPONENT" };
+  const normalizedParagraphs = paragraphs.map(normalizedCompositionText);
+  if (new Set(normalizedParagraphs).size !== normalizedParagraphs.length) return { valid: false, reason: "DUPLICATE_POST_COMPONENT" };
+  if (paragraphs.filter((part) => /^\s*(?:#\w+[\s]*)+$/u.test(part)).length > 1) return { valid: false, reason: "DUPLICATE_POST_COMPONENT" };
+  const sentences = text.split(/\n+|(?<=[.!?])\s+/).map((part) => part.trim()).filter((part) => normalizedCompositionText(part).length >= 3);
+  const normalizedSentences = sentences.map(normalizedCompositionText);
+  if (new Set(normalizedSentences).size !== normalizedSentences.length) return { valid: false, reason: "DUPLICATE_POST_COMPONENT" };
+  for (let index = 1; index < sentences.length; index += 1) {
+    if (wordSimilarity(sentences[index - 1], sentences[index]) >= 0.8) return { valid: false, reason: "DUPLICATE_POST_COMPONENT" };
+    const previousFacts = sentences[index - 1].match(/\$?[\d][\d,]*/g) || [];
+    const currentFacts = sentences[index].match(/\$?[\d][\d,]*/g) || [];
+    if (previousFacts.length >= 2 && previousFacts.filter((fact) => currentFacts.includes(fact)).length >= 2) return { valid: false, reason: "DUPLICATE_POST_COMPONENT" };
+  }
+  const normalizedBody = normalizedCompositionText(text);
+  for (const component of [hook, cta].filter(Boolean)) {
+    const normalized = normalizedCompositionText(component);
+    if (normalized && normalizedBody.split(normalized).length - 1 > 1) return { valid: false, reason: "DUPLICATE_POST_COMPONENT" };
+  }
+  if (PROSPECT_BOILERPLATE.some((pattern) => pattern.test(text))) return { valid: false, reason: "PROSPECT_COPY_BOILERPLATE" };
+  return { valid: true };
+}
+
 export function validateStructuredProspectDraft(draft, item, channel) {
   if (!draft?.hooks?.length || !draft?.cta || !draft?.body?.trim()) return { valid: false, reason: "INCOMPLETE_OUTPUT_CONTRACT" };
   const hook = draft.hooks[0].trim();
   const cta = draft.cta.trim();
-  if (!/just listed|now available|take a look|explore|property listing|listing update/i.test(hook)) return { valid: false, reason: "UNSAFE_HOOK" };
+  if (!/just listed|new (?:property )?listing|now available|take a look|explore|property listing|listing update/i.test(hook)) return { valid: false, reason: "UNSAFE_HOOK" };
   if (!/contact|message|request|schedule|learn more|showing|details/i.test(cta)) return { valid: false, reason: "UNSAFE_CTA" };
   const componentCopy = `${hook}\n${draft.body}\n${cta}`;
-  const unsupported = UNSUPPORTED_PROPERTY_COPY.find((pattern) => pattern.test(componentCopy));
+  const unsupported = findUnsupportedPropertyClaim(componentCopy, item);
   if (unsupported) return { valid: false, reason: "UNSUPPORTED_PROPERTY_CLAIM", matchedText: componentCopy.match(unsupported)?.[0] };
   const data = item.dataJson || {};
   const allowedNumbers = new Set([data.street?.match(/^\d+/)?.[0], data.zip, data.price, data.bedrooms, data.bathrooms, data.sqft, data.yearBuilt].filter((value) => value !== null && value !== undefined).map((value) => String(value).replace(/[^0-9]/g, "")));
@@ -330,7 +394,9 @@ export function validateStructuredProspectDraft(draft, item, channel) {
   const verifiedFactsUsed = [data.street, data.city, data.zip, data.price, data.bedrooms, data.bathrooms, data.sqft, data.yearBuilt].filter((value) => value !== null && value !== undefined && value !== "").filter((value) => normalizedBody.includes(String(value).toLowerCase().replace(/[^a-z0-9]/g, "")));
   if (verifiedFactsUsed.length < 2) return { valid: false, reason: "INSUFFICIENT_VERIFIED_FACTS" };
   if (channel === "INSTAGRAM" && (!Array.isArray(draft.hashtags) || draft.hashtags.length < 2)) return { valid: false, reason: "INCOMPLETE_OUTPUT_CONTRACT" };
-  return validateGeneratedPropertyBody(composeStructuredProspectBody(draft, channel), item);
+  const assembled = composeStructuredProspectBody(draft, channel);
+  const composition = validateProspectComposition(assembled, { hook, cta });
+  return composition.valid ? validateGeneratedPropertyBody(assembled, item) : composition;
 }
 
 export function listingPhotoKey(url) {
@@ -360,10 +426,14 @@ export function buildPropertyMediaPlan(assets) {
   const exteriors = usable.filter(({ scene }) => ["main_front_exterior", "alternate_exterior", "side_rear_exterior"].includes(scene));
   const heroPool = exteriors.length ? exteriors : usable;
   const heroFor = (index) => heroPool[Math.min(index, heroPool.length - 1)]?.asset || null;
-  const supportPool = usable.filter(({ scene }) => ["kitchen", "living_interior", "porch_patio_deck", "yard_land", "bedroom", "bathroom"].includes(scene));
+  const contextualSupport = usable.filter(({ scene }) => ["kitchen", "living_interior", "yard_land", "bedroom", "bathroom"].includes(scene));
+  const detailSupport = usable.filter(({ scene }) => scene === "porch_patio_deck");
+  const supportPool = [...contextualSupport, ...detailSupport];
   const galleryFor = (hero, count, heroIndex) => {
     if (!hero) return [];
     const alternateExterior = heroPool.length > 1 ? heroPool[(heroIndex + 1) % heroPool.length] : null;
+    // Keep the first two gallery positions exterior-led, then prefer useful
+    // interior/context imagery over a higher-scoring close-up or detail.
     const supporting = supportPool.length ? supportPool[heroIndex % supportPool.length] : null;
     const ordered = [hero, alternateExterior?.asset, supporting?.asset, ...usable.map(({ asset }) => asset)].filter(Boolean);
     return [...new Map(ordered.map((asset) => [asset.id, asset])).values()].slice(0, count);
@@ -501,7 +571,8 @@ export async function executeProspectPreparation(runId) {
   const drafts = [];
   for (const draft of existing) {
     if (drafts.some((candidate) => candidate.channel === draft.channel)) continue;
-    const validation = validateGeneratedPropertyBody(draft.body, item);
+    const composition = validateProspectComposition(draft.body);
+    const validation = composition.valid ? validateGeneratedPropertyBody(draft.body, item) : composition;
     if (validation.valid) drafts.push(draft);
     else await prisma.draft.update({ where: { id: draft.id }, data: { status: "FAILED", warnings: { push: `PROSPECT_PROPERTY_FACT_GUARD:${validation.reason}` } } });
   }
@@ -540,6 +611,9 @@ export async function executeProspectPreparation(runId) {
     }
     if (!accepted) {
       const body = buildVerifiedPropertyFallback(item, channel, prospect.client.name);
+      const composition = validateProspectComposition(body);
+      const fallbackValidation = composition.valid ? validateGeneratedPropertyBody(body, item) : composition;
+      if (!fallbackValidation.valid) throw Object.assign(new Error("Verified fallback failed composition validation"), { code: fallbackValidation.reason });
       accepted = await prisma.draft.create({ data: {
         clientId: prospect.clientId, kind: "POST", status: "DRAFT", channel,
         bucketKey: "just_listed", generationGuidance: "Verified-facts fallback after three rejected prospect generation attempts",
@@ -624,6 +698,7 @@ export async function getPublicPreview(previewToken) {
       beds: typeof item.dataJson?.bedrooms === "number" ? item.dataJson.bedrooms : null,
       baths: typeof item.dataJson?.bathrooms === "number" ? item.dataJson.bathrooms : null,
       sqft: typeof item.dataJson?.sqft === "number" ? item.dataJson.sqft : null,
+      yearBuilt: typeof item.dataJson?.yearBuilt === "number" ? item.dataJson.yearBuilt : null,
       status: typeof item.dataJson?.status === "string" ? item.dataJson.status : null,
     } } : {}),
   }));
