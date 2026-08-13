@@ -11,6 +11,7 @@ import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { getProspectPreparationQueue } from "../../lib/queues.js";
 import { logEvent } from "../../lib/logger.js";
 import { normalizeIdentityEmail } from "../../lib/auth0Identity.js";
+import { selectCanonicalProspectDrafts } from "../../lib/prospectDraftVisibility.js";
 
 const TOKEN_BYTES = 32;
 const DEFAULT_TTL_DAYS = 21;
@@ -722,17 +723,16 @@ function formatSafePreview(row) {
       status: typeof item.dataJson?.status === "string" ? item.dataJson.status : null,
     } } : {}),
   }));
-  const selectedByPlatform = new Map();
+  const previewDraftSelections = [];
   for (const selection of row.previewItems) {
     const draft = selection.draft;
     if (selection.itemType !== "DRAFT" || !["DRAFT", "PENDING_REVIEW", "APPROVED"].includes(draft?.status)) continue;
     if (!normalizeProspectChannels(row.selectedChannels).includes(draft.channel)) continue;
     const propertyDraft = draft.warnings?.some((warning) => warning.startsWith("prospectProperty:"));
     if (propertyDraft && items.some((item) => item.imageUrl) && !draft.draftAssets?.length) continue;
-    const current = selectedByPlatform.get(draft.channel);
-    if (!current || draft.createdAt > current.draft.createdAt) selectedByPlatform.set(draft.channel, { draft, sortOrder: selection.sortOrder });
+    previewDraftSelections.push(selection);
   }
-  const drafts = [...selectedByPlatform.values()].sort((a, b) => a.sortOrder - b.sortOrder).map(({ draft }) => ({ channel: draft.channel, body: draft.body, mediaUrl: draft.mediaUrl, media: (draft.draftAssets ?? []).map(({ asset, orderIndex }) => ({ url: asset.url, thumbnailUrl: asset.thumbnailUrl, assetType: asset.assetType, altText: asset.altText, orderIndex })) }));
+  const drafts = selectCanonicalProspectDrafts(previewDraftSelections, normalizeProspectChannels(row.selectedChannels)).map(({ draft }) => ({ channel: draft.channel, body: draft.body, mediaUrl: draft.mediaUrl, media: (draft.draftAssets ?? []).map(({ asset, orderIndex }) => ({ url: asset.url, thumbnailUrl: asset.thumbnailUrl, assetType: asset.assetType, altText: asset.altText, orderIndex })) }));
   return {
     businessName: row.client.name,
     prospectName: row.prospectName,

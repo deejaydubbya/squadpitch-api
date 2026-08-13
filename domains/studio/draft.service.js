@@ -5,6 +5,7 @@
 // draftWorkflow.service.js which also writes the ModerationLog.
 
 import { prisma } from "../../prisma.js";
+import { customerVisibleWarnings, hasInternalDiagnosticBody, selectCanonicalProspectDrafts } from "../../lib/prospectDraftVisibility.js";
 
 const DRAFT_ASSET_INCLUDE = {
   draftAssets: {
@@ -12,6 +13,27 @@ const DRAFT_ASSET_INCLUDE = {
     orderBy: { orderIndex: "asc" },
   },
 };
+
+async function getClaimedProspectVisibility(clientId) {
+  const prospect = await prisma.prospectWorkspace.findUnique({
+    where: { clientId },
+    select: {
+      claimStatus: true, claimedAt: true, selectedChannels: true,
+      previewItems: { where: { itemType: "DRAFT" }, select: { id: true, itemType: true, draftId: true, sortOrder: true, draft: { select: { id: true, channel: true, status: true, body: true, createdAt: true } } } },
+    },
+  });
+  if (prospect?.claimStatus !== "CLAIMED" || !prospect.claimedAt) return null;
+  return {
+    claimedAt: prospect.claimedAt,
+    canonicalIds: selectCanonicalProspectDrafts(prospect.previewItems, prospect.selectedChannels).map((item) => item.draftId),
+  };
+}
+
+function isVisibleForClaimedProspect(draft, visibility) {
+  if (!visibility) return true;
+  if (visibility.canonicalIds.includes(draft.id)) return true;
+  return draft.createdAt > visibility.claimedAt && !hasInternalDiagnosticBody(draft.body);
+}
 
 export async function listDrafts({
   clientId,
@@ -26,6 +48,7 @@ export async function listDrafts({
   limit = 50,
   cursor,
 }) {
+  const claimedProspectVisibility = clientId ? await getClaimedProspectVisibility(clientId) : null;
   return prisma.draft.findMany({
     where: {
       ...(clientId && { clientId }),
@@ -33,6 +56,13 @@ export async function listDrafts({
       ...(status && { status }),
       ...(kind && { kind }),
       ...(channel && { channel }),
+      ...(claimedProspectVisibility && { OR: [
+        { id: { in: claimedProspectVisibility.canonicalIds } },
+        { createdAt: { gt: claimedProspectVisibility.claimedAt }, NOT: [
+          { body: { contains: "PROSPECT_PROPERTY_FACT_GUARD:" } },
+          { body: { contains: "re_assets:" } },
+        ] },
+      ] }),
     },
     include: DRAFT_ASSET_INCLUDE,
     orderBy: { createdAt: "desc" },
@@ -42,10 +72,13 @@ export async function listDrafts({
 }
 
 export async function getDraft(draftId) {
-  return prisma.draft.findUnique({
+  const draft = await prisma.draft.findUnique({
     where: { id: draftId },
     include: DRAFT_ASSET_INCLUDE,
   });
+  if (!draft) return null;
+  const visibility = await getClaimedProspectVisibility(draft.clientId);
+  return isVisibleForClaimedProspect(draft, visibility) ? draft : null;
 }
 
 /**
@@ -265,7 +298,8 @@ function parseSourceMeta(warnings, createdBy) {
 export function formatDraft(draft) {
   if (!draft) return null;
 
-  const sourceMeta = parseSourceMeta(draft.warnings, draft.createdBy);
+  const visibleWarnings = customerVisibleWarnings(draft.warnings);
+  const sourceMeta = parseSourceMeta(visibleWarnings, draft.createdBy);
 
   return {
     id: draft.id,
@@ -287,7 +321,7 @@ export function formatDraft(draft) {
     imageGuidance: draft.imageGuidance ?? null,
     videoGuidance: draft.videoGuidance ?? null,
     mediaPlan: draft.mediaPlan ?? null,
-    warnings: draft.warnings ?? [],
+    warnings: visibleWarnings,
     ...(sourceMeta && { sourceMeta }),
     mediaUrl: draft.mediaUrl ?? null,
     mediaType: draft.mediaType ?? null,
@@ -326,3 +360,5 @@ export function formatDraft(draft) {
     campaignTotal: draft.campaignTotal ?? null,
   };
 }
+
+export const _visibility = { getClaimedProspectVisibility, isVisibleForClaimedProspect };
