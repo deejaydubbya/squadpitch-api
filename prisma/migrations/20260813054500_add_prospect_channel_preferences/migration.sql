@@ -1,0 +1,2 @@
+ALTER TABLE "prospect_workspaces"
+ADD COLUMN "selectedChannels" TEXT[] NOT NULL DEFAULT ARRAY['INSTAGRAM', 'FACEBOOK', 'LINKEDIN']::TEXT[];

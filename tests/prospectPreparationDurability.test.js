@@ -26,6 +26,16 @@ describe("durable prospect preparation", () => {
     expect(service).toContain("STALE_RUN");
     expect(service).toContain("COMPLETE_WITH_WARNINGS");
   });
+
+  it("persists selected channels and derives generation and expected counts from them", () => {
+    const schema = read("prisma/schema.prisma");
+    const service = read("domains/prospects/prospect.service.js");
+    expect(schema).toContain("selectedChannels  String[]");
+    expect(service).toContain("expectedCount: selectedChannels.length");
+    expect(service).toContain("for (const channel of selectedChannels)");
+    expect(service).toContain("preferredChannels: normalizeProspectChannels(row.selectedChannels)");
+    expect(service).not.toContain('for (const channel of ["INSTAGRAM", "FACEBOOK", "LINKEDIN"])');
+  });
 });
 
 describe("property copy factuality boundary", () => {

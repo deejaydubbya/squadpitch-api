@@ -389,6 +389,7 @@ model ProspectWorkspace {
   claimedAt         DateTime?
   claimedByUserId   String?
   claimedByAuth0Sub String?
+  selectedChannels  String[]              @default(["INSTAGRAM", "FACEBOOK", "LINKEDIN"])
   createdByAdminSub String
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt

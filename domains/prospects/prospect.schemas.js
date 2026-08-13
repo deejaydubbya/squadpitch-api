@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const optionalUrl = z.string().url().max(2048).optional().or(z.literal(""));
+const ProspectChannelSchema = z.enum(["INSTAGRAM", "FACEBOOK", "LINKEDIN"]);
 
 export const CreateProspectSchema = z.object({
   prospectName: z.string().trim().min(1).max(160),
@@ -12,6 +13,7 @@ export const CreateProspectSchema = z.object({
   acquisitionSource: z.string().trim().max(120).optional(),
   operatorNote: z.string().trim().max(2000).optional(),
   claimTtlDays: z.number().int().min(1).max(90).optional(),
+  selectedChannels: z.array(ProspectChannelSchema).min(1).max(3).optional(),
 });
 
 export const ProspectListQuerySchema = z.object({
@@ -35,6 +37,7 @@ export const PopulateProspectSchema = z.object({
 
 export const PrepareProspectSchema = z.object({
   sourceUrl: optionalUrl,
+  selectedChannels: z.array(ProspectChannelSchema).min(1).max(3).optional(),
 }).default({});
 
 export const UpdateProspectPreviewSchema = z.object({

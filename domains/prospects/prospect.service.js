@@ -10,10 +10,18 @@ import { extractFromImage } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
 import { getProspectPreparationQueue } from "../../lib/queues.js";
 import { logEvent } from "../../lib/logger.js";
+import { normalizeIdentityEmail } from "../../lib/auth0Identity.js";
 
 const TOKEN_BYTES = 32;
 const DEFAULT_TTL_DAYS = 21;
 const UNCLAIMED_OWNER = "prospect:unclaimed";
+const PROSPECT_CHANNELS = Object.freeze(["INSTAGRAM", "FACEBOOK", "LINKEDIN"]);
+const DEFAULT_REAL_ESTATE_CHANNELS = Object.freeze(["INSTAGRAM", "FACEBOOK"]);
+
+function normalizeProspectChannels(channels, fallback = PROSPECT_CHANNELS) {
+  const selected = [...new Set((channels || []).filter((channel) => PROSPECT_CHANNELS.includes(channel)))];
+  return selected.length ? selected : [...fallback];
+}
 
 export function generateSecret() {
   return crypto.randomBytes(TOKEN_BYTES).toString("base64url");
@@ -71,6 +79,7 @@ export async function createProspect(input, adminSub) {
         sourceUrl: input.sourceUrl || null,
         acquisitionSource: input.acquisitionSource || null,
         operatorNote: input.operatorNote || null,
+        selectedChannels: normalizeProspectChannels(input.selectedChannels, input.industryKey === "real_estate" ? DEFAULT_REAL_ESTATE_CHANNELS : PROSPECT_CHANNELS),
         previewTokenHash: digestSecret(previewToken),
         claimTokenHash: digestSecret(claimToken),
         claimIssuedAt: new Date(),
@@ -117,29 +126,31 @@ export async function getProspect(id) {
   });
   const preparationRun = await prisma.prospectPreparationRun.findFirst({ where: { prospectWorkspaceId: id }, orderBy: { createdAt: "desc" } });
   const propertyMediaAvailable = row.client.dataItems.some((item) => item.type === "PROPERTY" && (item.dataJson?.imageUrl || item.dataJson?.images?.length));
+  const selectedChannels = normalizeProspectChannels(row.selectedChannels);
   const canonicalProspectDrafts = [];
   const seenProspectChannels = new Set();
   for (const draft of row.client.drafts) {
     const isPropertyDraft = draft.warnings?.some((warning) => warning.startsWith("prospectProperty:"));
     if (isPropertyDraft && seenProspectChannels.has(draft.channel)) continue;
     if (isPropertyDraft) seenProspectChannels.add(draft.channel);
-    canonicalProspectDrafts.push(draft);
+    if (!isPropertyDraft || selectedChannels.includes(draft.channel)) canonicalProspectDrafts.push(draft);
   }
   const eligiblePreviewItems = [
     ...row.client.dataItems.map((item) => ({ id: item.id, itemType: "DATA_ITEM", title: item.title, subtitle: item.type })),
     ...canonicalProspectDrafts.filter((draft) => !propertyMediaAvailable || draft._count.draftAssets > 0 || draft.mediaUrl).map((draft) => ({ id: draft.id, itemType: "DRAFT", title: draft.body.slice(0, 120), subtitle: draft.channel })),
   ];
-  const expectedChannels = ["INSTAGRAM", "FACEBOOK", "LINKEDIN"];
+  const expectedChannels = selectedChannels;
   const readyChannels = expectedChannels.filter((channel) => canonicalProspectDrafts.some((draft) => draft.channel === channel && (!propertyMediaAvailable || draft._count.draftAssets > 0 || draft.mediaUrl)));
-  const campaignReadiness = { status: readyChannels.length === 3 ? (preparationRun?.status === "COMPLETE_WITH_WARNINGS" ? "COMPLETE_WITH_WARNINGS" : "COMPLETE") : readyChannels.length ? "PARTIAL" : "NEEDS_ATTENTION", readyChannels, expectedChannels, issues: expectedChannels.filter((channel) => !readyChannels.includes(channel)).map((channel) => ({ channel, code: "DRAFT_NOT_READY", message: `${channel.charAt(0)}${channel.slice(1).toLowerCase()} draft needs attention` })) };
+  const campaignReadiness = { status: readyChannels.length === expectedChannels.length ? (preparationRun?.status === "COMPLETE_WITH_WARNINGS" ? "COMPLETE_WITH_WARNINGS" : "COMPLETE") : readyChannels.length ? "PARTIAL" : "NEEDS_ATTENTION", readyChannels, expectedChannels, issues: expectedChannels.filter((channel) => !readyChannels.includes(channel)).map((channel) => ({ channel, code: "DRAFT_NOT_READY", message: `${channel.charAt(0)}${channel.slice(1).toLowerCase()} draft needs attention` })) };
   return {
     ...formatAdminProspect(row, row.client),
     preparationState: row.previewItems.length > 0 ? "SELECTED" : eligiblePreviewItems.length > 0 ? "READY_UNSELECTED" : "NOT_STARTED",
-    sourcePreparationState: row.client.dataItems.some((item) => item.type === "PROPERTY" && typeof item.dataJson?.listingUrl === "string") && row.client.drafts.filter((draft) => draft.warnings?.some((warning) => warning.startsWith("prospectProperty:"))).length >= 3 ? "IMPORTED" : "NOT_IMPORTED",
+    sourcePreparationState: row.client.dataItems.some((item) => item.type === "PROPERTY" && typeof item.dataJson?.listingUrl === "string") && readyChannels.length === expectedChannels.length ? "IMPORTED" : "NOT_IMPORTED",
     eligiblePreviewItems,
     selectedPreviewItems: row.previewItems.map((item) => ({ id: item.dataItemId || item.draftId, itemType: item.itemType, sortOrder: item.sortOrder })),
     campaignReadiness,
     preparationRun,
+    selectedChannels,
   };
 }
 
@@ -155,6 +166,8 @@ export async function updatePreviewSelection(id, items, adminSub) {
     ]);
     if (dataItemCount !== dataItemIds.length || selectedDrafts.length !== draftIds.length) throw Object.assign(new Error("Every selected record must be an eligible member of this prospect workspace"), { status: 422, code: "INVALID_PREVIEW_SELECTION" });
     if (new Set(selectedDrafts.map((draft) => draft.channel)).size !== selectedDrafts.length) throw Object.assign(new Error("Select at most one current draft for each platform"), { status: 422, code: "DUPLICATE_PREVIEW_PLATFORM" });
+    const selectedChannels = normalizeProspectChannels(prospect.selectedChannels);
+    if (selectedDrafts.some((draft) => !selectedChannels.includes(draft.channel))) throw Object.assign(new Error("Preview drafts must use a selected preparation channel"), { status: 422, code: "UNSELECTED_PREVIEW_CHANNEL" });
     const property = await tx.workspaceDataItem.findFirst({ where: { clientId: prospect.clientId, type: "PROPERTY", status: "ACTIVE" }, select: { dataJson: true } });
     const propertyMediaAvailable = Boolean(property?.dataJson?.imageUrl || property?.dataJson?.images?.length);
     if (propertyMediaAvailable && selectedDrafts.some((draft) => draft._count.draftAssets === 0 && !draft.mediaUrl)) throw Object.assign(new Error("Attach listing media before selecting this property draft"), { status: 422, code: "PREVIEW_DRAFT_MEDIA_REQUIRED" });
@@ -490,7 +503,9 @@ async function cachePropertyImages(clientId, item, actor) {
   return { item: await prisma.workspaceDataItem.update({ where: { id: item.id }, data: { dataJson } }), assets: classified };
 }
 
-const INITIAL_PLATFORM_STATES = Object.freeze(Object.fromEntries(["INSTAGRAM", "FACEBOOK", "LINKEDIN"].map((channel) => [channel, { status: "NOT_STARTED", attemptCount: 0, provenance: null, rejectionCategory: null, updatedAt: null }])));
+function initialPlatformStates(channels) {
+  return Object.fromEntries(normalizeProspectChannels(channels).map((channel) => [channel, { status: "NOT_STARTED", attemptCount: 0, provenance: null, rejectionCategory: null, updatedAt: null }]));
+}
 
 async function updatePreparationRun(runId, data) {
   return prisma.prospectPreparationRun.update({ where: { id: runId }, data: { ...data, heartbeatAt: new Date() } });
@@ -498,19 +513,25 @@ async function updatePreparationRun(runId, data) {
 
 async function updatePlatformRun(runId, channel, patch) {
   const run = await prisma.prospectPreparationRun.findUnique({ where: { id: runId }, select: { platformStates: true } });
-  const current = run?.platformStates || INITIAL_PLATFORM_STATES;
+  const current = run?.platformStates || initialPlatformStates([]);
   return updatePreparationRun(runId, { platformStates: { ...current, [channel]: { ...current[channel], ...patch, updatedAt: new Date().toISOString() } } });
 }
 
 export async function startProspectPreparation(id, input, adminSub) {
-  const prospect = await prisma.prospectWorkspace.findUnique({ where: { id }, include: { client: { select: { lifecycle: true, industryKey: true } } } });
+  let prospect = await prisma.prospectWorkspace.findUnique({ where: { id }, include: { client: { select: { lifecycle: true, industryKey: true } } } });
   if (!prospect || prospect.client.lifecycle !== "PROSPECT") throw Object.assign(new Error("Prospect workspace not found"), { status: 404, code: "NOT_FOUND" });
   if (prospect.client.industryKey !== "real_estate") throw importFailure("Automatic listing preparation is currently available for Real Estate prospects only");
+  const selectedChannels = normalizeProspectChannels(input.selectedChannels || prospect.selectedChannels);
+  if (input.selectedChannels) {
+    prospect = await prisma.prospectWorkspace.update({ where: { id }, data: { selectedChannels }, include: { client: { select: { lifecycle: true, industryKey: true } } } });
+    const removed = PROSPECT_CHANNELS.filter((channel) => !selectedChannels.includes(channel));
+    if (removed.length) await prisma.prospectPreviewItem.deleteMany({ where: { prospectWorkspaceId: id, draft: { channel: { in: removed } } } });
+  }
   const staleBefore = new Date(Date.now() - 15 * 60_000);
   await prisma.prospectPreparationRun.updateMany({ where: { prospectWorkspaceId: id, status: { in: ["QUEUED", "RUNNING"] }, heartbeatAt: { lt: staleBefore } }, data: { status: "FAILED", stage: "FAILED", failureCode: "STALE_RUN", failureMessage: "Preparation stopped reporting progress and can be retried.", completedAt: new Date() } });
   let run;
   try {
-    run = await prisma.prospectPreparationRun.create({ data: { prospectWorkspaceId: id, requestedBy: adminSub, sourceUrl: input.sourceUrl || null, platformStates: INITIAL_PLATFORM_STATES, heartbeatAt: new Date() } });
+    run = await prisma.prospectPreparationRun.create({ data: { prospectWorkspaceId: id, requestedBy: adminSub, sourceUrl: input.sourceUrl || null, platformStates: initialPlatformStates(selectedChannels), expectedCount: selectedChannels.length, heartbeatAt: new Date() } });
   } catch (error) {
     if (error?.code !== "P2002") throw error;
     run = await prisma.prospectPreparationRun.findFirst({ where: { prospectWorkspaceId: id, status: { in: ["QUEUED", "RUNNING"] } }, orderBy: { createdAt: "desc" } });
@@ -535,7 +556,7 @@ export async function failPreparationRun(runId, error) {
   const message = error?.status && error.status < 500 ? error.message : "Preparation could not be completed. Retry when ready.";
   const run = await prisma.prospectPreparationRun.findUnique({ where: { id: runId }, select: { platformStates: true } });
   const terminal = new Set(["AI_ACCEPTED", "FALLBACK_ACCEPTED"]);
-  const platformStates = Object.fromEntries(Object.entries(run?.platformStates || INITIAL_PLATFORM_STATES).map(([channel, state]) => [channel, terminal.has(state.status) ? state : { ...state, status: "FAILED", rejectionCategory: error?.code || "PREPARATION_FAILED", updatedAt: new Date().toISOString() }]));
+  const platformStates = Object.fromEntries(Object.entries(run?.platformStates || {}).map(([channel, state]) => [channel, terminal.has(state.status) ? state : { ...state, status: "FAILED", rejectionCategory: error?.code || "PREPARATION_FAILED", updatedAt: new Date().toISOString() }]));
   return prisma.prospectPreparationRun.updateMany({ where: { id: runId, status: { in: ["QUEUED", "RUNNING"] } }, data: { status: "FAILED", stage: "FAILED", platformStates, failureCode: error?.code || "PREPARATION_FAILED", failureMessage: message, completedAt: new Date(), heartbeatAt: new Date() } });
 }
 
@@ -568,20 +589,22 @@ export async function executeProspectPreparation(runId) {
   try { ({ item, assets: propertyAssets } = await cachePropertyImages(prospect.clientId, item, adminSub)); } catch { propertyAssets = []; }
 
   const existing = await prisma.draft.findMany({ where: { clientId: prospect.clientId, status: "DRAFT", warnings: { has: `prospectProperty:${item.id}` } }, orderBy: { createdAt: "desc" } });
+  const selectedChannels = normalizeProspectChannels(prospect.selectedChannels);
   const drafts = [];
   for (const draft of existing) {
+    if (!selectedChannels.includes(draft.channel)) continue;
     if (drafts.some((candidate) => candidate.channel === draft.channel)) continue;
     const composition = validateProspectComposition(draft.body);
     const validation = composition.valid ? validateGeneratedPropertyBody(draft.body, item) : composition;
     if (validation.valid) drafts.push(draft);
     else await prisma.draft.update({ where: { id: draft.id }, data: { status: "FAILED", warnings: { push: `PROSPECT_PROPERTY_FACT_GUARD:${validation.reason}` } } });
   }
-  for (const channel of ["INSTAGRAM", "FACEBOOK", "LINKEDIN"]) {
+  for (const channel of selectedChannels) {
     const reusable = drafts.find((draft) => draft.channel === channel);
     if (reusable) {
       const fallback = reusable.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK");
       await updatePlatformRun(runId, channel, { status: fallback ? "FALLBACK_ACCEPTED" : "AI_ACCEPTED", attemptCount: fallback ? 3 : 0, provenance: fallback ? "FALLBACK" : "AI", rejectionCategory: fallback ? "PRIOR_ATTEMPTS_EXHAUSTED" : null });
-      await updatePreparationRun(runId, { readyCount: drafts.filter((draft) => ["INSTAGRAM", "FACEBOOK", "LINKEDIN"].indexOf(draft.channel) <= ["INSTAGRAM", "FACEBOOK", "LINKEDIN"].indexOf(channel)).length });
+      await updatePreparationRun(runId, { readyCount: drafts.filter((draft) => selectedChannels.includes(draft.channel)).length });
       continue;
     }
     await updatePreparationRun(runId, { stage: "GENERATING" });
@@ -672,21 +695,18 @@ export async function revokePreview(id) {
   return prisma.prospectWorkspace.update({ where: { id }, data: { previewStatus: "REVOKED" } });
 }
 
-export async function getPublicPreview(previewToken) {
-  if (typeof previewToken !== "string" || previewToken.length < 40 || previewToken.length > 100) return null;
-  const row = await prisma.prospectWorkspace.findUnique({
-    where: { previewTokenHash: digestSecret(previewToken) },
+const previewInclude = {
+  client: { include: { brandProfile: true, _count: { select: { dataItems: true, drafts: true } } } },
+  previewItems: {
+    orderBy: { sortOrder: "asc" },
     include: {
-      client: { include: { brandProfile: true, _count: { select: { dataItems: true, drafts: true } } } },
-      previewItems: {
-        orderBy: { sortOrder: "asc" },
-        include: {
-          dataItem: true,
-          draft: { include: { draftAssets: { take: 10, orderBy: { orderIndex: "asc" }, include: { asset: true } } } },
-        },
-      },
+      dataItem: true,
+      draft: { include: { draftAssets: { take: 10, orderBy: { orderIndex: "asc" }, include: { asset: true } } } },
     },
-  });
+  },
+};
+
+function formatSafePreview(row) {
   if (!row || row.previewStatus !== "ACTIVE" || row.client.lifecycle !== "PROSPECT") return null;
   const claimAvailable = row.claimStatus === "CLAIMABLE" && row.claimExpiresAt > new Date();
   const items = row.previewItems.filter((selection) => selection.itemType === "DATA_ITEM" && selection.dataItem?.status === "ACTIVE").map(({ dataItem: item }) => ({
@@ -706,6 +726,7 @@ export async function getPublicPreview(previewToken) {
   for (const selection of row.previewItems) {
     const draft = selection.draft;
     if (selection.itemType !== "DRAFT" || !["DRAFT", "PENDING_REVIEW", "APPROVED"].includes(draft?.status)) continue;
+    if (!normalizeProspectChannels(row.selectedChannels).includes(draft.channel)) continue;
     const propertyDraft = draft.warnings?.some((warning) => warning.startsWith("prospectProperty:"));
     if (propertyDraft && items.some((item) => item.imageUrl) && !draft.draftAssets?.length) continue;
     const current = selectedByPlatform.get(draft.channel);
@@ -726,6 +747,22 @@ export async function getPublicPreview(previewToken) {
   };
 }
 
+export async function getPublicPreview(previewToken) {
+  if (typeof previewToken !== "string" || previewToken.length < 40 || previewToken.length > 100) return null;
+  const row = await prisma.prospectWorkspace.findUnique({ where: { previewTokenHash: digestSecret(previewToken) }, include: previewInclude });
+  return formatSafePreview(row);
+}
+
+export async function getInvitationPreview(prospectId, verifiedEmail) {
+  const email = normalizeIdentityEmail(verifiedEmail);
+  if (!email || !prospectId) return null;
+  const row = await prisma.prospectWorkspace.findFirst({
+    where: { id: prospectId, prospectEmail: { equals: email, mode: "insensitive" }, claimStatus: "CLAIMABLE", claimExpiresAt: { gt: new Date() }, client: { lifecycle: "PROSPECT" } },
+    include: previewInclude,
+  });
+  return formatSafePreview(row);
+}
+
 export async function inspectClaim(claimToken) {
   if (typeof claimToken !== "string" || claimToken.length < 40 || claimToken.length > 100) return { valid: false };
   const row = await prisma.prospectWorkspace.findUnique({ where: { claimTokenHash: digestSecret(claimToken) }, include: { client: { select: { name: true, lifecycle: true } } } });
@@ -733,11 +770,24 @@ export async function inspectClaim(claimToken) {
   return { valid: true, businessName: row.client.name, prospectName: row.prospectName, expiresAt: row.claimExpiresAt };
 }
 
-export async function claimWorkspace({ claimToken, user, auth0Sub, verifiedEmail }) {
+export async function discoverPendingClaims(verifiedEmail) {
+  const email = normalizeIdentityEmail(verifiedEmail);
+  if (!email) return [];
+  const rows = await prisma.prospectWorkspace.findMany({
+    where: { prospectEmail: { equals: email, mode: "insensitive" }, claimStatus: "CLAIMABLE", claimExpiresAt: { gt: new Date() }, client: { lifecycle: "PROSPECT" } },
+    include: { client: { select: { id: true, name: true, industryKey: true, _count: { select: { drafts: true, dataItems: true } } } } },
+    orderBy: { createdAt: "desc" },
+  });
+  return rows.map((row) => ({ id: row.id, clientId: row.clientId, businessName: row.client.name, industryKey: row.client.industryKey, sourceType: "PREPARED_WORKSPACE", prospectId: row.id, preparedPostCount: row.client._count.drafts, preparedPropertyCount: row.client._count.dataItems, selectedChannels: normalizeProspectChannels(row.selectedChannels), createdAt: row.createdAt, expiresAt: row.claimExpiresAt, previewPath: `/invitations/${row.id}/preview` }));
+}
+
+export async function claimWorkspace({ claimToken, prospectId, user, auth0Sub, verifiedEmail }) {
   if (!verifiedEmail || !user?.id || !auth0Sub) throw Object.assign(new Error("A verified email is required to claim this workspace"), { status: 403, code: "VERIFIED_EMAIL_REQUIRED" });
-  const tokenHash = digestSecret(claimToken || "");
+  if (!claimToken && !prospectId) throw Object.assign(new Error("A claim reference is required"), { status: 400, code: "CLAIM_REFERENCE_REQUIRED" });
+  const tokenHash = claimToken ? digestSecret(claimToken) : null;
   const outcome = await prisma.$transaction(async (tx) => {
-    const row = await tx.prospectWorkspace.findUnique({ where: { claimTokenHash: tokenHash }, include: { client: true } });
+    const row = await tx.prospectWorkspace.findUnique({ where: tokenHash ? { claimTokenHash: tokenHash } : { id: prospectId }, include: { client: true } });
+    if (row?.claimStatus === "CLAIMED" && row.claimedByUserId === user.id && row.claimedByAuth0Sub === auth0Sub) return { clientId: row.clientId, businessName: row.client.name, idempotent: true };
     if (!row || row.claimStatus !== "CLAIMABLE" || row.client.lifecycle !== "PROSPECT") throw Object.assign(new Error("This claim link is invalid or no longer available"), { status: 409, code: "CLAIM_UNAVAILABLE" });
     if (row.claimExpiresAt <= new Date()) {
       await tx.prospectWorkspace.updateMany({ where: { id: row.id, claimStatus: "CLAIMABLE" }, data: { claimStatus: "EXPIRED", claimTokenHash: null } });
@@ -746,11 +796,12 @@ export async function claimWorkspace({ claimToken, user, auth0Sub, verifiedEmail
     if (verifiedEmail.toLowerCase() !== row.prospectEmail.toLowerCase()) throw Object.assign(new Error("Sign in with the invited email address to claim this workspace"), { status: 403, code: "CLAIM_EMAIL_MISMATCH" });
     const claimedAt = new Date();
     const updated = await tx.prospectWorkspace.updateMany({
-      where: { id: row.id, claimTokenHash: tokenHash, claimStatus: "CLAIMABLE", claimExpiresAt: { gt: claimedAt } },
+      where: { id: row.id, ...(tokenHash ? { claimTokenHash: tokenHash } : {}), claimStatus: "CLAIMABLE", claimExpiresAt: { gt: claimedAt } },
       data: { claimStatus: "CLAIMED", claimTokenHash: null, claimedAt, claimedByUserId: user.id, claimedByAuth0Sub: auth0Sub },
     });
     if (updated.count !== 1) throw Object.assign(new Error("This workspace was already claimed"), { status: 409, code: "CLAIM_RACE_LOST" });
     await tx.client.update({ where: { id: row.clientId }, data: { lifecycle: "CUSTOMER", status: "ACTIVE", createdBy: auth0Sub } });
+    await tx.contentPreferences.upsert({ where: { clientId: row.clientId }, create: { clientId: row.clientId, preferredChannels: normalizeProspectChannels(row.selectedChannels) }, update: { preferredChannels: normalizeProspectChannels(row.selectedChannels) } });
     return { clientId: row.clientId, businessName: row.client.name };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   if (outcome.claimError === "CLAIM_EXPIRED") throw Object.assign(new Error("This claim link has expired"), { status: 410, code: "CLAIM_EXPIRED" });
@@ -764,6 +815,7 @@ export function formatAdminProspect(row, client) {
     sourceUrl: row.sourceUrl, acquisitionSource: row.acquisitionSource, operatorNote: row.operatorNote,
     previewStatus: row.previewStatus, claimStatus: row.claimStatus, claimIssuedAt: row.claimIssuedAt,
     claimExpiresAt: row.claimExpiresAt, claimedAt: row.claimedAt, claimedByUserId: row.claimedByUserId,
+    selectedChannels: normalizeProspectChannels(row.selectedChannels),
     createdAt: row.createdAt,
   };
 }

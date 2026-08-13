@@ -9,6 +9,7 @@ import { prisma } from "../../prisma.js";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
 import { writeAudit } from "../../lib/auditLog.js";
+import { requireAuthoritativeVerifiedEmail } from "../../lib/auth0Identity.js";
 import { assertClientAllowsExternalSideEffects, assertWorkspaceAllowsExternalSideEffects } from "../../lib/workspaceLifecyclePolicy.js";
 import { sniffImageMime, sniffVideoMime } from "../../lib/mimeDetect.js";
 import {
@@ -292,6 +293,8 @@ studioRouter.get(`${BASE}/workspaces`, async (req, res, next) => {
 
 studioRouter.post(`${BASE}/workspaces`, async (req, res, next) => {
   try {
+    const existingWorkspaceCount = await prisma.client.count({ where: { createdBy: getAuth0Sub(req), status: { not: "ARCHIVED" } } });
+    if (existingWorkspaceCount === 0) await requireAuthoritativeVerifiedEmail(req);
     const parsed = CreateClientSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
 

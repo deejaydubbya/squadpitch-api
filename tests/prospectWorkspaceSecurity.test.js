@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const prismaMock = {
-  prospectWorkspace: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+  prospectWorkspace: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   client: { update: vi.fn() },
+  contentPreferences: { upsert: vi.fn() },
   $transaction: vi.fn(),
 };
 
@@ -64,23 +65,60 @@ describe("prospect workspace security", () => {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       client: { update: vi.fn().mockResolvedValue({ id: "c1" }) },
+      contentPreferences: { upsert: vi.fn() },
     };
     prismaMock.$transaction.mockImplementation((callback) => callback(tx));
     const result = await service.claimWorkspace({ claimToken: service.generateSecret(), user: { id: "u1", email: "stale@example.com" }, auth0Sub: "auth0|jane", verifiedEmail: "JANE@example.com" });
     expect(result.clientId).toBe("c1");
     expect(tx.prospectWorkspace.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ claimStatus: "CLAIMED", claimTokenHash: null }) }));
     expect(tx.client.update).toHaveBeenCalledWith({ where: { id: "c1" }, data: { lifecycle: "CUSTOMER", status: "ACTIVE", createdBy: "auth0|jane" } });
+    expect(tx.contentPreferences.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { preferredChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] } }));
+  });
+
+  it("discovers every active matching claim by normalized verified email", async () => {
+    prismaMock.prospectWorkspace.findMany.mockResolvedValue([
+      { id: "p1", clientId: "c1", selectedChannels: ["INSTAGRAM", "FACEBOOK"], claimExpiresAt: new Date(Date.now() + 60_000), client: { id: "c1", name: "Ready One", industryKey: "real_estate", _count: { drafts: 2, dataItems: 1 } } },
+      { id: "p2", clientId: "c2", selectedChannels: ["INSTAGRAM"], claimExpiresAt: new Date(Date.now() + 60_000), client: { id: "c2", name: "Ready Two", industryKey: "real_estate", _count: { drafts: 1, dataItems: 1 } } },
+    ]);
+    const claims = await service.discoverPendingClaims(" User@Example.COM ");
+    expect(claims.map(({ businessName }) => businessName)).toEqual(["Ready One", "Ready Two"]);
+    expect(prismaMock.prospectWorkspace.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ prospectEmail: { equals: "user@example.com", mode: "insensitive" }, claimStatus: "CLAIMABLE" }) }));
+    expect(prismaMock.prospectWorkspace.findMany).toHaveBeenCalledWith(expect.objectContaining({ orderBy: { createdAt: "desc" } }));
+    expect(claims[0]).toMatchObject({ sourceType: "PREPARED_WORKSPACE", previewPath: "/invitations/p1/preview" });
+  });
+
+  it("authorizes invitation preview by matching verified email without exposing a token", async () => {
+    prismaMock.prospectWorkspace.findFirst.mockResolvedValue({
+      previewStatus: "ACTIVE", claimStatus: "CLAIMABLE", claimExpiresAt: new Date(Date.now() + 60_000), selectedChannels: ["INSTAGRAM"], prospectName: "Jane",
+      client: { lifecycle: "PROSPECT", name: "Jane Realty", industryKey: "real_estate", logoUrl: null, brandProfile: null, _count: { drafts: 1, dataItems: 0 } }, previewItems: [],
+    });
+    const preview = await service.getInvitationPreview("p1", " Jane@Example.com ");
+    expect(preview).toMatchObject({ businessName: "Jane Realty", claimAvailable: true });
+    expect(prismaMock.prospectWorkspace.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: "p1", prospectEmail: { equals: "jane@example.com", mode: "insensitive" }, claimStatus: "CLAIMABLE" }) }));
+    expect(JSON.stringify(preview)).not.toContain("Token");
+  });
+
+  it("does not return another recipient's invitation preview", async () => {
+    prismaMock.prospectWorkspace.findFirst.mockResolvedValue(null);
+    await expect(service.getInvitationPreview("p1", "other@example.com")).resolves.toBeNull();
+  });
+
+  it("makes a repeated discovered claim idempotent for the same authenticated identity", async () => {
+    const tx = { prospectWorkspace: { findUnique: vi.fn().mockResolvedValue({ id: "p1", clientId: "c1", claimStatus: "CLAIMED", claimedByUserId: "u1", claimedByAuth0Sub: "auth0|jane", client: { name: "Jane Realty", lifecycle: "CUSTOMER" } }) }, client: { update: vi.fn() }, contentPreferences: { upsert: vi.fn() } };
+    prismaMock.$transaction.mockImplementation((callback) => callback(tx));
+    await expect(service.claimWorkspace({ prospectId: "p1", user: { id: "u1" }, auth0Sub: "auth0|jane", verifiedEmail: "jane@example.com" })).resolves.toMatchObject({ clientId: "c1", idempotent: true });
+    expect(tx.client.update).not.toHaveBeenCalled();
   });
 
   it("fails safely when a concurrent claimant wins", async () => {
-    const tx = { prospectWorkspace: { findUnique: vi.fn().mockResolvedValue({ id: "p1", clientId: "c1", prospectEmail: "jane@example.com", claimStatus: "CLAIMABLE", claimExpiresAt: new Date(Date.now() + 60_000), client: { lifecycle: "PROSPECT", name: "Jane Realty" } }), updateMany: vi.fn().mockResolvedValue({ count: 0 }) }, client: { update: vi.fn() } };
+    const tx = { prospectWorkspace: { findUnique: vi.fn().mockResolvedValue({ id: "p1", clientId: "c1", prospectEmail: "jane@example.com", claimStatus: "CLAIMABLE", claimExpiresAt: new Date(Date.now() + 60_000), client: { lifecycle: "PROSPECT", name: "Jane Realty" } }), updateMany: vi.fn().mockResolvedValue({ count: 0 }) }, client: { update: vi.fn() }, contentPreferences: { upsert: vi.fn() } };
     prismaMock.$transaction.mockImplementation((callback) => callback(tx));
     await expect(service.claimWorkspace({ claimToken: service.generateSecret(), user: { id: "u1", email: "stale@example.com" }, auth0Sub: "auth0|jane", verifiedEmail: "jane@example.com" })).rejects.toMatchObject({ code: "CLAIM_RACE_LOST" });
     expect(tx.client.update).not.toHaveBeenCalled();
   });
 
   it("commits the EXPIRED state before returning an expiry error", async () => {
-    const tx = { prospectWorkspace: { findUnique: vi.fn().mockResolvedValue({ id: "p1", clientId: "c1", prospectEmail: "jane@example.com", claimStatus: "CLAIMABLE", claimExpiresAt: new Date(Date.now() - 60_000), client: { lifecycle: "PROSPECT", name: "Jane Realty" } }), updateMany: vi.fn().mockResolvedValue({ count: 1 }) }, client: { update: vi.fn() } };
+    const tx = { prospectWorkspace: { findUnique: vi.fn().mockResolvedValue({ id: "p1", clientId: "c1", prospectEmail: "jane@example.com", claimStatus: "CLAIMABLE", claimExpiresAt: new Date(Date.now() - 60_000), client: { lifecycle: "PROSPECT", name: "Jane Realty" } }), updateMany: vi.fn().mockResolvedValue({ count: 1 }) }, client: { update: vi.fn() }, contentPreferences: { upsert: vi.fn() } };
     prismaMock.$transaction.mockImplementation((callback) => callback(tx));
     await expect(service.claimWorkspace({ claimToken: service.generateSecret(), user: { id: "u1" }, auth0Sub: "auth0|jane", verifiedEmail: "jane@example.com" })).rejects.toMatchObject({ code: "CLAIM_EXPIRED" });
     expect(tx.prospectWorkspace.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { claimStatus: "EXPIRED", claimTokenHash: null } }));
