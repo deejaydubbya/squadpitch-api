@@ -71,10 +71,32 @@ export function getEffectiveTier(sub, internalEntitlement = null) {
   return sub.tier;
 }
 
+export function getHighestInternalEntitlement(entitlements = []) {
+  return entitlements
+    .filter((entitlement) => entitlement?.active === true && PAID_TIERS.includes(entitlement.tier))
+    .sort((left, right) => getTierRank(right.tier) - getTierRank(left.tier))[0] ?? null;
+}
+
+async function getAccountInternalEntitlement(userId) {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { auth0Sub: true } });
+  if (!user) return null;
+  const entitlements = await prisma.internalEntitlement.findMany({
+    where: { active: true, client: { createdBy: user.auth0Sub, status: { not: "ARCHIVED" } } },
+    select: { tier: true, active: true, grantedAt: true },
+  });
+  return getHighestInternalEntitlement(entitlements);
+}
+
 export async function getEffectiveEntitlement(userId, clientId) {
   const sub = await prisma.subscription.findUnique({ where: { userId } });
   if (!clientId) {
-    return { tier: getEffectiveTier(sub), source: sub ? "STRIPE" : "FREE", subscription: sub };
+    const internal = await getAccountInternalEntitlement(userId);
+    return {
+      tier: getEffectiveTier(sub, internal),
+      source: internal ? "INTERNAL" : sub ? "STRIPE" : "FREE",
+      subscription: sub,
+      internalEntitlement: internal ? { tier: internal.tier, status: "COMPED", grantedAt: internal.grantedAt } : null,
+    };
   }
 
   const user = await prisma.user.findUnique({
@@ -417,13 +439,9 @@ export async function getUsage(userId, clientId = null) {
     where: { userId_periodStart: { userId, periodStart } },
   });
 
-  const entitlement = clientId
-    ? await getEffectiveEntitlement(userId, clientId)
-    : null;
-  const sub = entitlement
-    ? entitlement.subscription
-    : await prisma.subscription.findUnique({ where: { userId } });
-  const tier = entitlement?.tier ?? getEffectiveTier(sub);
+  const entitlement = await getEffectiveEntitlement(userId, clientId);
+  const sub = entitlement.subscription;
+  const tier = entitlement.tier;
   const limits = getLimitsForTier(tier);
 
   // Compute storage across all user's workspaces
@@ -563,8 +581,7 @@ export async function checkUsageNearing(userId, field) {
  * Uses the Prisma user ID (Subscription.userId), NOT the Auth0 sub.
  */
 export async function checkClientLimit(userId) {
-  const sub = await prisma.subscription.findUnique({ where: { userId } });
-  const tier = getEffectiveTier(sub);
+  const { tier } = await getEffectiveEntitlement(userId);
   const limit = getLimitsForTier(tier).workspaces;
   if (limit === Infinity) return true;
   // Client.createdBy stores auth0Sub, so look up the user's sub

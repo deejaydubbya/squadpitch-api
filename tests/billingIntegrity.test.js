@@ -164,6 +164,9 @@ const prismaMock = {
   client: {
     count: vi.fn(async () => 0),
   },
+  internalEntitlement: {
+    findMany: vi.fn(async () => []),
+  },
   mediaAsset: {
     aggregate: vi.fn(async () => ({ _sum: { bytes: 0 } })),
   },
