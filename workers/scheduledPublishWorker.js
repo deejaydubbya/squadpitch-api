@@ -125,7 +125,7 @@ async function processTick() {
     where: {
       status: "SCHEDULED",
       scheduledFor: { lte: now },
-      client: { status: "ACTIVE" },
+      client: { status: "ACTIVE", lifecycle: "CUSTOMER" },
     },
     select: {
       id: true,
@@ -152,7 +152,7 @@ async function processTick() {
     where: {
       status: "SCHEDULED",
       scheduledFor: { lte: now },
-      client: { status: "ACTIVE" },
+      client: { status: "ACTIVE", lifecycle: "CUSTOMER" },
     },
   });
 

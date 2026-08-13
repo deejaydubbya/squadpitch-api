@@ -32,6 +32,7 @@ import { prisma } from "../../prisma.js";
 import { env } from "../../config/env.js";
 import { sendSms } from "../notifications/providers/twilioSmsProvider.js";
 import { checkRateLimit } from "../sites/rateLimit.js";
+import { assertClientAllowsExternalSideEffects } from "../../lib/workspaceLifecyclePolicy.js";
 import {
   assertSmsAvailable,
   recordBlockedSmsAttempt,
@@ -76,6 +77,7 @@ export async function sendInboxSms(
   userId,
   { body, idempotencyKey } = {},
 ) {
+  await assertClientAllowsExternalSideEffects(clientId, "SMS sending");
   recordBlockedSmsAttempt("outbound");
   assertSmsAvailable();
   // Pre-flight gates — the resolver should have prevented this

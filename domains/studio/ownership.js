@@ -13,7 +13,7 @@ export async function requireClientOwner(req, res, next) {
     const clientId = req.params.id || req.params.clientId;
     const client = await prisma.client.findUnique({
       where: { id: clientId },
-      select: { createdBy: true, status: true },
+      select: { createdBy: true, status: true, lifecycle: true },
     });
     if (!client) return sendError(res, 404, "NOT_FOUND", "Client not found");
     if (client.createdBy !== getAuth0Sub(req)) {
@@ -31,6 +31,7 @@ export async function requireClientOwner(req, res, next) {
         "This workspace is archived.",
       );
     }
+    req.workspace = client;
     next();
   } catch (err) {
     next(err);
@@ -49,7 +50,7 @@ export async function requireDraftOwner(req, res, next) {
       select: {
         id: true,
         clientId: true,
-        client: { select: { createdBy: true } },
+        client: { select: { createdBy: true, lifecycle: true } },
       },
     });
     if (!draft) return sendError(res, 404, "NOT_FOUND", "Draft not found");
@@ -61,6 +62,7 @@ export async function requireDraftOwner(req, res, next) {
       return sendError(res, 404, "NOT_FOUND", "Draft not found");
     }
     req.draft = { id: draft.id, clientId: draft.clientId };
+    req.workspace = draft.client;
     next();
   } catch (err) {
     next(err);

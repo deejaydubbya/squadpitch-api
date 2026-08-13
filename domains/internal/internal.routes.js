@@ -32,6 +32,8 @@ import {
   ToggleFeatureFlagSchema,
   ToggleWebhookEndpointSchema,
 } from "./internal.schemas.js";
+import { CreateProspectSchema, PopulateProspectSchema, PrepareProspectSchema, ProspectListQuerySchema, UpdateProspectPreviewSchema } from "../prospects/prospect.schemas.js";
+import * as prospectService from "../prospects/prospect.service.js";
 
 export const internalRouter = Router();
 
@@ -48,6 +50,95 @@ internalRouter.get(`${BASE}/health`, (_req, res) => {
 
 internalRouter.get(`${BASE}/me`, (req, res) => {
   res.json(service.getUserWithRoles(req.user, req.roles));
+});
+
+internalRouter.get(`${BASE}/prospects`, requireAdminRole, async (req, res, next) => {
+  try {
+    const parsed = ProspectListQuerySchema.safeParse(req.query);
+    if (!parsed.success) return validationError(res, parsed.error);
+    res.json({ items: await prospectService.listProspects(parsed.data) });
+  } catch (err) { next(err); }
+});
+
+internalRouter.post(`${BASE}/prospects`, requireAdminRole, async (req, res, next) => {
+  try {
+    if (process.env.PROSPECT_WORKSPACES_ENABLED === "false") return sendError(res, 503, "PROSPECTS_DISABLED", "Prospect workspace creation is temporarily unavailable");
+    const parsed = CreateProspectSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const result = await prospectService.createProspect(parsed.data, req.auth0Sub);
+    await writeAudit(req, { action: "prospect.workspace.created", resourceType: "ProspectWorkspace", resourceId: result.id, metadata: { clientId: result.clientId, industryKey: result.industryKey } });
+    res.status(201).json(result);
+  } catch (err) { next(err); }
+});
+
+internalRouter.get(`${BASE}/prospects/:id`, requireAdminRole, async (req, res, next) => {
+  try {
+    const result = await prospectService.getProspect(req.params.id);
+    if (!result) return sendError(res, 404, "NOT_FOUND", "Prospect workspace not found");
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+internalRouter.post(`${BASE}/prospects/:id/populate`, requireAdminRole, async (req, res, next) => {
+  try {
+    const parsed = PopulateProspectSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const result = await prospectService.populateProspect(req.params.id, parsed.data, req.auth0Sub);
+    await writeAudit(req, { action: "prospect.workspace.populated", resourceType: "ProspectWorkspace", resourceId: req.params.id, metadata: { itemCreated: Boolean(result.itemId), draftCount: result.draftIds.length } });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+internalRouter.post(`${BASE}/prospects/:id/prepare`, requireAdminRole, async (req, res, next) => {
+  try {
+    const parsed = PrepareProspectSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return validationError(res, parsed.error);
+    const result = await prospectService.prepareProspect(req.params.id, parsed.data, req.auth0Sub);
+    await writeAudit(req, { action: "prospect.workspace.prepared", resourceType: "ProspectWorkspace", resourceId: req.params.id, metadata: { itemId: result.itemId, draftCount: result.draftIds.length, imageImported: result.imageImported } });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+internalRouter.put(`${BASE}/prospects/:id/preview-items`, requireAdminRole, async (req, res, next) => {
+  try {
+    const parsed = UpdateProspectPreviewSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error);
+    const result = await prospectService.updatePreviewSelection(req.params.id, parsed.data.items, req.auth0Sub);
+    await writeAudit(req, { action: "prospect.preview.selection_updated", resourceType: "ProspectWorkspace", resourceId: req.params.id, metadata: { itemCount: result.items.length } });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+internalRouter.post(`${BASE}/prospects/:id/claim-token`, requireAdminRole, async (req, res, next) => {
+  try {
+    const result = await prospectService.rotateClaim(req.params.id, Number(req.body?.ttlDays) || undefined);
+    await writeAudit(req, { action: "prospect.claim.rotated", resourceType: "ProspectWorkspace", resourceId: req.params.id });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+internalRouter.delete(`${BASE}/prospects/:id/claim-token`, requireAdminRole, async (req, res, next) => {
+  try {
+    await prospectService.revokeClaim(req.params.id);
+    await writeAudit(req, { action: "prospect.claim.revoked", resourceType: "ProspectWorkspace", resourceId: req.params.id });
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
+internalRouter.post(`${BASE}/prospects/:id/preview-token`, requireAdminRole, async (req, res, next) => {
+  try {
+    const result = await prospectService.rotatePreview(req.params.id);
+    await writeAudit(req, { action: "prospect.preview.rotated", resourceType: "ProspectWorkspace", resourceId: req.params.id });
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+internalRouter.delete(`${BASE}/prospects/:id/preview-token`, requireAdminRole, async (req, res, next) => {
+  try {
+    await prospectService.revokePreview(req.params.id);
+    await writeAudit(req, { action: "prospect.preview.revoked", resourceType: "ProspectWorkspace", resourceId: req.params.id });
+    res.status(204).end();
+  } catch (err) { next(err); }
 });
 
 // Read-only, synthetic hosted-AI verification. This route never publishes,

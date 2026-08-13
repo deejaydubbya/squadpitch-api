@@ -20,6 +20,7 @@
 import { prisma } from "../../prisma.js";
 import { env } from "../../config/env.js";
 import { checkRateLimit } from "../sites/rateLimit.js";
+import { assertClientAllowsExternalSideEffects } from "../../lib/workspaceLifecyclePolicy.js";
 
 // Lazy-load the postmark SDK so unit tests that mock prisma + this
 // module don't drag in the real network client.
@@ -528,6 +529,7 @@ async function sendInboxEmailInternal(
     allowUnverifiedDelivery,
   } = {},
 ) {
+  await assertClientAllowsExternalSideEffects(clientId, "email sending");
   if (!body || typeof body !== "string" || body.trim().length === 0) {
     const err = new Error("Body is required");
     err.status = 400;

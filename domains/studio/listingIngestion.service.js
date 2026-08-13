@@ -153,8 +153,13 @@ function normalizeListing(raw) {
     || null;
 
   const price = parseNumeric(raw.price);
-  const beds = parseNumeric(raw.beds);
-  const baths = parseNumeric(raw.baths);
+  // Listing pages often concatenate unrelated DOM text (for example an MLS
+  // number immediately before "beds"). Reject impossible counts instead of
+  // persisting them as verified property facts.
+  const parsedBeds = parseNumeric(raw.beds);
+  const parsedBaths = parseNumeric(raw.baths);
+  const beds = parsedBeds != null && parsedBeds >= 0 && parsedBeds <= 20 ? parsedBeds : null;
+  const baths = parsedBaths != null && parsedBaths >= 0 && parsedBaths <= 20 ? parsedBaths : null;
   const sqft = parseNumeric(raw.sqft);
   const lotSize = raw.lotSize ? String(raw.lotSize).trim() : null;
   const yearBuilt = parseNumeric(raw.yearBuilt);

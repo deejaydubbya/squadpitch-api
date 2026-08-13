@@ -27,6 +27,7 @@ import {
 } from "./domains/notifications/notification.routes.js";
 import { metaThreadsWebhookRouter } from "./domains/integrations/metaThreadsWebhook.routes.js";
 import { publicSitesRouter } from "./domains/sites/public.routes.js";
+import { prospectPublicRouter, prospectClaimRouter } from "./domains/prospects/prospect.routes.js";
 import { sitesDashboardRouter } from "./domains/sites/sites.dashboard.routes.js";
 import { inboxRouter } from "./domains/inbox/inbox.routes.js";
 import { postmarkCanaryRouter } from "./domains/inbox/postmarkCanary.routes.js";
@@ -237,6 +238,7 @@ app.use(metaThreadsWebhookRouter);
 // the resolve + form-submit routes don't get caught by
 // requireAuth.
 app.use(publicSitesRouter);
+app.use(prospectPublicRouter);
 
 // SquadInbox inbound webhook — Postmark calls this directly to
 // deliver parsed lead replies. Verified via shared-secret
@@ -258,6 +260,7 @@ app.use("/api", (req, res, next) => {
 
 // Studio domain
 app.use(studioRouter);
+app.use(prospectClaimRouter);
 app.use(accountLifecycleRouter);
 app.use(canaryRouter);
 

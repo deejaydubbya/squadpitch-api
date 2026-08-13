@@ -19,6 +19,7 @@ const mockDraft = {
   warnings: [],
   idempotencyKey: null,
   publishAttempts: 0,
+  client: { lifecycle: "CUSTOMER" },
 };
 
 const transitionDraftMock = vi.fn();

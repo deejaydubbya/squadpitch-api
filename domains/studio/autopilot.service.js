@@ -1743,7 +1743,7 @@ export async function evaluateAllAutopilotWorkspaces() {
   // ever toggled autopilot. The per-workspace gate still applies
   // as defense-in-depth via runScheduledAutopilot.
   const realEstateWorkspaceIds = await prisma.client.findMany({
-    where: { industryKey: "real_estate" },
+    where: { industryKey: "real_estate", lifecycle: "CUSTOMER", status: "ACTIVE" },
     select: { id: true },
   });
   const realEstateIdSet = new Set(realEstateWorkspaceIds.map((c) => c.id));

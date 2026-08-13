@@ -1,0 +1,56 @@
+import { describe, expect, it } from "vitest";
+import { buildPropertyMediaPlan, buildVerifiedPropertyFallback, isUsableProspectListing, listingPhotoKey, rankPropertyAssets } from "../domains/prospects/prospect.service.js";
+
+const item = { title: "10 Main St", dataJson: { street: "10 Main St", city: "Town", state: "OH", zip: "45000", price: 300000, bedrooms: 3, bathrooms: 2, sqft: 1800, yearBuilt: 1990 } };
+
+describe("prospect campaign quality", () => {
+  it("produces substantive and distinct safe fallbacks", () => {
+    const bodies = ["INSTAGRAM", "FACEBOOK", "LINKEDIN"].map((channel) => buildVerifiedPropertyFallback(item, channel, "Agent Realty"));
+    expect(new Set(bodies).size).toBe(3);
+    for (const body of bodies) {
+      expect(body.length).toBeGreaterThan(180);
+      expect(body).toContain("$300,000");
+      expect(body).toMatch(/listing|property/i);
+      expect(body).not.toMatch(/neighborhood|natural light|modern conveniences|perfect for families/i);
+    }
+  });
+
+  it("ranks clear main-house exteriors above obstructed views and outbuildings", () => {
+    const assets = [
+      { id: "shed", tags: ["prospect-scene:garage_outbuilding"], width: 1600, height: 1200 },
+      { id: "trees", tags: ["prospect-scene:main_front_exterior", "prospect-obstructed"], width: 1600, height: 1200 },
+      { id: "front", tags: ["prospect-scene:main_front_exterior", "prospect-clear-view"], width: 1600, height: 1200 },
+    ];
+    expect(rankPropertyAssets(assets).map(({ asset }) => asset.id)).toEqual(["front", "trees", "shed"]);
+  });
+
+  it("builds distinct platform heroes and duplicate-free coherent galleries", () => {
+    const make = (id, scene) => ({ id, tags: [`prospect-scene:${scene}`], width: 1600, height: 1200 });
+    const assets = [make("front-1", "main_front_exterior"), make("front-2", "main_front_exterior"), make("front-3", "alternate_exterior"), make("kitchen", "kitchen"), make("living", "living_interior"), make("yard", "yard_land"), make("shed", "garage_outbuilding")];
+    const plan = buildPropertyMediaPlan(assets);
+    expect(plan.featured.id).toBe("front-1");
+    expect([plan.INSTAGRAM[0].id, plan.FACEBOOK[0].id, plan.LINKEDIN[0].id]).toEqual(["front-1", "front-2", "front-3"]);
+    expect(plan.INSTAGRAM).toHaveLength(3);
+    expect(plan.FACEBOOK).toHaveLength(3);
+    expect(plan.LINKEDIN).toHaveLength(1);
+    expect(new Set(plan.INSTAGRAM.map(({ id }) => id)).size).toBe(plan.INSTAGRAM.length);
+    expect(new Set(plan.INSTAGRAM.map(({ id }) => id))).not.toEqual(new Set(plan.FACEBOOK.map(({ id }) => id)));
+  });
+
+  it("collapses Coldwell transformation variants to one source photo", () => {
+    expect(listingPhotoKey("https://images-listings.coldwellbanker.com/P00_800x600.jpg")).toBe("P00");
+    expect(listingPhotoKey("https://images-listings.coldwellbanker.com/P00_1600x1200.jpg")).toBe("P00");
+    expect(listingPhotoKey("https://images-listings.coldwellbanker.com/P01_800x600.jpg")).toBe("P01");
+  });
+
+  it("accepts a valid partial Coldwell extraction when its title supplies the complete address", () => {
+    const listing = { title: "6049 Big Run Road, Pleasant Twp, OH 45121 - MLS# 1888490 - Coldwell Banker", price: 151900, address: { street: null, city: null, state: null, zip: null }, images: ["https://images-listings.coldwellbanker.com/OH_CINCY/1888490_P00.jpg"] };
+    expect(isUsableProspectListing(listing, 0.56)).toBe(true);
+  });
+
+  it("continues to reject low-evidence or address-incomplete listing pages", () => {
+    expect(isUsableProspectListing({ title: "Homes for sale", price: 151900, images: ["https://images-listings.coldwellbanker.com/P00.jpg"] }, 0.56)).toBe(false);
+    expect(isUsableProspectListing({ title: "6049 Big Run Road, Pleasant Twp, OH 45121", images: ["https://images-listings.coldwellbanker.com/P00.jpg"] }, 0.56)).toBe(false);
+    expect(isUsableProspectListing({ title: "6049 Big Run Road, Pleasant Twp, OH 45121", price: 151900, images: [] }, 0.56)).toBe(false);
+  });
+});

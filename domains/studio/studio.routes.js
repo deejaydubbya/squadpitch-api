@@ -9,6 +9,7 @@ import { prisma } from "../../prisma.js";
 import { getAuth0Sub } from "../../middleware/auth.js";
 import { sendError, validationError } from "../../lib/apiErrors.js";
 import { writeAudit } from "../../lib/auditLog.js";
+import { assertClientAllowsExternalSideEffects, assertWorkspaceAllowsExternalSideEffects } from "../../lib/workspaceLifecyclePolicy.js";
 import { sniffImageMime, sniffVideoMime } from "../../lib/mimeDetect.js";
 import {
   computeAutoScheduleSlots,
@@ -3382,6 +3383,7 @@ studioRouter.post(
   requireDraftOwner,
   async (req, res, next) => {
     try {
+      assertWorkspaceAllowsExternalSideEffects(req.workspace, "social scheduling");
       const parsed = ScheduleDraftSchema.safeParse(req.body);
       if (!parsed.success) return validationError(res, parsed.error.issues);
 
@@ -3586,6 +3588,7 @@ studioRouter.post(
     // ReferenceError that masks the real provider error with a 500.
     let draftRecord = null;
     try {
+      assertWorkspaceAllowsExternalSideEffects(req.workspace, "social publishing");
       // Usage limit check
       const allowed = await checkUsageLimit(req.user.id, "posts");
       if (!allowed)
@@ -5238,6 +5241,7 @@ studioRouter.post(
   requireClientOwner,
   async (req, res, next) => {
     try {
+      assertWorkspaceAllowsExternalSideEffects(req.workspace, "social OAuth connection");
       const paramCheck = ChannelParamSchema.safeParse({
         channel: req.params.channel,
       });
@@ -5282,6 +5286,8 @@ studioRouter.post(`${BASE}/oauth/complete`, async (req, res, next) => {
         ownerCheck.code,
         ownerCheck.message,
       );
+
+    await assertClientAllowsExternalSideEffects(clientId, "social OAuth connection");
 
     const oauth = getOAuthForChannel(channel);
     const tokenBundle = await oauth.exchangeCode({ code, state });

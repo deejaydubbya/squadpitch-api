@@ -25,6 +25,7 @@ import {
   refreshConnectionToken,
 } from "../tokenRefreshService.js";
 import { withPublishTimeout } from "./publishTimeout.js";
+import { assertWorkspaceAllowsExternalSideEffects } from "../../../lib/workspaceLifecyclePolicy.js";
 
 // ── Adapter error classification ────────────────────────────────────────
 //
@@ -168,6 +169,7 @@ export async function publishDraft({ draftId, actorSub, source = "manual" }) {
       code: "DRAFT_NOT_FOUND",
     });
   }
+  assertWorkspaceAllowsExternalSideEffects(draft.client, "social publishing");
 
   // Idempotency: already published externally
   if (draft.status === "PUBLISHED" && draft.externalPostId) {

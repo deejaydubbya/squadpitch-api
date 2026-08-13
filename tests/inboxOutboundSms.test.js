@@ -59,6 +59,11 @@ function createPrismaMock({ contact = {}, conversation = {} } = {}) {
   };
   return {
     state: { messages, contact: contactRow, conversation: conversationRow },
+    client: {
+      findUnique: vi.fn(async ({ where }) =>
+        where.id === CLIENT_ID ? { id: CLIENT_ID, lifecycle: "CUSTOMER" } : null,
+      ),
+    },
     conversation: {
       findFirst: vi.fn(async ({ where }) => {
         if (where.id === CONV_ID && where.clientId === CLIENT_ID)
@@ -112,7 +117,16 @@ beforeEach(() => {
 });
 
 describe("sendInboxSms — suspended provider", () => {
-  it("always returns SMS_UNAVAILABLE before DB, billing, queue, or provider work", async () => {
+  it("rejects a PROSPECT lifecycle before the suspended-provider gate", async () => {
+    prismaMock.client.findUnique.mockResolvedValue({ id: CLIENT_ID, lifecycle: "PROSPECT" });
+    await expect(
+      sendInboxSms(CLIENT_ID, CONV_ID, USER_ID, { body: "hi" }),
+    ).rejects.toMatchObject({ code: "PROSPECT_SIDE_EFFECT_BLOCKED", status: 409 });
+    expect(prismaMock.conversation.findFirst).not.toHaveBeenCalled();
+    expect(twilioMock.sendSms).not.toHaveBeenCalled();
+  });
+
+  it("always returns SMS_UNAVAILABLE before conversation, billing, queue, or provider work", async () => {
     await expect(
       sendInboxSms(CLIENT_ID, CONV_ID, USER_ID, { body: "hi" }),
     ).rejects.toMatchObject({

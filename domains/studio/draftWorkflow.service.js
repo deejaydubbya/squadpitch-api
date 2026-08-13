@@ -5,6 +5,7 @@
 // sets publishedAt) — no external platform push.
 
 import { prisma } from "../../prisma.js";
+import { assertWorkspaceAllowsExternalSideEffects } from "../../lib/workspaceLifecyclePolicy.js";
 
 export const VALID_TRANSITIONS = {
   DRAFT: ["PENDING_REVIEW", "APPROVED", "REJECTED"],
@@ -92,6 +93,9 @@ export async function rejectDraft(draftId, reason, actorSub) {
 }
 
 export async function scheduleDraft(draftId, scheduledFor, actorSub) {
+  const lifecycle = await prisma.draft.findUnique({ where: { id: draftId }, select: { client: { select: { lifecycle: true } } } });
+  if (!lifecycle) throw Object.assign(new Error("Draft not found"), { status: 404, code: "DRAFT_NOT_FOUND" });
+  assertWorkspaceAllowsExternalSideEffects(lifecycle.client, "social scheduling");
   if (!scheduledFor) {
     throw Object.assign(
       new Error("A scheduled date/time is required"),

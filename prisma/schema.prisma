@@ -50,6 +50,28 @@ enum ClientStatus {
   ARCHIVED
 }
 
+enum WorkspaceLifecycle {
+  CUSTOMER
+  PROSPECT
+}
+
+enum ProspectClaimStatus {
+  CLAIMABLE
+  CLAIMED
+  REVOKED
+  EXPIRED
+}
+
+enum ProspectPreviewStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum ProspectPreviewItemType {
+  DATA_ITEM
+  DRAFT
+}
+
 // LINKEDIN                    = LinkedIn Personal Profile (existing flow,
 //                              unchanged). Uses the Sign In + Share
 //                              products on the original LinkedIn app.
@@ -236,26 +258,26 @@ model User {
 }
 
 model AccountLifecycleRequest {
-  id            String                        @id @default(cuid())
-  userId        String
-  auth0Sub      String
-  emailSnapshot String
-  type          AccountLifecycleRequestType
-  status        AccountLifecycleRequestStatus @default(PENDING)
-  requestedAt   DateTime                      @default(now())
-  verifiedAt    DateTime?
-  completedAt   DateTime?
-  operatorNotes String?                       @db.Text
-  graceEndsAt   DateTime?
-  exportExpiresAt DateTime?
-  tombstoneUntil DateTime?
-  cancelledAt   DateTime?
-  failureCode   String?
-  failureCount  Int                           @default(0)
-  lastAttemptAt DateTime?
+  id                String                        @id @default(cuid())
+  userId            String
+  auth0Sub          String
+  emailSnapshot     String
+  type              AccountLifecycleRequestType
+  status            AccountLifecycleRequestStatus @default(PENDING)
+  requestedAt       DateTime                      @default(now())
+  verifiedAt        DateTime?
+  completedAt       DateTime?
+  operatorNotes     String?                       @db.Text
+  graceEndsAt       DateTime?
+  exportExpiresAt   DateTime?
+  tombstoneUntil    DateTime?
+  cancelledAt       DateTime?
+  failureCode       String?
+  failureCount      Int                           @default(0)
+  lastAttemptAt     DateTime?
   workspaceSnapshot Json?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user          User                          @relation(fields: [userId], references: [id], onDelete: Restrict)
   providerTasks AccountDeletionProviderTask[]
 
   @@index([userId, type, status])
@@ -288,26 +310,27 @@ model AccountDeletionProviderTask {
 // ── Client ─────────────────────────────────────────────────────────────
 
 model Client {
-  id                   String       @id @default(cuid())
+  id                   String             @id @default(cuid())
   name                 String
-  slug                 String       @unique
-  status               ClientStatus @default(ACTIVE)
+  slug                 String             @unique
+  status               ClientStatus       @default(ACTIVE)
+  lifecycle            WorkspaceLifecycle @default(CUSTOMER)
   logoUrl              String?
   industryKey          String?
-  timezone             String       @default("UTC")
+  timezone             String             @default("UTC")
   // Workspace-wide default language for *generated content*
   // (campaign copy, social posts, captions, landing-page copy,
   // inbox AI replies). NOT the dashboard UI language — that
   // stays English in Phase 0. ISO 639-1 code, gated to the
   // allow-list in `lib/languages.js`. Existing rows default to
   // "en" via this column default.
-  defaultLanguage      String       @default("en")
+  defaultLanguage      String             @default("en")
   // Inbox contact retention window. Null/zero disables automatic retention;
   // positive values are enforced daily using a canonical UTC cutoff.
   contactRetentionDays Int?
   createdBy            String
-  createdAt            DateTime     @default(now())
-  updatedAt            DateTime     @updatedAt
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
   brandProfile                     BrandProfile?
   voiceProfile                     VoiceProfile?
@@ -342,9 +365,63 @@ model Client {
   aiActionProposals                AiActionProposal[]
   aiRunTraces                      AiRunTrace[]
   internalEntitlement              InternalEntitlement?
+  prospectWorkspace                ProspectWorkspace?
 
   @@index([status])
   @@map("clients")
+}
+
+model ProspectWorkspace {
+  id                String                @id @default(cuid())
+  clientId          String                @unique
+  prospectName      String
+  prospectEmail     String
+  websiteUrl        String?
+  sourceUrl         String?
+  acquisitionSource String?
+  operatorNote      String?               @db.Text
+  previewTokenHash  String                @unique
+  previewStatus     ProspectPreviewStatus @default(ACTIVE)
+  claimTokenHash    String?               @unique
+  claimStatus       ProspectClaimStatus   @default(CLAIMABLE)
+  claimIssuedAt     DateTime
+  claimExpiresAt    DateTime
+  claimedAt         DateTime?
+  claimedByUserId   String?
+  claimedByAuth0Sub String?
+  createdByAdminSub String
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  client       Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  previewItems ProspectPreviewItem[]
+
+  @@index([claimStatus, claimExpiresAt])
+  @@index([prospectEmail])
+  @@map("prospect_workspaces")
+}
+
+model ProspectPreviewItem {
+  id                  String                  @id @default(cuid())
+  prospectWorkspaceId String
+  itemType            ProspectPreviewItemType
+  dataItemId          String?
+  draftId             String?
+  sortOrder           Int
+  addedBy             String
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  prospectWorkspace ProspectWorkspace  @relation(fields: [prospectWorkspaceId], references: [id], onDelete: Cascade)
+  dataItem          WorkspaceDataItem? @relation(fields: [dataItemId], references: [id], onDelete: Cascade)
+  draft             Draft?             @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([prospectWorkspaceId, dataItemId])
+  @@unique([prospectWorkspaceId, draftId])
+  @@unique([prospectWorkspaceId, sortOrder])
+  @@index([dataItemId])
+  @@index([draftId])
+  @@map("prospect_preview_items")
 }
 
 // ── Profiles ───────────────────────────────────────────────────────────
@@ -1389,24 +1466,25 @@ model Draft {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  client           Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client               Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   // Draft.campaignId became a real FK in Phase 4 of the Campaign
   // model promotion. The historical `camp_<ts>_<rand>` strings and
   // the new cuid-based ids both live in this column — Campaign.id
   // is TEXT and accepts either. SetNull preserves publishing
   // history if a campaign is later archived/deleted.
-  campaign         Campaign?                @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  moderationLogs   ModerationLog[]
-  mediaAssets      MediaAsset[]
-  draftAssets      DraftAsset[]
-  metrics          PostMetrics?
-  metricSnapshots  PostMetricSnapshot[]
-  rawMetric        RawMetric[]
-  normalizedMetric NormalizedMetric?
-  postInsight      PostInsight?
-  contentSources   GeneratedContentSource[]
-  trackableLinks   TrackableLink[]
-  conversionEvents ConversionEvent[]
+  campaign             Campaign?                @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  moderationLogs       ModerationLog[]
+  mediaAssets          MediaAsset[]
+  draftAssets          DraftAsset[]
+  metrics              PostMetrics?
+  metricSnapshots      PostMetricSnapshot[]
+  rawMetric            RawMetric[]
+  normalizedMetric     NormalizedMetric?
+  postInsight          PostInsight?
+  contentSources       GeneratedContentSource[]
+  trackableLinks       TrackableLink[]
+  conversionEvents     ConversionEvent[]
+  prospectPreviewItems ProspectPreviewItem[]
 
   @@index([clientId, status])
   @@index([clientId, channel])
@@ -1418,24 +1496,24 @@ model Draft {
 // ── Channel Connection ─────────────────────────────────────────────────
 
 model ChannelConnection {
-  id                String           @id @default(cuid())
-  clientId          String
-  channel           Channel
-  externalAccountId String?
-  displayName       String?
-  accessToken       String           @db.Text
-  refreshToken      String?          @db.Text
-  tokenExpiresAt    DateTime?
+  id                    String           @id @default(cuid())
+  clientId              String
+  channel               Channel
+  externalAccountId     String?
+  displayName           String?
+  accessToken           String           @db.Text
+  refreshToken          String?          @db.Text
+  tokenExpiresAt        DateTime?
   refreshTokenExpiresAt DateTime?
-  scopes            String[]
-  status            ConnectionStatus @default(CONNECTED)
-  lastValidatedAt   DateTime?
-  lastError         String?          @db.Text
-  lastRefreshAt     DateTime?
-  refreshFailedAt   DateTime?
-  createdBy         String
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  scopes                String[]
+  status                ConnectionStatus @default(CONNECTED)
+  lastValidatedAt       DateTime?
+  lastError             String?          @db.Text
+  lastRefreshAt         DateTime?
+  refreshFailedAt       DateTime?
+  createdBy             String
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
@@ -1618,20 +1696,20 @@ model Subscription {
 // Explicit, operator-controlled access that is independent from Stripe.
 // One record per immutable workspace ID; revocation is retained for auditability.
 model InternalEntitlement {
-  id             String   @id @default(cuid())
-  clientId       String   @unique
+  id             String    @id @default(cuid())
+  clientId       String    @unique
   tier           PlanTier
-  active         Boolean  @default(true)
-  reason         String   @db.Text
+  active         Boolean   @default(true)
+  reason         String    @db.Text
   grantedBySub   String
   grantedByEmail String?
-  grantedAt      DateTime @default(now())
+  grantedAt      DateTime  @default(now())
   revokedBySub   String?
   revokedByEmail String?
-  revokedReason  String?  @db.Text
+  revokedReason  String?   @db.Text
   revokedAt      DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
@@ -2156,11 +2234,12 @@ model WorkspaceDataItem {
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
-  client         Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  dataSource     WorkspaceDataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
-  contentSources GeneratedContentSource[]
-  performance    DataItemPerformance?
-  campaigns      Campaign[]               @relation("CampaignSourceDataItem")
+  client               Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  dataSource           WorkspaceDataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  contentSources       GeneratedContentSource[]
+  performance          DataItemPerformance?
+  campaigns            Campaign[]               @relation("CampaignSourceDataItem")
+  prospectPreviewItems ProspectPreviewItem[]
 
   @@index([clientId, status])
   @@index([clientId, type])
