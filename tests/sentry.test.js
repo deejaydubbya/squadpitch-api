@@ -45,11 +45,11 @@ describe("captureException is a safe no-op without DSN", () => {
 describe("Sentry privacy redaction", () => {
   it("removes credentials, content, and user PII while preserving safe dimensions", () => {
     const event = redactSentryEvent({
-      request: { headers: { authorization: "Bearer secret" }, cookies: { session: "secret" }, data: "customer content", url: "/route?code=oauth-secret" },
+      request: { headers: { authorization: "Bearer secret" }, cookies: { session: "secret" }, data: "customer content", url: `/preview/${"A".repeat(43)}?code=oauth-secret` },
       user: { id: "user-id", email: "person@example.com", ip_address: "127.0.0.1" },
       extra: { workspaceId: "workspace-id", provider: "stripe", accessToken: "secret" },
     });
-    expect(event.request).toEqual({ url: "/route" });
+    expect(event.request).toEqual({ url: "/preview/[Filtered]" });
     expect(event.user).toEqual({ id: "user-id" });
     expect(event.extra.accessToken).toBe("[Filtered]");
     expect(JSON.stringify(event)).not.toContain("Bearer secret");

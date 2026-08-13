@@ -22,12 +22,22 @@ describe("REDACT_PATHS", () => {
       expect.arrayContaining([
         "req.body.password",
         "req.body.secret",
+        "req.body.claimToken",
+        "req.body.previewToken",
         "req.body.accessToken",
         "req.body.refreshToken",
         "req.body.apiKey",
         "req.body.clientSecret",
       ])
     );
+  });
+});
+
+describe("credential path redaction", () => {
+  it("masks preview credentials in browser and API paths", () => {
+    const token = "A".repeat(43);
+    expect(_internal.redactCredentialPaths(`/preview/${token}`)).toBe("/preview/[REDACTED]");
+    expect(_internal.redactCredentialPaths(`/api/v1/public/prospects/preview/${token}`)).not.toContain(token);
   });
 });
 
