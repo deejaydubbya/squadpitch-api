@@ -395,10 +395,56 @@ model ProspectWorkspace {
 
   client       Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
   previewItems ProspectPreviewItem[]
+  preparationRuns ProspectPreparationRun[]
 
   @@index([claimStatus, claimExpiresAt])
   @@index([prospectEmail])
   @@map("prospect_workspaces")
+}
+
+enum ProspectPreparationStatus {
+  QUEUED
+  RUNNING
+  COMPLETE
+  COMPLETE_WITH_WARNINGS
+  FAILED
+}
+
+enum ProspectPreparationStage {
+  QUEUED
+  IMPORTING_LISTING
+  ENRICHING
+  PROCESSING_MEDIA
+  GENERATING
+  SELECTING
+  COMPLETE
+  FAILED
+}
+
+model ProspectPreparationRun {
+  id                  String                      @id @default(cuid())
+  prospectWorkspaceId String
+  requestedBy         String
+  sourceUrl           String?
+  status              ProspectPreparationStatus  @default(QUEUED)
+  stage               ProspectPreparationStage   @default(QUEUED)
+  platformStates      Json
+  readyCount          Int                         @default(0)
+  expectedCount       Int                         @default(3)
+  warningCount        Int                         @default(0)
+  failureCode         String?
+  failureMessage      String?                     @db.Text
+  startedAt           DateTime?
+  heartbeatAt         DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  prospectWorkspace ProspectWorkspace @relation(fields: [prospectWorkspaceId], references: [id], onDelete: Cascade)
+
+  @@index([prospectWorkspaceId, createdAt])
+  @@index([status, heartbeatAt])
+  @@map("prospect_preparation_runs")
 }
 
 model ProspectPreviewItem {

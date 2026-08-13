@@ -43,11 +43,16 @@ describe("Redis process ownership", () => {
     });
     expect(worker.enabled).toBe(true);
     expect(api.enabled).toBe(false);
-    expect(worker.components).toHaveLength(18);
+    expect(worker.components).toHaveLength(19);
     expect(worker.components).toContainEqual({
       queueName: "sp-account-lifecycle",
       componentType: "worker+scheduler",
       cadence: "daily",
+    });
+    expect(worker.components).toContainEqual({
+      queueName: "sp-prospect-preparation",
+      componentType: "worker",
+      cadence: "on demand",
     });
   });
 

@@ -36,7 +36,8 @@ describe("prospect workspace release contracts", () => {
     expect(service).toContain("buildVerifiedPropertyFallback");
     expect(service).toContain("PROSPECT_PROPERTY_VERIFIED_FALLBACK");
     expect(service).toContain("after three rejected prospect generation attempts");
-    expect(service).toContain("ONLY facts present in the linked property record");
+    expect(service).toContain("Allowed verified facts:");
+    expect(service).toContain("Controlled framing you may use:");
     expect(service).not.toContain("verifiedPropertyPreviewBody");
     expect(service).toContain("draftAsset.createMany");
     expect(service).toContain('role: orderIndex === 0 ? "primary" : "gallery"');

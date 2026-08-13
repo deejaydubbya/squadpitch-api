@@ -93,9 +93,9 @@ internalRouter.post(`${BASE}/prospects/:id/prepare`, requireAdminRole, async (re
   try {
     const parsed = PrepareProspectSchema.safeParse(req.body ?? {});
     if (!parsed.success) return validationError(res, parsed.error);
-    const result = await prospectService.prepareProspect(req.params.id, parsed.data, req.auth0Sub);
-    await writeAudit(req, { action: "prospect.workspace.prepared", resourceType: "ProspectWorkspace", resourceId: req.params.id, metadata: { itemId: result.itemId, draftCount: result.draftIds.length, imageImported: result.imageImported } });
-    res.json(result);
+    const result = await prospectService.startProspectPreparation(req.params.id, parsed.data, req.auth0Sub);
+    await writeAudit(req, { action: result.attached ? "prospect.preparation.attached" : "prospect.preparation.started", resourceType: "ProspectPreparationRun", resourceId: result.run.id, metadata: { prospectWorkspaceId: req.params.id } });
+    res.status(result.attached ? 200 : 202).json({ run: result.run, attached: result.attached });
   } catch (err) { next(err); }
 });
 

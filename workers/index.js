@@ -22,6 +22,7 @@ const starters = [
   ["./autopilotEvaluatorWorker.js", "startAutopilotEvaluatorWorker"],
   ["./contactRetentionWorker.js", "startContactRetentionWorker"],
   ["./accountLifecycleWorker.js", "startAccountLifecycleWorker"],
+  ["./prospectPreparationWorker.js", "startProspectPreparationWorker"],
 ];
 
 export function startWorkers() {

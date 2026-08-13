@@ -8,6 +8,7 @@ import { getImageStorageService } from "../../services/storage/imageStorage.js";
 import { sniffImageMime } from "../../lib/mimeDetect.js";
 import { extractFromImage } from "../studio/generation/openai.provider.js";
 import { trackAiUsage } from "../billing/aiUsageTracking.service.js";
+import { getProspectPreparationQueue } from "../../lib/queues.js";
 
 const TOKEN_BYTES = 32;
 const DEFAULT_TTL_DAYS = 21;
@@ -109,6 +110,11 @@ export async function getProspect(id) {
     },
   });
   if (!row) return null;
+  await prisma.prospectPreparationRun.updateMany({
+    where: { prospectWorkspaceId: id, status: { in: ["QUEUED", "RUNNING"] }, heartbeatAt: { lt: new Date(Date.now() - 15 * 60_000) } },
+    data: { status: "FAILED", stage: "FAILED", failureCode: "STALE_RUN", failureMessage: "Preparation stopped reporting progress and can be retried.", completedAt: new Date() },
+  });
+  const preparationRun = await prisma.prospectPreparationRun.findFirst({ where: { prospectWorkspaceId: id }, orderBy: { createdAt: "desc" } });
   const propertyMediaAvailable = row.client.dataItems.some((item) => item.type === "PROPERTY" && (item.dataJson?.imageUrl || item.dataJson?.images?.length));
   const canonicalProspectDrafts = [];
   const seenProspectChannels = new Set();
@@ -124,7 +130,7 @@ export async function getProspect(id) {
   ];
   const expectedChannels = ["INSTAGRAM", "FACEBOOK", "LINKEDIN"];
   const readyChannels = expectedChannels.filter((channel) => canonicalProspectDrafts.some((draft) => draft.channel === channel && (!propertyMediaAvailable || draft._count.draftAssets > 0 || draft.mediaUrl)));
-  const campaignReadiness = { status: readyChannels.length === 3 ? "COMPLETE" : readyChannels.length ? "PARTIAL" : "NEEDS_ATTENTION", readyChannels, expectedChannels, issues: expectedChannels.filter((channel) => !readyChannels.includes(channel)).map((channel) => ({ channel, code: "DRAFT_NOT_READY", message: `${channel.charAt(0)}${channel.slice(1).toLowerCase()} draft needs attention` })) };
+  const campaignReadiness = { status: readyChannels.length === 3 ? (preparationRun?.status === "COMPLETE_WITH_WARNINGS" ? "COMPLETE_WITH_WARNINGS" : "COMPLETE") : readyChannels.length ? "PARTIAL" : "NEEDS_ATTENTION", readyChannels, expectedChannels, issues: expectedChannels.filter((channel) => !readyChannels.includes(channel)).map((channel) => ({ channel, code: "DRAFT_NOT_READY", message: `${channel.charAt(0)}${channel.slice(1).toLowerCase()} draft needs attention` })) };
   return {
     ...formatAdminProspect(row, row.client),
     preparationState: row.previewItems.length > 0 ? "SELECTED" : eligiblePreviewItems.length > 0 ? "READY_UNSELECTED" : "NOT_STARTED",
@@ -132,6 +138,7 @@ export async function getProspect(id) {
     eligiblePreviewItems,
     selectedPreviewItems: row.previewItems.map((item) => ({ id: item.dataItemId || item.draftId, itemType: item.itemType, sortOrder: item.sortOrder })),
     campaignReadiness,
+    preparationRun,
   };
 }
 
@@ -208,6 +215,7 @@ export function isUsableProspectListing(listing, confidence = 0) {
 }
 
 const UNSUPPORTED_PROPERTY_COPY = [
+  /\b(?:beautiful|charming|desirable|peaceful|stunning)\b/i,
   /friendly neighborhood/i, /close to (?:local )?amenities/i, /fresh finishes/i,
   /thoughtful layout/i, /modern living/i, /perfect for/i, /ideal for/i,
   /future expansion/i, /top-rated schools?/i, /great schools?/i, /open house/i,
@@ -222,7 +230,7 @@ const UNSUPPORTED_PROPERTY_COPY = [
   /\b(?:solid )?opportunity\b/i, /curious about the neighborhood/i,
 ];
 
-function validateGeneratedPropertyBody(body, item) {
+export function validateGeneratedPropertyBody(body, item) {
   const text = String(body || "");
   const normalized = text.toLowerCase().replace(/[^a-z0-9]/g, "");
   const data = item.dataJson || {};
@@ -254,6 +262,18 @@ export function buildVerifiedPropertyFallback(item, channel, businessName) {
   if (channel === "INSTAGRAM") return `🏡 Take a look at ${address}.\n\nNow available at ${detailLine}.\n\nWant to see the complete listing or schedule a showing? Message ${businessName}.\n\n#JustListed #RealEstate #PropertyTour`;
   if (channel === "FACEBOOK") return `Now available: ${address}\n\nHere are the key details from the listing:\n${detailLine}\n\nExplore the property photos, then contact ${businessName} to request the complete listing information or schedule a showing.`;
   return `Property listing update: ${address}\n\nThe current listing details include ${detailLine}.\n\nFor professionals and clients reviewing available properties, ${businessName} can provide the complete listing information and showing details.`;
+}
+
+function buildGenerationFacts(item) {
+  const data = item.dataJson || {};
+  return [
+    ["address", [data.street, data.city, data.state, data.zip].filter(Boolean).join(", ") || item.title],
+    ["price", typeof data.price === "number" ? `$${data.price.toLocaleString("en-US")}` : null],
+    ["bedrooms", typeof data.bedrooms === "number" ? data.bedrooms : null],
+    ["bathrooms", typeof data.bathrooms === "number" ? data.bathrooms : null],
+    ["square feet", typeof data.sqft === "number" ? data.sqft : null],
+    ["year built", typeof data.yearBuilt === "number" ? data.yearBuilt : null],
+  ].filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value]) => `${label}: ${value}`).join("; ");
 }
 
 export function listingPhotoKey(url) {
@@ -343,7 +363,62 @@ async function cachePropertyImages(clientId, item, actor) {
   return { item: await prisma.workspaceDataItem.update({ where: { id: item.id }, data: { dataJson } }), assets: classified };
 }
 
-export async function prepareProspect(id, input, adminSub) {
+const INITIAL_PLATFORM_STATES = Object.freeze(Object.fromEntries(["INSTAGRAM", "FACEBOOK", "LINKEDIN"].map((channel) => [channel, { status: "NOT_STARTED", attemptCount: 0, provenance: null, rejectionCategory: null, updatedAt: null }])));
+
+async function updatePreparationRun(runId, data) {
+  return prisma.prospectPreparationRun.update({ where: { id: runId }, data: { ...data, heartbeatAt: new Date() } });
+}
+
+async function updatePlatformRun(runId, channel, patch) {
+  const run = await prisma.prospectPreparationRun.findUnique({ where: { id: runId }, select: { platformStates: true } });
+  const current = run?.platformStates || INITIAL_PLATFORM_STATES;
+  return updatePreparationRun(runId, { platformStates: { ...current, [channel]: { ...current[channel], ...patch, updatedAt: new Date().toISOString() } } });
+}
+
+export async function startProspectPreparation(id, input, adminSub) {
+  const prospect = await prisma.prospectWorkspace.findUnique({ where: { id }, include: { client: { select: { lifecycle: true, industryKey: true } } } });
+  if (!prospect || prospect.client.lifecycle !== "PROSPECT") throw Object.assign(new Error("Prospect workspace not found"), { status: 404, code: "NOT_FOUND" });
+  if (prospect.client.industryKey !== "real_estate") throw importFailure("Automatic listing preparation is currently available for Real Estate prospects only");
+  const staleBefore = new Date(Date.now() - 15 * 60_000);
+  await prisma.prospectPreparationRun.updateMany({ where: { prospectWorkspaceId: id, status: { in: ["QUEUED", "RUNNING"] }, heartbeatAt: { lt: staleBefore } }, data: { status: "FAILED", stage: "FAILED", failureCode: "STALE_RUN", failureMessage: "Preparation stopped reporting progress and can be retried.", completedAt: new Date() } });
+  let run;
+  try {
+    run = await prisma.prospectPreparationRun.create({ data: { prospectWorkspaceId: id, requestedBy: adminSub, sourceUrl: input.sourceUrl || null, platformStates: INITIAL_PLATFORM_STATES, heartbeatAt: new Date() } });
+  } catch (error) {
+    if (error?.code !== "P2002") throw error;
+    run = await prisma.prospectPreparationRun.findFirst({ where: { prospectWorkspaceId: id, status: { in: ["QUEUED", "RUNNING"] } }, orderBy: { createdAt: "desc" } });
+    if (run) return { run, attached: true };
+    throw error;
+  }
+  const queue = getProspectPreparationQueue();
+  if (!queue) {
+    await failPreparationRun(run.id, Object.assign(new Error("Preparation worker is unavailable"), { code: "QUEUE_UNAVAILABLE" }));
+    throw Object.assign(new Error("Preparation worker is unavailable"), { status: 503, code: "QUEUE_UNAVAILABLE" });
+  }
+  try {
+    await queue.add("prepare", { runId: run.id }, { jobId: run.id });
+  } catch (error) {
+    await failPreparationRun(run.id, Object.assign(error, { code: "QUEUE_ENQUEUE_FAILED" }));
+    throw Object.assign(new Error("Preparation could not be queued"), { status: 503, code: "QUEUE_ENQUEUE_FAILED" });
+  }
+  return { run, attached: false };
+}
+
+export async function failPreparationRun(runId, error) {
+  const message = error?.status && error.status < 500 ? error.message : "Preparation could not be completed. Retry when ready.";
+  const run = await prisma.prospectPreparationRun.findUnique({ where: { id: runId }, select: { platformStates: true } });
+  const terminal = new Set(["AI_ACCEPTED", "FALLBACK_ACCEPTED"]);
+  const platformStates = Object.fromEntries(Object.entries(run?.platformStates || INITIAL_PLATFORM_STATES).map(([channel, state]) => [channel, terminal.has(state.status) ? state : { ...state, status: "FAILED", rejectionCategory: error?.code || "PREPARATION_FAILED", updatedAt: new Date().toISOString() }]));
+  return prisma.prospectPreparationRun.updateMany({ where: { id: runId, status: { in: ["QUEUED", "RUNNING"] } }, data: { status: "FAILED", stage: "FAILED", platformStates, failureCode: error?.code || "PREPARATION_FAILED", failureMessage: message, completedAt: new Date(), heartbeatAt: new Date() } });
+}
+
+export async function executeProspectPreparation(runId) {
+  const run = await prisma.prospectPreparationRun.findUnique({ where: { id: runId } });
+  if (!run || !["QUEUED", "RUNNING"].includes(run.status)) return run;
+  await updatePreparationRun(runId, { status: "RUNNING", stage: "IMPORTING_LISTING", startedAt: run.startedAt || new Date() });
+  const id = run.prospectWorkspaceId;
+  const input = { sourceUrl: run.sourceUrl || undefined };
+  const adminSub = run.requestedBy;
   const prospect = await prisma.prospectWorkspace.findUnique({ where: { id }, include: { client: true } });
   if (!prospect || prospect.client.lifecycle !== "PROSPECT") throw Object.assign(new Error("Prospect workspace not found"), { status: 404, code: "NOT_FOUND" });
   if (prospect.client.industryKey !== "real_estate") throw importFailure("Automatic listing preparation is currently available for Real Estate prospects only");
@@ -357,10 +432,12 @@ export async function prepareProspect(id, input, adminSub) {
   }
   const selectedListing = { ...fillAddressFromTitle(candidate.normalized), sourceUrl };
   const confirmed = await confirmUrl(prospect.clientId, { url: sourceUrl, selectedListing });
+  await updatePreparationRun(runId, { stage: "ENRICHING" });
   await enrichListingById(prospect.clientId, confirmed.dataItemId).catch(() => null);
   let item = await prisma.workspaceDataItem.findFirst({ where: { id: confirmed.dataItemId, clientId: prospect.clientId, type: "PROPERTY", status: "ACTIVE" } });
   if (!item) throw importFailure("The listing was resolved but the property could not be saved");
   let propertyAssets = [];
+  await updatePreparationRun(runId, { stage: "PROCESSING_MEDIA" });
   try { ({ item, assets: propertyAssets } = await cachePropertyImages(prospect.clientId, item, adminSub)); } catch { propertyAssets = []; }
 
   const existing = await prisma.draft.findMany({ where: { clientId: prospect.clientId, status: "DRAFT", warnings: { has: `prospectProperty:${item.id}` } }, orderBy: { createdAt: "desc" } });
@@ -372,20 +449,32 @@ export async function prepareProspect(id, input, adminSub) {
     else await prisma.draft.update({ where: { id: draft.id }, data: { status: "FAILED", warnings: { push: `PROSPECT_PROPERTY_FACT_GUARD:${validation.reason}` } } });
   }
   for (const channel of ["INSTAGRAM", "FACEBOOK", "LINKEDIN"]) {
-    if (drafts.some((draft) => draft.channel === channel)) continue;
+    const reusable = drafts.find((draft) => draft.channel === channel);
+    if (reusable) {
+      const fallback = reusable.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK");
+      await updatePlatformRun(runId, channel, { status: fallback ? "FALLBACK_ACCEPTED" : "AI_ACCEPTED", attemptCount: fallback ? 3 : 0, provenance: fallback ? "FALLBACK" : "AI", rejectionCategory: fallback ? "PRIOR_ATTEMPTS_EXHAUSTED" : null });
+      await updatePreparationRun(runId, { readyCount: drafts.filter((draft) => ["INSTAGRAM", "FACEBOOK", "LINKEDIN"].indexOf(draft.channel) <= ["INSTAGRAM", "FACEBOOK", "LINKEDIN"].indexOf(channel)).length });
+      continue;
+    }
+    await updatePreparationRun(runId, { stage: "GENERATING" });
     let accepted = null;
     const rejectedPhrases = [];
+    const allowedFacts = buildGenerationFacts(item);
     for (let attempt = 1; attempt <= 3 && !accepted; attempt += 1) {
+      await updatePlatformRun(runId, channel, { status: attempt === 1 ? "GENERATING" : "RETRYING", attemptCount: attempt, rejectionCategory: null });
       const retryFeedback = rejectedPhrases.length ? ` Earlier attempts were rejected for these unsupported phrases: ${rejectedPhrases.map((phrase) => `"${phrase}"`).join(", ")}. Do not repeat those claims or close paraphrases.` : "";
-      const draft = await generateDraft({ clientId: prospect.clientId, kind: "POST", channel, bucketKey: "just_listed", templateType: "just_listed", guidance: `Write a substantive, platform-specific ${channel} post for a private NEW_LISTING preview using ONLY facts present in the linked property record (${item.title}). Include a clear hook, verified listing facts, safe framing, a distinct CTA, and platform-appropriate hashtags. Do not describe the home's layout, finishes, light, charm, functionality, potential, suitability, community, parks, shops, dining, schools, amenities, market, financing, or any fact absent from the record. Do not infer anything from photos.${retryFeedback}`, createdBy: adminSub, dataItemId: item.id, contentAngle: "just_listed" });
+      const draft = await generateDraft({ clientId: prospect.clientId, kind: "POST", channel, bucketKey: "just_listed", templateType: "just_listed", guidance: `Write a substantive, platform-specific ${channel} post for a private NEW_LISTING preview. Allowed verified facts: ${allowedFacts}. Controlled framing you may use: now available; take a look; explore the listing; see the photos; request details; schedule a showing. Include a clear hook, verified listing facts, a distinct CTA, and platform-appropriate hashtags. Do not describe the home's layout, finishes, light, beauty, charm, functionality, potential, suitability, community, parks, shops, dining, schools, amenities, market, financing, or any fact absent from the allowed list. Do not infer anything from photos or replace a rejected adjective with another subjective adjective.${retryFeedback}`, createdBy: adminSub, dataItemId: item.id, contentAngle: "just_listed" });
       if (!draft || draft.status === "FAILED") continue;
+      await updatePlatformRun(runId, channel, { status: "VALIDATING", attemptCount: attempt });
       const validation = validateGeneratedPropertyBody(draft.body, item);
       if (!validation.valid) {
         if (validation.matchedText) rejectedPhrases.push(validation.matchedText.slice(0, 80));
         await prisma.draft.update({ where: { id: draft.id }, data: { status: "FAILED", warnings: { push: `PROSPECT_PROPERTY_FACT_GUARD:${validation.reason}` } } });
+        await updatePlatformRun(runId, channel, { status: "RETRYING", attemptCount: attempt, rejectionCategory: validation.reason });
         continue;
       }
       accepted = await prisma.draft.update({ where: { id: draft.id }, data: { warnings: { push: `prospectProperty:${item.id}` } } });
+      await updatePlatformRun(runId, channel, { status: "AI_ACCEPTED", attemptCount: attempt, provenance: "AI", rejectionCategory: null });
     }
     if (!accepted) {
       const body = buildVerifiedPropertyFallback(item, channel, prospect.client.name);
@@ -395,9 +484,12 @@ export async function prepareProspect(id, input, adminSub) {
         body, hooks: [], hashtags: [], warnings: [`prospectProperty:${item.id}`, "PROSPECT_PROPERTY_VERIFIED_FALLBACK"],
         createdBy: adminSub,
       } });
+      await updatePlatformRun(runId, channel, { status: "FALLBACK_ACCEPTED", attemptCount: 3, provenance: "FALLBACK", rejectionCategory: rejectedPhrases.length ? "UNSUPPORTED_PROPERTY_CLAIM" : "GENERATION_FAILED" });
     }
     drafts.push(accepted);
+    await updatePreparationRun(runId, { readyCount: drafts.length });
   }
+  await updatePreparationRun(runId, { stage: "SELECTING" });
   const mediaPlan = buildPropertyMediaPlan(propertyAssets);
   for (const draft of drafts) {
     const selectedAssets = mediaPlan[draft.channel] || [];
@@ -416,7 +508,10 @@ export async function prepareProspect(id, input, adminSub) {
       await tx.prospectPreviewItem.create({ data: { prospectWorkspaceId: id, itemType: "DRAFT", draftId: draft.id, sortOrder: retained.sortOrder, addedBy: adminSub } });
     }
   });
-  return { itemId: item.id, draftIds: drafts.map((draft) => draft.id), imageImported: propertyAssets.length > 0, importedImageCount: propertyAssets.length, importQuality: candidate.quality, preparationState: "READY_UNSELECTED" };
+  const finalRun = await prisma.prospectPreparationRun.findUnique({ where: { id: runId } });
+  const warningCount = Object.values(finalRun.platformStates || {}).filter((state) => state.provenance === "FALLBACK").length;
+  await updatePreparationRun(runId, { status: warningCount ? "COMPLETE_WITH_WARNINGS" : "COMPLETE", stage: "COMPLETE", readyCount: drafts.length, warningCount, completedAt: new Date() });
+  return { itemId: item.id, draftIds: drafts.map((draft) => draft.id), imageImported: propertyAssets.length > 0, importedImageCount: propertyAssets.length, importQuality: candidate.quality, preparationState: "READY_UNSELECTED", runId };
 }
 
 export async function rotatePreview(id) {
