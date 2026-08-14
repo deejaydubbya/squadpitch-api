@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { SubmitFeedbackSchema, UpdateFeedbackSchema, safeFeedbackRoute } from "../domains/feedback/feedback.schemas.js";
 
-const valid = { type: "bug", message: "The save button did not respond.", clientId: "client-1", route: "/workspaces/client-1/create?token=secret", deviceClass: "desktop", viewport: { width: 1440, height: 900 }, idempotencyKey: "7e82cb6c-d453-4a5d-8eb1-ecc6c71d0b93" };
+const valid = { type: "bug", message: "The save button did not respond.", clientId: "client-1", route: "/workspaces/client-1/create?token=secret", deviceClass: "desktop", viewport: { width: 1440, height: 900 }, idempotencyKey: "00000000-0000-4000-8000-000000000001" };
 
 describe("in-app feedback contracts", () => {
   it("migrates every representative legacy row without destructive schema operations", () => {
