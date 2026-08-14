@@ -163,6 +163,7 @@ export async function generateDraft({
   recommendationId,
   contentAngle,
   language,
+  generationProfile,
 }) {
   const ctx = await loadClientGenerationContext(clientId);
   // Phase 1 multilingual — resolve via request → contentPreferences →
@@ -266,8 +267,9 @@ export async function generateDraft({
     blueprint: isNoDataIdeaPost ? null : blueprint,
     realEstateAssets: isNoDataIdeaPost ? null : realEstateAssets,
     contentAngle,
+    generationProfile,
   });
-  const responseFormat = buildResponseFormat();
+  const responseFormat = buildResponseFormat(generationProfile);
 
   let result;
   let totalPromptTokens = 0;
@@ -279,7 +281,7 @@ export async function generateDraft({
       userPrompt,
       responseFormat,
       taskType: "generation",
-      temperature: 0.7,
+      temperature: generationProfile === "grounded_property" ? 0.2 : 0.7,
     });
     totalPromptTokens += result.usage?.prompt_tokens ?? 0;
     totalCompletionTokens += result.usage?.completion_tokens ?? 0;
@@ -365,6 +367,7 @@ export async function generateDraft({
         ...(!isNoDataIdeaPost && realEstateAssets?.rotationApplied ? ["re_rotation: applied"] : []),
         ...(!isNoDataIdeaPost && realEstateAssets && !realEstateAssets.bestListing && !dataItem ? ["re_fallback: no_listing"] : []),
         ...(recommendationId ? [`recommendation: ${recommendationId}`] : []),
+        ...(generationProfile ? [`generation_profile: ${generationProfile}`] : []),
       ].filter(Boolean),
       language: ctx.language,
       createdBy,
@@ -407,7 +410,7 @@ export async function generateDraft({
       taskName: createdBy === "system:autopilot" || createdBy === "system:auto_generate"
         ? "autopilot_draft_generation"
         : "content_draft_generation",
-      schemaName: "CONTENT_OUTPUT_SCHEMA",
+      schemaName: generationProfile === "grounded_property" ? "GROUNDED_PROPERTY_OUTPUT_SCHEMA" : "CONTENT_OUTPUT_SCHEMA",
       promptVersion,
       provider: "openai",
       latencyMs: Date.now() - startedAt,

@@ -160,6 +160,36 @@ export const CONTENT_OUTPUT_SCHEMA = {
   },
 };
 
+export const GROUNDED_PROPERTY_OUTPUT_SCHEMA = {
+  name: "grounded_property_draft",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      body: {
+        type: "string",
+        description: "Two or three natural sentences using only the operator-provided allowed property facts. Exclude the hook, CTA, hashtags, and links.",
+      },
+      hooks: {
+        type: "array",
+        items: { type: "string" },
+        description: "Exactly one neutral opening line for the listing post.",
+      },
+      hashtags: {
+        type: "array",
+        items: { type: "string" },
+        description: "Factual real-estate or location hashtags without the leading '#'.",
+      },
+      cta: {
+        type: "string",
+        description: "One neutral request-details, contact, message, or schedule-showing action.",
+      },
+    },
+    required: ["body", "hooks", "hashtags", "cta"],
+  },
+};
+
 /**
  * Per-kind instruction strings. Keep them focused and free of client-specific
  * data — client data is layered in by buildSystemPrompt / buildUserPrompt.
@@ -613,11 +643,14 @@ function buildRealEstateFallback(reCtx, hasListing, hasReviews) {
  * system to produce right now — the kind of content, the channel, any
  * matched content bucket template, and the operator's guidance.
  */
-export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templateType, dataItem, blueprint, realEstateAssets, contentAngle }) {
+export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templateType, dataItem, blueprint, realEstateAssets, contentAngle, generationProfile }) {
   const { contentBuckets, channelSettings } = ctx;
   const lines = [];
+  const groundedProperty = generationProfile === "grounded_property";
 
-  const kindInstruction = KIND_INSTRUCTIONS[kind] ?? KIND_INSTRUCTIONS.POST;
+  const kindInstruction = groundedProperty
+    ? "Write one fact-grounded property social post. The operator's ALLOWED_FACTS are the only permitted source for property assertions. Return separate hook, body, CTA, and hashtag components."
+    : KIND_INSTRUCTIONS[kind] ?? KIND_INSTRUCTIONS.POST;
   lines.push(`Task: ${kindInstruction}`);
   lines.push(`Channel: ${channel}`);
 
@@ -668,7 +701,7 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templ
   const bucket = Array.isArray(contentBuckets)
     ? contentBuckets.find((b) => b.key === bucketKey)
     : null;
-  if (bucket) {
+  if (bucket && !groundedProperty) {
     lines.push(`\nContent bucket: ${bucket.label}`);
     if (bucket.template) {
       lines.push(`Bucket template / angle:\n${bucket.template}`);
@@ -676,7 +709,7 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templ
   }
 
   // Business data injection — with industry-aware transformation when available
-  if (dataItem) {
+  if (dataItem && !groundedProperty) {
     const contentContext = buildContentContext(dataItem, ctx.industryKey);
     if (contentContext) {
       lines.push(formatContentContextForPrompt(contentContext));
@@ -689,14 +722,14 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templ
   }
 
   // Blueprint angle injection
-  if (blueprint) {
+  if (blueprint && !groundedProperty) {
     lines.push(formatBlueprintForPrompt(blueprint));
   }
 
   // Real estate listing + review context injection
   const reAssets = realEstateAssets;
   const isRealEstate = ctx.industryKey === "real_estate";
-  if (isRealEstate && reAssets) {
+  if (isRealEstate && reAssets && !groundedProperty) {
     if (reAssets.bestListing && !dataItem) {
       // Inject best listing when no specific data item was provided
       lines.push(formatListingForPrompt(reAssets.bestListing));
@@ -714,7 +747,12 @@ export function buildUserPrompt(ctx, { kind, channel, bucketKey, guidance, templ
 
   // Channel-specific style hints based on connected tech stack
   const ts = ctx.techStackContext;
-  if (isRealEstate) {
+  if (groundedProperty) {
+    lines.push(`\nTarget: ${channel} — produce a concise, platform-distinct listing post using verified facts only.`);
+    if (channel === "INSTAGRAM") lines.push("Use a visual-first neutral hook, a short factual body, a message/showing CTA, and 3-6 factual hashtags.");
+    if (channel === "FACEBOOK") lines.push("Use a conversational neutral hook, a factual overview, a request-details/showing CTA, and no more than 3 factual hashtags.");
+    if (channel === "LINKEDIN") lines.push("Use a professional neutral listing-update hook, a concise factual body, a businesslike CTA, and 2-4 factual hashtags.");
+  } else if (isRealEstate) {
     // Real estate channel-aware formatting
     if (channel === "INSTAGRAM") {
       lines.push(`\nTarget: Instagram — write punchier, visual-first content.`);
@@ -776,7 +814,7 @@ CONTENT APPROACH:
   }
 
   // Viral patterns + engagement boosters — proven hook structures
-  const patternBlock = buildPatternPromptBlock(templateType, channel);
+  const patternBlock = groundedProperty ? "" : buildPatternPromptBlock(templateType, channel);
   if (patternBlock) lines.push(patternBlock);
 
   if (guidance && guidance.trim().length > 0) {
@@ -788,11 +826,12 @@ CONTENT APPROACH:
     lines.push(`\nGROWTH GOAL: Include a subtle follow-oriented CTA alongside the primary CTA. Examples: "Follow for more homes like this", "Follow for daily real estate tips". Keep it natural — one line at the end, not forced.`);
   }
 
-  lines.push(
-    "\nGenerate 3 distinct variations of the content. The primary fields (body, hooks, hashtags, cta) are Version A. Include 2 additional complete variations in the 'variations' array (Version B and Version C). Each variation should take a different angle, tone, or structure while staying on-brand."
-  );
+  if (!groundedProperty) {
+    lines.push(
+      "\nGenerate 3 distinct variations of the content. The primary fields (body, hooks, hashtags, cta) are Version A. Include 2 additional complete variations in the 'variations' array (Version B and Version C). Each variation should take a different angle, tone, or structure while staying on-brand."
+    );
 
-  lines.push(`
+    lines.push(`
 HOOKS — generate 5–10 scored opening hooks in the 'scoredHooks' array:
 - Each hook must be a distinct opening line (one sentence or phrase)
 - Score each 0–10 based on: curiosity gap, clarity, emotional pull, platform fit
@@ -801,7 +840,7 @@ HOOKS — generate 5–10 scored opening hooks in the 'scoredHooks' array:
 - Vary styles: bold claims, questions, numbers, stories, surprises, contrarian takes
 - The best hook should also be the first line of the Version A body`);
 
-  lines.push(`
+    lines.push(`
 MEDIA PLAN — populate the 'mediaPlan' object:
 - recommendedMediaType: image (most posts), video (walkthroughs, tutorials, BTS), carousel (multi-feature, step-by-step), none (rare)
 - visualConcept: What the viewer should see
@@ -818,6 +857,16 @@ MEDIA PLAN — populate the 'mediaPlan' object:
   - Personal brand posts → ["brand_library"]
   - NEVER suggest AI-generated images of real properties when property photos exist
   - NEVER suggest AI-generated testimonial images or fake client photos`);
+  } else {
+    lines.push(`
+GROUNDED PROPERTY OUTPUT CONTRACT:
+- hooks must contain exactly one neutral opening line; do not repeat it in body
+- body must contain only 2-3 natural sentences grounded directly in ALLOWED_FACTS
+- cta must contain exactly one neutral action and must not repeat body text
+- hashtags must follow the platform count in the operator guidance and must not contain unverified claims
+- do not return variations, scored hooks, media guidance, or any property inference
+- when a fact is not explicitly allowed, omit it`);
+  }
 
   lines.push(
     "\nRespond with JSON matching the draft schema."
@@ -832,10 +881,12 @@ MEDIA PLAN — populate the 'mediaPlan' object:
 /**
  * Return the OpenAI `response_format` value for a structured content request.
  */
-export function buildResponseFormat() {
+export function buildResponseFormat(generationProfile) {
   return {
     type: "json_schema",
-    json_schema: CONTENT_OUTPUT_SCHEMA,
+    json_schema: generationProfile === "grounded_property"
+      ? GROUNDED_PROPERTY_OUTPUT_SCHEMA
+      : CONTENT_OUTPUT_SCHEMA,
   };
 }
 

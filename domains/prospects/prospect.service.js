@@ -432,6 +432,12 @@ export function validateStructuredProspectDraft(draft, item, channel) {
   return composition.valid ? validateGeneratedPropertyBody(assembled, item) : composition;
 }
 
+export function evaluateProspectGenerationAttempt(draft, item, channel) {
+  const repairedDraft = repairStructuredProspectDraft(draft, item);
+  const body = composeStructuredProspectBody(repairedDraft, channel);
+  return { repairedDraft, body, validation: validateStructuredProspectDraft(repairedDraft, item, channel) };
+}
+
 export function listingPhotoKey(url) {
   try {
     const parsed = new URL(url);
@@ -608,16 +614,20 @@ export async function executeProspectPreparation(runId) {
     for (let attempt = 1; attempt <= 3 && !accepted; attempt += 1) {
       await updatePlatformRun(runId, channel, { status: attempt === 1 ? "GENERATING" : "RETRYING", attemptCount: attempt, rejectionCategory: null });
       const guidance = buildProspectAttemptGuidance({ item, channel, attempt, rejectedPhrases });
-      const draft = await generateDraft({ clientId: prospect.clientId, kind: "POST", channel, bucketKey: "just_listed", templateType: "just_listed", guidance, createdBy: adminSub, dataItemId: item.id, contentAngle: "just_listed" });
-      if (!draft || draft.status === "FAILED") { lastRejectionCategory = "GENERATION_FAILED"; continue; }
+      const draft = await generateDraft({ clientId: prospect.clientId, kind: "POST", channel, bucketKey: "just_listed", templateType: "just_listed", guidance, createdBy: adminSub, dataItemId: item.id, contentAngle: "just_listed", generationProfile: "grounded_property" });
+      if (!draft || draft.status === "FAILED") {
+        lastRejectionCategory = String(draft?.warnings?.[0] || "").match(/^\[([^\]]+)\]/)?.[1] || "GENERATION_FAILED";
+        logEvent("prospect.generation.attempt_rejected", { platform: channel, attempt, rejectionCategory: lastRejectionCategory, providerResult: "FAILED" });
+        await updatePlatformRun(runId, channel, { status: "RETRYING", attemptCount: attempt, rejectionCategory: lastRejectionCategory });
+        continue;
+      }
       await updatePlatformRun(runId, channel, { status: "VALIDATING", attemptCount: attempt });
-      const repairedDraft = repairStructuredProspectDraft(draft, item);
-      const assembledBody = composeStructuredProspectBody(repairedDraft, channel);
-      const validation = validateStructuredProspectDraft(repairedDraft, item, channel);
+      const { body: assembledBody, validation } = evaluateProspectGenerationAttempt(draft, item, channel);
       if (!validation.valid) {
         lastRejectionCategory = validation.reason;
         if (validation.matchedText) rejectedPhrases.push(validation.matchedText.slice(0, 80));
         await prisma.draft.update({ where: { id: draft.id }, data: { status: "FAILED", warnings: { push: `PROSPECT_PROPERTY_FACT_GUARD:${validation.reason}` } } });
+        logEvent("prospect.generation.attempt_rejected", { platform: channel, attempt, rejectionCategory: validation.reason, providerResult: "SUCCEEDED" });
         await updatePlatformRun(runId, channel, { status: "RETRYING", attemptCount: attempt, rejectionCategory: validation.reason });
         continue;
       }
@@ -636,7 +646,7 @@ export async function executeProspectPreparation(runId) {
         body, hooks: [], hashtags: [], warnings: [`prospectProperty:${item.id}`, "PROSPECT_PROPERTY_VERIFIED_FALLBACK"],
         createdBy: adminSub,
       } });
-      await updatePlatformRun(runId, channel, { status: "FALLBACK_ACCEPTED", attemptCount: 3, provenance: "FALLBACK", rejectionCategory: rejectedPhrases.length ? "UNSUPPORTED_PROPERTY_CLAIM" : "GENERATION_FAILED" });
+      await updatePlatformRun(runId, channel, { status: "FALLBACK_ACCEPTED", attemptCount: 3, provenance: "FALLBACK", rejectionCategory: lastRejectionCategory || "ATTEMPTS_EXHAUSTED" });
     }
     drafts.push(accepted);
     logEvent("prospect.generation.completed", { platform: channel, attempts: acceptedAttempt || 3, provenance: accepted.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK") ? "FALLBACK" : "AI", rejectionCategory: accepted.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK") ? (lastRejectionCategory || "ATTEMPTS_EXHAUSTED") : null, durationMs: Date.now() - generationStartedAt });
