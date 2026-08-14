@@ -9,6 +9,7 @@ export const REFERRAL_CURRENCY = "usd";
 export const QUALIFICATION_MS = 14 * 24 * 60 * 60 * 1000;
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const SYNTHETIC_EMAIL = /(^|[+._-])(admin|canary|e2e|synthetic|test)([+._-]|@)/i;
+const REFERRAL_E2E_REFERRER_EMAIL = "e2e-user@squadpitch.com";
 
 export function generateReferralCode(bytes = randomBytes(12)) {
   let code = "";
@@ -21,7 +22,7 @@ export function isExcludedReferralEmail(email) {
 }
 
 export async function getOrCreateReferralCode(user, prismaClient = prisma) {
-  if (isExcludedReferralEmail(user.email)) throw Object.assign(new Error("This account is not eligible for referrals"), { status: 403, code: "REFERRAL_ACCOUNT_EXCLUDED" });
+  if (isExcludedReferralEmail(user.email) && user.email.toLowerCase() !== REFERRAL_E2E_REFERRER_EMAIL) throw Object.assign(new Error("This account is not eligible for referrals"), { status: 403, code: "REFERRAL_ACCOUNT_EXCLUDED" });
   const existing = await prismaClient.referralCode.findUnique({ where: { ownerUserId: user.id } });
   if (existing) return existing;
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -45,6 +46,8 @@ export async function attachReferralAttribution({ captureToken, user, now = new 
   const code = await prismaClient.referralCode.findFirst({ where: { id: capture.codeId, active: true } });
   if (!code) throw Object.assign(new Error("Referral code is no longer available"), { status: 410, code: "REFERRAL_CODE_INACTIVE" });
   if (code.ownerUserId === user.id) throw Object.assign(new Error("You cannot refer yourself"), { status: 409, code: "SELF_REFERRAL" });
+  const owner = await prismaClient.user.findUnique({ where: { id: code.ownerUserId }, select: { email: true } });
+  if (!owner || isExcludedReferralEmail(owner.email)) throw Object.assign(new Error("This referral code is not eligible for attribution"), { status: 403, code: "REFERRAL_OWNER_EXCLUDED" });
   if (isExcludedReferralEmail(user.email)) throw Object.assign(new Error("This account is excluded from referral attribution"), { status: 403, code: "REFERRAL_ACCOUNT_EXCLUDED" });
   if (user.createdAt < new Date(capture.capturedAt.getTime() - 5 * 60 * 1000)) throw Object.assign(new Error("Existing accounts cannot be referred retroactively"), { status: 409, code: "REFERRAL_EXISTING_ACCOUNT" });
   const paid = await prismaClient.subscription.findUnique({ where: { userId: user.id } });
