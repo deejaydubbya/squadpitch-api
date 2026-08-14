@@ -98,7 +98,7 @@ export async function getTrialSummary(userId, now = new Date()) {
   };
 }
 
-export async function startFreeTrial({ userId, email, now = new Date(), stripeClient = requireStripe() }) {
+export async function startFreeTrial({ userId, email, now = new Date(), stripeClient = requireStripe(), trialPriceId = TIER_PRICE_MAP[FREE_TRIAL_TIER] }) {
   if (!email || TRIAL_EXCLUDED_EMAIL.test(email)) throw Object.assign(new Error("This account is not eligible for a promotional trial"), { status: 403, code: "TRIAL_ACCOUNT_EXCLUDED" });
   const identityHash = trialIdentityHash(email);
   let consumption = await prisma.trialConsumption.findUnique({ where: { identityHash } });
@@ -111,7 +111,7 @@ export async function startFreeTrial({ userId, email, now = new Date(), stripeCl
     const history = await stripeClient.subscriptions.list({ customer: customerId, status: "all", limit: 100 });
     if (history.data.length > 0) throw Object.assign(new Error("Stripe history makes this account ineligible for a new trial"), { status: 409, code: "TRIAL_STRIPE_HISTORY" });
   }
-  if (!TIER_PRICE_MAP[FREE_TRIAL_TIER]) throw Object.assign(new Error("Trial plan is not configured"), { status: 503, code: "TRIAL_PLAN_NOT_CONFIGURED" });
+  if (!trialPriceId) throw Object.assign(new Error("Trial plan is not configured"), { status: 503, code: "TRIAL_PLAN_NOT_CONFIGURED" });
   if (!consumption) {
     try { consumption = await prisma.trialConsumption.create({ data: { identityHash, userId, consumedAt: now, state: "INITIATING" } }); }
     catch (error) { if (error?.code === "P2002") throw Object.assign(new Error("This identity has already consumed a trial"), { status: 409, code: "TRIAL_ALREADY_CONSUMED" }); throw error; }
@@ -126,7 +126,7 @@ export async function startFreeTrial({ userId, email, now = new Date(), stripeCl
   try {
     const created = await stripeClient.subscriptions.create({
       customer: customerId,
-      items: [{ price: TIER_PRICE_MAP[FREE_TRIAL_TIER] }],
+      items: [{ price: trialPriceId }],
       trial_period_days: FREE_TRIAL_DAYS,
       trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
       payment_settings: { save_default_payment_method: "on_subscription" },

@@ -30,7 +30,7 @@ describe("14-day free trial", () => {
     db.subscription.upsert.mockResolvedValue({});
     db.subscription.updateMany.mockResolvedValue({ count: 1 });
     db.subscription.update.mockResolvedValue({ status: "TRIALING", trialState: "ACTIVE" });
-    await expect(billing.startFreeTrial({ userId: "new", email: "new@example.com", stripeClient: stripe, now: new Date("2026-01-01") })).resolves.toMatchObject({ status: "TRIALING" });
+    await expect(billing.startFreeTrial({ userId: "new", email: "new@example.com", stripeClient: stripe, trialPriceId: "price_pro", now: new Date("2026-01-01") })).resolves.toMatchObject({ status: "TRIALING" });
     expect(stripe.subscriptions.create).toHaveBeenCalledWith(expect.objectContaining({
       trial_period_days: 14,
       trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
