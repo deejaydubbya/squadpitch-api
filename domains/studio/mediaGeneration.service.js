@@ -11,6 +11,7 @@ import { getImageStorageService, getVideoStorageService, validateVideoBuffer } f
 import { loadClientGenerationContext } from "./generation/clientOrchestrator.js";
 import { getMediaGenQueue } from "../../lib/queues.js";
 import { getJobPriorityForUser } from "../billing/billing.service.js";
+import { isSystemMediaTag, visibleMediaTags } from "./propertyMedia.service.js";
 
 // ── List / Get ──────────────────────────────────────────────────────────
 
@@ -836,7 +837,9 @@ export function formatAsset(asset) {
     altText: asset.altText,
     caption: asset.caption,
     folderId: asset.folderId ?? null,
-    tags: asset.tags ?? [],
+    tags: visibleMediaTags(asset.tags ?? []),
+    systemTags: (asset.tags ?? []).filter(isSystemMediaTag),
+    propertyDataItemId: asset.propertyDataItemId ?? null,
     draftId: asset.draftId,
     displayOrder: asset.displayOrder,
     falModelId: asset.falModelId,
@@ -894,9 +897,11 @@ export async function moveAssetToFolder(assetId, folderId) {
 // ── Tags ─────────────────────────────────────────────────────────────────
 
 export async function updateAssetTags(assetId, tags) {
+  const current = await prisma.mediaAsset.findUnique({ where: { id: assetId }, select: { tags: true } });
+  const systemTags = (current?.tags ?? []).filter(isSystemMediaTag);
   return prisma.mediaAsset.update({
     where: { id: assetId },
-    data: { tags },
+    data: { tags: [...new Set([...tags.filter((tag) => !isSystemMediaTag(tag)), ...systemTags])] },
   });
 }
 

@@ -12,6 +12,7 @@ import { getProspectPreparationQueue } from "../../lib/queues.js";
 import { logEvent } from "../../lib/logger.js";
 import { normalizeIdentityEmail } from "../../lib/auth0Identity.js";
 import { selectCanonicalProspectDrafts } from "../../lib/prospectDraftVisibility.js";
+import { ingestPropertyMedia } from "../studio/propertyMedia.service.js";
 
 const TOKEN_BYTES = 32;
 const DEFAULT_TTL_DAYS = 21;
@@ -353,6 +354,24 @@ export function composeStructuredProspectBody(draft, channel) {
   return [draft.hooks[0].trim(), draft.body?.trim(), draft.cta.trim(), channel === "FACEBOOK" && !hashtags ? null : hashtags].filter(Boolean).join("\n\n");
 }
 
+export function repairStructuredProspectDraft(draft, item) {
+  if (!draft?.body) return draft;
+  const hook = draft.hooks?.[0] || "";
+  const cta = draft.cta || "";
+  const componentText = new Set([hook, cta].map(normalizedCompositionText).filter(Boolean));
+  const data = item.dataJson || {};
+  const allowedNumbers = new Set([data.street?.match(/^\d+/)?.[0], data.zip, data.price, data.bedrooms, data.bathrooms, data.sqft, data.yearBuilt]
+    .filter((value) => value !== null && value !== undefined).map((value) => String(value).replace(/[^0-9]/g, "")));
+  const parts = String(draft.body).split(/\n+|(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
+  const safe = parts.filter((part) => {
+    const normalized = normalizedCompositionText(part);
+    if ([...componentText].some((component) => normalized === component || normalized.startsWith(component))) return false;
+    if (findUnsupportedPropertyClaim(part, item)) return false;
+    return !(part.match(/\$?[\d][\d,]*/g) || []).some((value) => !allowedNumbers.has(value.replace(/[^0-9]/g, "")));
+  });
+  return { ...draft, body: safe.join(" ") };
+}
+
 function normalizedCompositionText(value) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9#]+/g, " ").trim();
 }
@@ -429,7 +448,7 @@ function propertyScene(asset) {
 }
 
 export function rankPropertyAssets(assets) {
-  const weights = { main_front_exterior: 120, alternate_exterior: 100, side_rear_exterior: 70, porch_patio_deck: 55, yard_land: 50, kitchen: 45, living_interior: 42, bedroom: 35, bathroom: 32, other_detail: 20, garage_outbuilding: 8, unusable: -200, unclassified: 30 };
+  const weights = { main_front_exterior: 120, alternate_exterior: 100, aerial: 75, side_rear_exterior: 70, porch: 55, patio: 55, porch_patio_deck: 55, backyard: 52, yard_land: 50, kitchen: 45, living_interior: 42, dining_room: 40, other_interior: 36, bedroom: 35, bathroom: 32, floorplan: 25, other_detail: 20, garage_outbuilding: 8, unusable: -200, unclassified: 30 };
   return assets.map((asset, sourceIndex) => ({ asset, sourceIndex, scene: propertyScene(asset), score: (weights[propertyScene(asset)] ?? 0) + (asset.tags?.includes("prospect-clear-view") ? 15 : 0) - (asset.tags?.includes("prospect-obstructed") ? 30 : 0) + (asset.qualityScore || 0) * 5 + Math.min((asset.width || 0) * (asset.height || 0) / 1_000_000, 5) }))
     .sort((a, b) => b.score - a.score || a.sourceIndex - b.sourceIndex);
 }
@@ -440,8 +459,8 @@ export function buildPropertyMediaPlan(assets) {
   const exteriors = usable.filter(({ scene }) => ["main_front_exterior", "alternate_exterior", "side_rear_exterior"].includes(scene));
   const heroPool = exteriors.length ? exteriors : usable;
   const heroFor = (index) => heroPool[Math.min(index, heroPool.length - 1)]?.asset || null;
-  const contextualSupport = usable.filter(({ scene }) => ["kitchen", "living_interior", "yard_land", "bedroom", "bathroom"].includes(scene));
-  const detailSupport = usable.filter(({ scene }) => scene === "porch_patio_deck");
+  const contextualSupport = usable.filter(({ scene }) => ["kitchen", "living_interior", "dining_room", "other_interior", "backyard", "yard_land", "bedroom", "bathroom"].includes(scene));
+  const detailSupport = usable.filter(({ scene }) => ["porch", "patio", "porch_patio_deck"].includes(scene));
   const supportPool = [...contextualSupport, ...detailSupport];
   const galleryFor = (hero, count, heroIndex) => {
     if (!hero) return [];
@@ -473,35 +492,7 @@ async function classifyPropertyAsset(asset, actor) {
 }
 
 async function cachePropertyImages(clientId, item, actor) {
-  const candidates = [...new Map([item.dataJson?.originalImageUrl, ...(item.dataJson?.images || [])]
-    .filter((url) => typeof url === "string" && /images-listings\.coldwellbanker\.com/i.test(url))
-    .filter((url) => !/mls_logos|logo|\.svg(?:\?|$)/i.test(url))
-    .map((url) => [listingPhotoKey(url), url])).values()]
-    .slice(0, 7);
-  const existing = await prisma.mediaAsset.findMany({ where: { clientId, tags: { has: `property:${item.id}` }, status: "READY", assetType: "image" }, orderBy: { createdAt: "asc" } });
-  const assets = [...existing];
-  for (const externalUrl of candidates.slice(existing.length)) {
-    try {
-      assertSafeExternalUrl(externalUrl);
-      const response = await fetch(externalUrl, { redirect: "follow", signal: AbortSignal.timeout(15_000), headers: { "User-Agent": "Squadpitch listing importer", Accept: "image/*" } });
-      if (!response.ok) continue;
-      assertSafeExternalUrl(response.url);
-      const length = Number(response.headers.get("content-length") || 0);
-      if (length > 10 * 1024 * 1024) continue;
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const mimeType = sniffImageMime(buffer);
-      if (!mimeType || buffer.length > 10 * 1024 * 1024) continue;
-      const uploaded = await getImageStorageService().upload(buffer, { folder: `squadpitch/prospects/${clientId}` });
-      assets.push(await prisma.mediaAsset.create({ data: { clientId, source: "IMPORTED", status: "READY", url: uploaded.url, publicId: uploaded.publicId, width: uploaded.width ?? null, height: uploaded.height ?? null, bytes: uploaded.bytes ?? buffer.length, mimeType, assetType: "image", filename: `property-${assets.length + 1}`, altText: `${item.title} photo ${assets.length + 1}`, tags: ["property", "prospect-preview", `property:${item.id}`], createdBy: actor } }));
-    } catch {}
-  }
-  if (!assets.length) return { item, assets: [] };
-  const classified = [];
-  for (let index = 0; index < assets.length; index += 3) classified.push(...await Promise.all(assets.slice(index, index + 3).map((asset) => classifyPropertyAsset(asset, actor))));
-  const plan = buildPropertyMediaPlan(classified);
-  const featured = plan.featured || classified[0];
-  const dataJson = { ...item.dataJson, imageUrl: featured.url, primaryMediaAssetId: featured.id };
-  return { item: await prisma.workspaceDataItem.update({ where: { id: item.id }, data: { dataJson } }), assets: classified };
+  return ingestPropertyMedia(clientId, item, actor);
 }
 
 function initialPlatformStates(channels) {
@@ -620,8 +611,9 @@ export async function executeProspectPreparation(runId) {
       const draft = await generateDraft({ clientId: prospect.clientId, kind: "POST", channel, bucketKey: "just_listed", templateType: "just_listed", guidance, createdBy: adminSub, dataItemId: item.id, contentAngle: "just_listed" });
       if (!draft || draft.status === "FAILED") { lastRejectionCategory = "GENERATION_FAILED"; continue; }
       await updatePlatformRun(runId, channel, { status: "VALIDATING", attemptCount: attempt });
-      const assembledBody = composeStructuredProspectBody(draft, channel);
-      const validation = validateStructuredProspectDraft(draft, item, channel);
+      const repairedDraft = repairStructuredProspectDraft(draft, item);
+      const assembledBody = composeStructuredProspectBody(repairedDraft, channel);
+      const validation = validateStructuredProspectDraft(repairedDraft, item, channel);
       if (!validation.valid) {
         lastRejectionCategory = validation.reason;
         if (validation.matchedText) rejectedPhrases.push(validation.matchedText.slice(0, 80));

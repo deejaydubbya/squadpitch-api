@@ -198,6 +198,15 @@ export async function generateDraft({
     ? await prisma.workspaceDataItem.findUnique({ where: { id: dataItemId } })
     : null;
 
+  // Property generation and prospect preparation share the same canonical
+  // MediaAsset/folder ingestion. Failures remain non-fatal to copy generation.
+  if (dataItem?.type === "PROPERTY") {
+    try {
+      const { ingestPropertyMedia } = await import("../propertyMedia.service.js");
+      ({ item: dataItem } = await ingestPropertyMedia(clientId, dataItem, createdBy));
+    } catch { /* source media may be unavailable; copy generation can continue */ }
+  }
+
   // Auto-select best listing for listing-type templates when no dataItem specified
   // Never auto-select for no-data idea posts
   const LISTING_TEMPLATE_TYPES = ["listing_post", "just_listed", "featured_property", "open_house", "price_drop_alert"];

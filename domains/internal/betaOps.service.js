@@ -120,6 +120,9 @@ export async function listFeedback({ search, status, type, severity, needsFollow
     where.OR = [
       { title: { contains: search, mode: "insensitive" } },
       { body: { contains: search, mode: "insensitive" } },
+      { workspaceName: { contains: search, mode: "insensitive" } },
+      { submitterEmail: { contains: search, mode: "insensitive" } },
+      { submitterName: { contains: search, mode: "insensitive" } },
       { id: { equals: search } },
     ];
   }

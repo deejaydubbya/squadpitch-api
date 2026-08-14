@@ -31,6 +31,7 @@ import { prospectPublicRouter, prospectClaimRouter } from "./domains/prospects/p
 import { sitesDashboardRouter } from "./domains/sites/sites.dashboard.routes.js";
 import { inboxRouter } from "./domains/inbox/inbox.routes.js";
 import { postmarkCanaryRouter } from "./domains/inbox/postmarkCanary.routes.js";
+import { feedbackRouter } from "./domains/feedback/feedback.routes.js";
 import { inboxWebhookRouter } from "./domains/inbox/inbox.webhook.routes.js";
 import { adsRouter } from "./domains/ads/ads.routes.js";
 import { slackRouter } from "./domains/notifications/slack.routes.js";
@@ -260,6 +261,7 @@ app.use("/api", (req, res, next) => {
 
 // Studio domain
 app.use(studioRouter);
+app.use(feedbackRouter);
 app.use(prospectClaimRouter);
 app.use(accountLifecycleRouter);
 app.use(canaryRouter);

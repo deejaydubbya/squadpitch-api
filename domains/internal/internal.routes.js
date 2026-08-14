@@ -33,6 +33,8 @@ import {
   ToggleWebhookEndpointSchema,
 } from "./internal.schemas.js";
 import { CreateProspectSchema, PopulateProspectSchema, PrepareProspectSchema, ProspectListQuerySchema, UpdateProspectPreviewSchema } from "../prospects/prospect.schemas.js";
+import { UpdateFeedbackSchema } from "../feedback/feedback.schemas.js";
+import { updateAdminFeedback } from "../feedback/feedback.service.js";
 import * as prospectService from "../prospects/prospect.service.js";
 
 export const internalRouter = Router();
@@ -541,7 +543,7 @@ internalRouter.delete(
 );
 
 // Feedback
-internalRouter.get(`${BASE}/beta/feedback`, async (req, res, next) => {
+internalRouter.get(`${BASE}/beta/feedback`, requireAdminRole, async (req, res, next) => {
   try {
     const {
       search,
@@ -569,7 +571,7 @@ internalRouter.get(`${BASE}/beta/feedback`, async (req, res, next) => {
   }
 });
 
-internalRouter.get(`${BASE}/beta/feedback/:id`, async (req, res, next) => {
+internalRouter.get(`${BASE}/beta/feedback/:id`, requireAdminRole, async (req, res, next) => {
   try {
     const fb = await betaService.getFeedback(req.params.id);
     if (!fb) return sendError(res, 404, "NOT_FOUND", "Feedback not found");
@@ -580,7 +582,7 @@ internalRouter.get(`${BASE}/beta/feedback/:id`, async (req, res, next) => {
 });
 
 // Feedback submission — open to any authenticated internal user
-internalRouter.post(`${BASE}/beta/feedback`, async (req, res, next) => {
+internalRouter.post(`${BASE}/beta/feedback`, requireAdminRole, async (req, res, next) => {
   try {
     const parsed = CreateBetaFeedbackSchema.safeParse(req.body);
     if (!parsed.success) return validationError(res, parsed.error.issues);
@@ -619,6 +621,33 @@ internalRouter.patch(
     }
   },
 );
+
+// Product feedback inbox aliases. These intentionally require the stricter
+// admin role even though the surrounding internal console permits developers.
+internalRouter.get(`${BASE}/feedback`, requireAdminRole, async (req, res, next) => {
+  try {
+    const result = await betaService.listFeedback({ ...req.query, severity: req.query.priority || undefined, limit: req.query.limit ? parseInt(req.query.limit, 10) : 50 });
+    res.json(result);
+  } catch (error) { next(error); }
+});
+
+internalRouter.get(`${BASE}/feedback/:id`, requireAdminRole, async (req, res, next) => {
+  try {
+    const feedback = await betaService.getFeedback(req.params.id);
+    if (!feedback) return sendError(res, 404, "NOT_FOUND", "Feedback not found");
+    res.json(feedback);
+  } catch (error) { next(error); }
+});
+
+internalRouter.patch(`${BASE}/feedback/:id`, requireAdminRole, async (req, res, next) => {
+  try {
+    const parsed = UpdateFeedbackSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed.error.issues);
+    const feedback = await updateAdminFeedback(req.params.id, parsed.data, req.user.id);
+    await writeAudit(req, { action: "feedback.update", resourceType: "BetaFeedback", resourceId: req.params.id, metadata: { changedKeys: Object.keys(parsed.data) } });
+    res.json(feedback);
+  } catch (error) { next(error); }
+});
 
 internalRouter.delete(
   `${BASE}/beta/feedback/:id`,

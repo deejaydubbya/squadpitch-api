@@ -7235,6 +7235,13 @@ studioRouter.post(
         req.params.id,
         parsed.data,
       );
+      if (result.dataItemId) {
+        const item = await prisma.workspaceDataItem.findUnique({ where: { id: result.dataItemId } });
+        if (item?.type === "PROPERTY") {
+          const { ingestPropertyMedia } = await import("./propertyMedia.service.js");
+          await ingestPropertyMedia(req.params.id, item, getAuth0Sub(req)).catch(() => null);
+        }
+      }
       res.status(result.created ? 201 : 200).json(result);
     } catch (err) {
       if (err?.code === "UNSAFE_URL") {
@@ -7389,6 +7396,18 @@ studioRouter.post(
           // listing (the data_item link never got recorded).
           resolvedDataItemId =
             listingResult.listing?.id ?? listingResult.existingId ?? null;
+        }
+
+        if (sourceType === "property" && resolvedDataItemId) {
+          let mediaItem = await prisma.workspaceDataItem.findUnique({ where: { id: resolvedDataItemId } });
+          const suppliedImages = Array.isArray(propertyData.images) ? propertyData.images : propertyData.imageUrl ? [propertyData.imageUrl] : [];
+          if (mediaItem && suppliedImages.length) {
+            mediaItem = await prisma.workspaceDataItem.update({ where: { id: mediaItem.id }, data: { dataJson: { ...(mediaItem.dataJson || {}), images: suppliedImages, imageUrl: propertyData.imageUrl || suppliedImages[0] } } });
+          }
+          if (mediaItem) {
+            const { ingestPropertyMedia } = await import("./propertyMedia.service.js");
+            await ingestPropertyMedia(clientId, mediaItem, actorSub).catch(() => null);
+          }
         }
 
         // Load generation context + RE assets

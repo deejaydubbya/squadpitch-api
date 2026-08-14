@@ -26,11 +26,13 @@ describe("prospect workspace release contracts", () => {
 
   it("routes prospect listing preparation through the canonical safe import and generation pipeline", () => {
     const service = read("domains/prospects/prospect.service.js");
+    const propertyMedia = read("domains/studio/propertyMedia.service.js");
     expect(service).toContain("analyzeUrl(prospect.clientId");
     expect(service).toContain("confirmUrl(prospect.clientId");
     expect(service).toContain("enrichListingById(prospect.clientId");
     expect(service).toContain("generateDraft({");
-    expect(service).toContain("assertSafeExternalUrl(externalUrl)");
+    expect(service).toContain("ingestPropertyMedia(clientId, item, actor)");
+    expect(propertyMedia).toContain("assertSafeExternalUrl(externalUrl)");
     expect(service).toContain("PROSPECT_PROPERTY_FACT_GUARD");
     expect(service).toContain("validateGeneratedPropertyBody");
     expect(service).toContain("buildVerifiedPropertyFallback");

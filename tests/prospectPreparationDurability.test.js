@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
-import { buildProspectAttemptGuidance, composeStructuredProspectBody, validateGeneratedPropertyBody, validateProspectComposition, validateStructuredProspectDraft } from "../domains/prospects/prospect.service.js";
+import { buildProspectAttemptGuidance, composeStructuredProspectBody, repairStructuredProspectDraft, validateGeneratedPropertyBody, validateProspectComposition, validateStructuredProspectDraft } from "../domains/prospects/prospect.service.js";
 
 const root = new URL("..", import.meta.url);
 const read = (path) => fs.readFileSync(new URL(path, root), "utf8");
@@ -93,6 +93,19 @@ describe("Lakewood final copy assembly", () => {
     FACEBOOK: { hooks: ["Now available in Georgetown: 203 Lakewood Lane"], body: "The property is listed at $285,000 with 3 bedrooms, 2 bathrooms, and 1,620 square feet. It was built in 1996; browse the listing photos for a closer look.", cta: "Contact us for more information or to schedule a showing.", hashtags: [] },
     LINKEDIN: { hooks: ["New property listing in Georgetown, Ohio"], body: "203 Lakewood Lane is listed at $285,000 with 3 bedrooms, 2 bathrooms, and 1,620 square feet. The property was built in 1996.", cta: "Contact the listing business for complete details or showing information.", hashtags: ["RealEstate", "PropertyListing"] },
   };
+
+  it("repairs the observed strict-attempt contract drift without admitting unsupported copy", () => {
+    const raw = {
+      hooks: ["A new property is now available."],
+      body: "A new property is now available. This 3-bedroom, 2-bathroom home at 203 Lakewood Lane in Georgetown, OH offers 1,620 square feet of living space and was built in 1996. Priced at $285,000, it’s a great opportunity for those looking to settle in this vibrant community. Contact us to review the complete listing or schedule a showing.",
+      cta: "Contact us to review the complete listing or schedule a showing.", hashtags: [],
+    };
+    const repaired = repairStructuredProspectDraft(raw, item);
+    expect(repaired.body).not.toMatch(/great opportunity|vibrant community/i);
+    expect(repaired.body).not.toContain(raw.hooks[0]);
+    expect(repaired.body).not.toContain(raw.cta);
+    expect(validateStructuredProspectDraft(repaired, item, "FACEBOOK")).toEqual({ valid: true });
+  });
 
   it.each(Object.entries(drafts))("assembles one natural, valid %s hook, CTA, and hashtag block", (channel, draft) => {
     const body = composeStructuredProspectBody(draft, channel);

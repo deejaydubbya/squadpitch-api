@@ -1613,6 +1613,9 @@ model MediaAsset {
   folderId String?
   folder   AssetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   tags     String[]     @default([])
+  propertyDataItemId String?
+  sourceKey          String?
+  propertyDataItem   WorkspaceDataItem? @relation(fields: [propertyDataItemId], references: [id], onDelete: SetNull)
 
   draftId      String?
   draft        Draft?  @relation(fields: [draftId], references: [id], onDelete: SetNull)
@@ -1649,6 +1652,8 @@ model MediaAsset {
   @@index([clientId, source])
   @@index([clientId, folderId])
   @@index([draftId])
+  @@index([propertyDataItemId])
+  @@unique([clientId, propertyDataItemId, sourceKey])
   @@map("media_assets")
 }
 
@@ -1658,11 +1663,13 @@ model AssetFolder {
   id        String   @id @default(cuid())
   clientId  String
   name      String
+  propertyDataItemId String? @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   client Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
   assets MediaAsset[]
+  propertyDataItem WorkspaceDataItem? @relation(fields: [propertyDataItemId], references: [id], onDelete: SetNull)
 
   @@unique([clientId, name])
   @@index([clientId])
@@ -2287,6 +2294,8 @@ model WorkspaceDataItem {
   performance          DataItemPerformance?
   campaigns            Campaign[]               @relation("CampaignSourceDataItem")
   prospectPreviewItems ProspectPreviewItem[]
+  mediaAssets          MediaAsset[]
+  mediaFolder          AssetFolder?
 
   @@index([clientId, status])
   @@index([clientId, type])
@@ -2535,7 +2544,7 @@ model BetaFeedback {
   userId            String // Submitter auth0Sub or User.id
   workspaceId       String?
   type              String    @default("general") // "bug", "feature_request", "ux_issue", "general", "praise", "question"
-  severity          String    @default("medium") // "critical", "high", "medium", "low"
+  severity          String    @default("normal") // priority: "urgent", "high", "normal", "low"
   title             String
   body              String    @db.Text
   route             String? // Page/route where feedback originated
@@ -2544,11 +2553,18 @@ model BetaFeedback {
   relatedEntityId   String?
   featureFlags      Json? // Snapshot at time of submission
   metadata          Json? // Browser info, app version, etc.
-  status            String    @default("new") // "new", "triaged", "in_progress", "resolved", "wont_fix", "duplicate"
+  submitterEmail    String?
+  submitterName     String?
+  workspaceName     String?
+  releaseVersion    String?
+  deviceClass       String?
+  idempotencyKey    String?   @unique
+  status            String    @default("new") // "new", "reviewing", "planned", "resolved", "closed"
   assignee          String? // Admin handling this
   internalNotes     String?   @db.Text
   needsFollowUp     Boolean   @default(false)
   resolvedAt        DateTime?
+  resolvedBy        String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
