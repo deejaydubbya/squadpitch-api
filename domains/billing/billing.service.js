@@ -13,6 +13,7 @@ import {
   STRIPE_API_VERSION,
   stripeSubscriptionStatus,
 } from "./stripeSafety.js";
+import { handleReferralStripeEvent } from "../referrals/referral.service.js";
 
 const stripe = env.STRIPE_SECRET_KEY
   ? new Stripe(env.STRIPE_SECRET_KEY, { apiVersion: STRIPE_API_VERSION })
@@ -1073,4 +1074,5 @@ export async function handleWebhookEvent(event) {
       break;
     }
   }
+  await handleReferralStripeEvent(event);
 }

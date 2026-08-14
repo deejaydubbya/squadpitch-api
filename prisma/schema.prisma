@@ -1724,6 +1724,94 @@ enum SubscriptionStatus {
   CANCELED
 }
 
+enum ReferralStatus {
+  ATTRIBUTED
+  QUALIFYING
+  REWARDED
+  DISQUALIFIED
+}
+
+enum ReferralRewardStatus {
+  PENDING
+  PROCESSING
+  GRANTED
+  FAILED
+}
+
+model ReferralCode {
+  id          String   @id @default(cuid())
+  ownerUserId String   @unique
+  code        String   @unique
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  referrals Referral[]
+
+  @@index([active])
+  @@map("referral_codes")
+}
+
+model Referral {
+  id                      String         @id @default(cuid())
+  referralCodeId          String
+  referrerUserId          String
+  referredUserId          String         @unique
+  status                  ReferralStatus @default(ATTRIBUTED)
+  attributedAt            DateTime       @default(now())
+  paidAt                  DateTime?
+  qualifyingSince         DateTime?
+  qualifiesAt             DateTime?
+  disqualifiedAt          DateTime?
+  disqualificationReason  String?
+  stripeSubscriptionId    String?
+  stripeConversionEventId String?        @unique
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+
+  referralCode ReferralCode   @relation(fields: [referralCodeId], references: [id])
+  reward       ReferralReward?
+  events       ReferralStripeEvent[]
+
+  @@index([referrerUserId, createdAt])
+  @@index([status, qualifiesAt])
+  @@map("referrals")
+}
+
+model ReferralReward {
+  id                         String               @id @default(cuid())
+  referralId                 String               @unique
+  status                     ReferralRewardStatus @default(PENDING)
+  amountCents                Int                  @default(5900)
+  currency                   String               @default("usd")
+  idempotencyKey             String               @unique
+  stripeCustomerId           String?
+  stripeBalanceTransactionId String?              @unique
+  attemptCount               Int                  @default(0)
+  lastAttemptAt              DateTime?
+  lastErrorCode              String?
+  grantedAt                  DateTime?
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
+
+  referral Referral @relation(fields: [referralId], references: [id], onDelete: Cascade)
+
+  @@index([status, lastAttemptAt])
+  @@map("referral_rewards")
+}
+
+model ReferralStripeEvent {
+  eventId    String   @id
+  eventType  String
+  referralId String?
+  processedAt DateTime @default(now())
+
+  referral Referral? @relation(fields: [referralId], references: [id], onDelete: SetNull)
+
+  @@index([referralId, processedAt])
+  @@map("referral_stripe_events")
+}
+
 model Subscription {
   id                     String             @id @default(cuid())
   userId                 String             @unique
