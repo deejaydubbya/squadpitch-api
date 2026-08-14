@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { createHash } from "node:crypto";
 import { env } from "../../config/env.js";
 import { prisma } from "../../prisma.js";
 import {
@@ -31,6 +32,10 @@ const TIER_PRICE_MAP = {
   GROWTH: env.STRIPE_GROWTH_PRICE_ID,
   AGENCY: env.STRIPE_AGENCY_PRICE_ID,
 };
+export const FREE_TRIAL_DAYS = 14;
+export const FREE_TRIAL_TIER = "PRO";
+const TRIAL_EXCLUDED_EMAIL = /(^|[+._-])(admin|canary|e2e|synthetic|test)([+._-]|@)/i;
+const trialIdentityHash = (email) => createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
 
 // ── Effective tier — single source of truth ─────────────────────────────
 //
@@ -58,7 +63,7 @@ function hasExistingBillableSubscription(sub) {
   );
 }
 
-export function getEffectiveTier(sub, internalEntitlement = null) {
+export function getEffectiveTier(sub, internalEntitlement = null, now = new Date()) {
   if (
     internalEntitlement?.active === true &&
     PAID_TIERS.includes(internalEntitlement.tier)
@@ -68,8 +73,76 @@ export function getEffectiveTier(sub, internalEntitlement = null) {
   if (!sub) return "FREE";
   if (!sub.stripeSubscriptionId) return "FREE";
   if (!ACTIVE_STATUSES.has(sub.status)) return "FREE";
+  if (sub.status === "TRIALING" && sub.trialConsumedAt && (!sub.trialEnd || new Date(sub.trialEnd) <= now)) return "FREE";
   if (!PAID_TIERS.includes(sub.tier)) return "FREE";
   return sub.tier;
+}
+
+export async function getTrialSummary(userId, now = new Date()) {
+  const [sub, user] = await Promise.all([
+    prisma.subscription.findUnique({ where: { userId } }),
+    prisma.user.findUnique({ where: { id: userId }, select: { email: true } }),
+  ]);
+  const consumption = user?.email ? await prisma.trialConsumption.findUnique({ where: { identityHash: trialIdentityHash(user.email) } }) : null;
+  const active = Boolean(sub?.status === "TRIALING" && sub.trialEnd && new Date(sub.trialEnd) > now);
+  return {
+    eligible: Boolean(user?.email && !TRIAL_EXCLUDED_EMAIL.test(user.email) && !consumption && !sub?.trialConsumedAt && !sub?.stripeSubscriptionId),
+    consumed: Boolean(consumption || sub?.trialConsumedAt),
+    active,
+    state: sub?.trialState ?? null,
+    tier: sub?.trialTier ?? null,
+    startsAt: sub?.trialStart ?? null,
+    endsAt: sub?.trialEnd ?? null,
+    stripeCustomerId: sub?.stripeCustomerId ?? null,
+    stripeSubscriptionId: sub?.stripeSubscriptionId ?? null,
+  };
+}
+
+export async function startFreeTrial({ userId, email, now = new Date(), stripeClient = requireStripe() }) {
+  if (!email || TRIAL_EXCLUDED_EMAIL.test(email)) throw Object.assign(new Error("This account is not eligible for a promotional trial"), { status: 403, code: "TRIAL_ACCOUNT_EXCLUDED" });
+  const identityHash = trialIdentityHash(email);
+  let consumption = await prisma.trialConsumption.findUnique({ where: { identityHash } });
+  if (consumption && (consumption.userId !== userId || !["INITIATING", "FAILED"].includes(consumption.state))) throw Object.assign(new Error("This identity has already consumed a trial"), { status: 409, code: "TRIAL_ALREADY_CONSUMED" });
+  const customerId = await getOrCreateCustomer(userId, email, stripeClient);
+  let current = await prisma.subscription.findUnique({ where: { userId } });
+  if (current?.stripeSubscriptionId || (current?.trialConsumedAt && !["INITIATING", "FAILED"].includes(current.trialState))) throw Object.assign(new Error("This account has already used a trial or subscription"), { status: 409, code: "TRIAL_ALREADY_CONSUMED" });
+
+  if (!current?.trialConsumedAt) {
+    const history = await stripeClient.subscriptions.list({ customer: customerId, status: "all", limit: 100 });
+    if (history.data.length > 0) throw Object.assign(new Error("Stripe history makes this account ineligible for a new trial"), { status: 409, code: "TRIAL_STRIPE_HISTORY" });
+  }
+  if (!TIER_PRICE_MAP[FREE_TRIAL_TIER]) throw Object.assign(new Error("Trial plan is not configured"), { status: 503, code: "TRIAL_PLAN_NOT_CONFIGURED" });
+  if (!consumption) {
+    try { consumption = await prisma.trialConsumption.create({ data: { identityHash, userId, consumedAt: now, state: "INITIATING" } }); }
+    catch (error) { if (error?.code === "P2002") throw Object.assign(new Error("This identity has already consumed a trial"), { status: 409, code: "TRIAL_ALREADY_CONSUMED" }); throw error; }
+  }
+
+  const reserved = await prisma.subscription.updateMany({
+    where: { userId, stripeSubscriptionId: null, OR: [{ trialConsumedAt: null }, { trialState: { in: ["INITIATING", "FAILED"] } }] },
+    data: { trialConsumedAt: current?.trialConsumedAt ?? now, trialState: "INITIATING", trialTier: FREE_TRIAL_TIER },
+  });
+  if (reserved.count !== 1) throw Object.assign(new Error("Trial is no longer available"), { status: 409, code: "TRIAL_ALREADY_CONSUMED" });
+
+  try {
+    const created = await stripeClient.subscriptions.create({
+      customer: customerId,
+      items: [{ price: TIER_PRICE_MAP[FREE_TRIAL_TIER] }],
+      trial_period_days: FREE_TRIAL_DAYS,
+      trial_settings: { end_behavior: { missing_payment_method: "cancel" } },
+      payment_settings: { save_default_payment_method: "on_subscription" },
+      metadata: { userId, tier: FREE_TRIAL_TIER, squadpitchTrial: "true" },
+    }, { idempotencyKey: `free-trial:${userId}` });
+    const startsAt = new Date(created.trial_start * 1000);
+    const endsAt = new Date(created.trial_end * 1000);
+    const saved = await prisma.subscription.update({ where: { userId }, data: { stripeSubscriptionId: created.id, tier: FREE_TRIAL_TIER, status: "TRIALING", trialStart: startsAt, trialEnd: endsAt, trialState: "ACTIVE", currentPeriodEnd: endsAt, cancelAtPeriodEnd: false } });
+    await prisma.trialConsumption.update({ where: { id: consumption.id }, data: { state: "ACTIVE", stripeCustomerId: customerId, stripeSubscriptionId: created.id } });
+    logEvent("billing.trial.started", { userId, tier: FREE_TRIAL_TIER, stripeSubscriptionId: created.id, endsAt });
+    return saved;
+  } catch (error) {
+    await prisma.subscription.updateMany({ where: { userId, stripeSubscriptionId: null }, data: { trialState: "FAILED" } });
+    await prisma.trialConsumption.updateMany({ where: { id: consumption.id, stripeSubscriptionId: null }, data: { state: "FAILED" } });
+    throw error;
+  }
 }
 
 export function getHighestInternalEntitlement(entitlements = []) {
@@ -176,8 +249,8 @@ export async function getPlans() {
 
 // ── Customer management ──────────────────────────────────────────────────
 
-export async function getOrCreateCustomer(userId, email) {
-  const s = requireStripe();
+export async function getOrCreateCustomer(userId, email, stripeClient = requireStripe()) {
+  const s = stripeClient;
   const existing = await prisma.subscription.findUnique({ where: { userId } });
   if (existing?.stripeCustomerId) return existing.stripeCustomerId;
 
@@ -980,10 +1053,14 @@ export async function handleWebhookEvent(event) {
           ...(sub.metadata?.tier && !syncedTier && { tier: sub.metadata.tier }),
           ...(periodEnd && { currentPeriodEnd: new Date(periodEnd * 1000) }),
           cancelAtPeriodEnd: sub.cancel_at_period_end,
+          ...(sub.trial_start && { trialStart: new Date(sub.trial_start * 1000), trialConsumedAt: dbSub.trialConsumedAt ?? new Date(sub.trial_start * 1000) }),
+          ...(sub.trial_end && { trialEnd: new Date(sub.trial_end * 1000) }),
+          ...(dbSub.trialConsumedAt && { trialState: status === "TRIALING" ? "ACTIVE" : status === "ACTIVE" ? "CONVERTED" : "EXPIRED" }),
           lastStripeEventId: event.id,
           lastStripeEventCreated: event.created,
         },
       });
+      if (dbSub.trialConsumedAt && prisma.trialConsumption) await prisma.trialConsumption.updateMany({ where: { stripeSubscriptionId: sub.id }, data: { state: status === "TRIALING" ? "ACTIVE" : status === "ACTIVE" ? "CONVERTED" : "EXPIRED" } });
 
       // Emit a tier-change event only when the tier actually moved.
       if (newTier !== dbSub.tier) {
@@ -1019,10 +1096,12 @@ export async function handleWebhookEvent(event) {
         where: { stripeSubscriptionId: sub.id },
         data: {
           status: "CANCELED",
+          ...(guard.sub?.trialConsumedAt && { trialState: guard.sub?.trialEnd && guard.sub.trialEnd <= new Date(event.created * 1000) ? "EXPIRED" : "CANCELED" }),
           lastStripeEventId: event.id,
           lastStripeEventCreated: event.created,
         },
       });
+      if (prisma.trialConsumption) await prisma.trialConsumption.updateMany({ where: { stripeSubscriptionId: sub.id }, data: { state: guard.sub?.trialEnd && guard.sub.trialEnd <= new Date(event.created * 1000) ? "EXPIRED" : "CANCELED" } });
       break;
     }
 
@@ -1031,6 +1110,7 @@ export async function handleWebhookEvent(event) {
       const invoice = event.data.object;
       const subId = invoice.subscription;
       if (!subId) break;
+      if (invoice.amount_paid === 0 && (invoice.amount_due ?? 0) === 0) break;
 
       const guard = await shouldProcessEvent(event, {
         stripeSubscriptionId: subId,
@@ -1047,6 +1127,7 @@ export async function handleWebhookEvent(event) {
           lastStripeEventCreated: event.created,
         },
       });
+      if (prisma.trialConsumption) await prisma.trialConsumption.updateMany({ where: { stripeSubscriptionId: subId }, data: { state: "CONVERTED" } });
       break;
     }
 

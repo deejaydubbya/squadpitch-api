@@ -394,8 +394,8 @@ model ProspectWorkspace {
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
 
-  client       Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  previewItems ProspectPreviewItem[]
+  client          Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  previewItems    ProspectPreviewItem[]
   preparationRuns ProspectPreparationRun[]
 
   @@index([claimStatus, claimExpiresAt])
@@ -423,23 +423,23 @@ enum ProspectPreparationStage {
 }
 
 model ProspectPreparationRun {
-  id                  String                      @id @default(cuid())
+  id                  String                    @id @default(cuid())
   prospectWorkspaceId String
   requestedBy         String
   sourceUrl           String?
-  status              ProspectPreparationStatus  @default(QUEUED)
-  stage               ProspectPreparationStage   @default(QUEUED)
+  status              ProspectPreparationStatus @default(QUEUED)
+  stage               ProspectPreparationStage  @default(QUEUED)
   platformStates      Json
-  readyCount          Int                         @default(0)
-  expectedCount       Int                         @default(3)
-  warningCount        Int                         @default(0)
+  readyCount          Int                       @default(0)
+  expectedCount       Int                       @default(3)
+  warningCount        Int                       @default(0)
   failureCode         String?
-  failureMessage      String?                     @db.Text
+  failureMessage      String?                   @db.Text
   startedAt           DateTime?
   heartbeatAt         DateTime?
   completedAt         DateTime?
-  createdAt           DateTime                    @default(now())
-  updatedAt           DateTime                    @updatedAt
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
 
   prospectWorkspace ProspectWorkspace @relation(fields: [prospectWorkspaceId], references: [id], onDelete: Cascade)
 
@@ -1610,9 +1610,9 @@ model MediaAsset {
   altText  String? @db.Text
   caption  String?
 
-  folderId String?
-  folder   AssetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  tags     String[]     @default([])
+  folderId           String?
+  folder             AssetFolder?       @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  tags               String[]           @default([])
   propertyDataItemId String?
   sourceKey          String?
   propertyDataItem   WorkspaceDataItem? @relation(fields: [propertyDataItemId], references: [id], onDelete: SetNull)
@@ -1648,27 +1648,27 @@ model MediaAsset {
   // we want each FK clearly attributed.
   adCreativesAsPrimary AdCreative[] @relation("AdCreativePrimaryAsset")
 
+  @@unique([clientId, propertyDataItemId, sourceKey])
   @@index([clientId, status])
   @@index([clientId, source])
   @@index([clientId, folderId])
   @@index([draftId])
   @@index([propertyDataItemId])
-  @@unique([clientId, propertyDataItemId, sourceKey])
   @@map("media_assets")
 }
 
 // ── Asset Folders ─────────────────────────────────────────────────────
 
 model AssetFolder {
-  id        String   @id @default(cuid())
-  clientId  String
-  name      String
-  propertyDataItemId String? @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  clientId           String
+  name               String
+  propertyDataItemId String?  @unique
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  client Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  assets MediaAsset[]
+  client           Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  assets           MediaAsset[]
   propertyDataItem WorkspaceDataItem? @relation(fields: [propertyDataItemId], references: [id], onDelete: SetNull)
 
   @@unique([clientId, name])
@@ -1769,7 +1769,7 @@ model Referral {
   createdAt               DateTime       @default(now())
   updatedAt               DateTime       @updatedAt
 
-  referralCode ReferralCode   @relation(fields: [referralCodeId], references: [id])
+  referralCode ReferralCode          @relation(fields: [referralCodeId], references: [id])
   reward       ReferralReward?
   events       ReferralStripeEvent[]
 
@@ -1801,9 +1801,9 @@ model ReferralReward {
 }
 
 model ReferralStripeEvent {
-  eventId    String   @id
-  eventType  String
-  referralId String?
+  eventId     String   @id
+  eventType   String
+  referralId  String?
   processedAt DateTime @default(now())
 
   referral Referral? @relation(fields: [referralId], references: [id], onDelete: SetNull)
@@ -1821,6 +1821,11 @@ model Subscription {
   status                 SubscriptionStatus @default(ACTIVE)
   currentPeriodEnd       DateTime?
   cancelAtPeriodEnd      Boolean            @default(false)
+  trialConsumedAt        DateTime?
+  trialStart             DateTime?
+  trialEnd               DateTime?
+  trialTier              PlanTier?
+  trialState             String?
   // Stripe webhook ordering guard. Older events (delayed retries, network
   // re-orderings) must not overwrite newer subscription state.
   // `lastStripeEventCreated` is the unix-second timestamp of the most
@@ -1832,7 +1837,23 @@ model Subscription {
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
+  @@index([trialState, trialEnd])
   @@map("subscriptions")
+}
+
+model TrialConsumption {
+  id                   String   @id @default(cuid())
+  identityHash         String   @unique
+  userId               String
+  consumedAt           DateTime @default(now())
+  state                String
+  stripeCustomerId     String?
+  stripeSubscriptionId String?  @unique
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([userId, consumedAt])
+  @@map("trial_consumptions")
 }
 
 // Explicit, operator-controlled access that is independent from Stripe.

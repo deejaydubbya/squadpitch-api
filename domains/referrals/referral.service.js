@@ -106,6 +106,7 @@ export async function handleReferralStripeEvent(event, { now = new Date(event.cr
     return await prismaClient.$transaction(async (tx) => {
       await tx.referralStripeEvent.create({ data: { eventId: event.id, eventType: event.type, referralId: referral.id } });
       if (event.type === "invoice.paid") {
+        if (object.amount_paid === 0 && (object.amount_due ?? 0) === 0) return { ignored: true, reason: "zero_value_invoice" };
         const qualifiesAt = new Date(now.getTime() + QUALIFICATION_MS);
         await tx.referral.update({ where: { id: referral.id }, data: { status: "QUALIFYING", paidAt: referral.paidAt ?? now, qualifyingSince: referral.qualifyingSince ?? now, qualifiesAt: referral.qualifiesAt ?? qualifiesAt, stripeSubscriptionId: typeof object.subscription === "string" ? object.subscription : object.subscription?.id, stripeConversionEventId: referral.stripeConversionEventId ?? event.id } });
         return { qualifying: true };

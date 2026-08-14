@@ -56,6 +56,14 @@ billingRouter.get(`${BASE}/subscription`, async (req, res, next) => {
   }
 });
 
+billingRouter.get(`${BASE}/trial`, async (req, res, next) => {
+  try { res.json(await billingService.getTrialSummary(req.user.id)); } catch (err) { next(err); }
+});
+
+billingRouter.post(`${BASE}/trial/start`, async (req, res, next) => {
+  try { res.status(201).json(await billingService.startFreeTrial({ userId: req.user.id, email: req.user.email })); } catch (err) { next(err); }
+});
+
 // ── Get plans (prices from Stripe) ──────────────────────────────────────
 
 billingRouter.get(`${BASE}/plans`, async (req, res, next) => {

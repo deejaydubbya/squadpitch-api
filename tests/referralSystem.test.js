@@ -114,6 +114,12 @@ describe("referral billing lifecycle", () => {
     expect(db.referral.update).toHaveBeenCalledWith({ where: { id: "ref-1" }, data: expect.objectContaining({ status: "QUALIFYING", qualifyingSince: now, qualifiesAt: new Date("2026-01-15T00:00:00Z") }) });
   });
 
+  it("does not treat a zero-dollar trial invoice as paid conversion", async () => {
+    const db = eventDb();
+    await expect(service.handleReferralStripeEvent({ id: "evt_trial", type: "invoice.paid", data: { object: { subscription: "sub_1", amount_paid: 0 } } }, { prismaClient: db })).resolves.toEqual({ ignored: true, reason: "zero_value_invoice" });
+    expect(db.referral.update).not.toHaveBeenCalled();
+  });
+
   it("deduplicates repeated Stripe webhook delivery", async () => {
     const db = eventDb();
     db.$transaction.mockRejectedValue({ code: "P2002" });

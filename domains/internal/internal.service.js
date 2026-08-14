@@ -126,7 +126,7 @@ export async function getWorkspaceDetail(clientId) {
   if (owner) {
     subscription = await prisma.subscription.findUnique({
       where: { userId: owner.id },
-      select: { tier: true, status: true, currentPeriodEnd: true, cancelAtPeriodEnd: true },
+      select: { tier: true, status: true, currentPeriodEnd: true, cancelAtPeriodEnd: true, trialConsumedAt: true, trialStart: true, trialEnd: true, trialState: true, stripeCustomerId: true, stripeSubscriptionId: true },
     });
   }
 
