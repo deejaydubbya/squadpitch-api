@@ -83,15 +83,21 @@ describe("referral identity and capture", () => {
     await expect(service.attachReferralAttribution({ captureToken, user: { id: "old", email: "old@example.com", createdAt: new Date("2025-12-01") }, now, prismaClient: base })).rejects.toMatchObject({ code: "REFERRAL_EXISTING_ACCOUNT" });
   });
 
-  it("allows only the dedicated E2E user to own a code without synthetic attribution", async () => {
+  it("allows the dedicated E2E referrer while retaining synthetic controls", async () => {
     const referralCode = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ code: "ABCDEFGH2345" }) };
     await expect(service.getOrCreateReferralCode({ id: "e2e", email: "e2e-user@squadpitch.com" }, { referralCode })).resolves.toMatchObject({ code: "ABCDEFGH2345" });
     await expect(service.getOrCreateReferralCode({ id: "admin", email: "e2e-admin@squadpitch.com" }, { referralCode })).rejects.toMatchObject({ code: "REFERRAL_ACCOUNT_EXCLUDED" });
 
     const now = new Date("2026-01-02T00:00:00Z");
     const captureToken = tokens.issueReferralCapture("code-e2e", now);
-    const db = { referral: { findUnique: vi.fn().mockResolvedValue(null) }, referralCode: { findFirst: vi.fn().mockResolvedValue({ id: "code-e2e", ownerUserId: "e2e", active: true }) }, user: { findUnique: vi.fn().mockResolvedValue({ email: "e2e-user@squadpitch.com" }) } };
-    await expect(service.attachReferralAttribution({ captureToken, user: { id: "real-user", email: "real@example.com", createdAt: now }, now, prismaClient: db })).rejects.toMatchObject({ code: "REFERRAL_OWNER_EXCLUDED" });
+    const create = vi.fn().mockResolvedValue({ id: "ref-e2e" });
+    const db = { referral: { findUnique: vi.fn().mockResolvedValue(null), findFirst: vi.fn().mockResolvedValue(null), create }, referralCode: { findFirst: vi.fn().mockResolvedValue({ id: "code-e2e", ownerUserId: "e2e", active: true }) }, user: { findUnique: vi.fn().mockResolvedValue({ email: "e2e-user@squadpitch.com" }) }, subscription: { findUnique: vi.fn().mockResolvedValue(null) } };
+    await expect(service.attachReferralAttribution({ captureToken, user: { id: "real-user", email: "real@example.com", createdAt: now }, now, prismaClient: db })).resolves.toEqual({ attached: true, idempotent: false });
+    expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({ referrerUserId: "e2e", referredUserId: "real-user" }) });
+
+    db.referral.findUnique.mockResolvedValue(null);
+    db.user.findUnique.mockResolvedValue({ email: "synthetic-owner@example.com" });
+    await expect(service.attachReferralAttribution({ captureToken, user: { id: "second-real-user", email: "second@example.com", createdAt: now }, now, prismaClient: db })).rejects.toMatchObject({ code: "REFERRAL_OWNER_EXCLUDED" });
   });
 });
 
