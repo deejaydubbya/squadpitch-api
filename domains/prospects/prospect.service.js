@@ -516,6 +516,36 @@ async function updatePlatformRun(runId, channel, patch) {
   return updatePreparationRun(runId, { platformStates: { ...current, [channel]: { ...current[channel], ...patch, updatedAt: new Date().toISOString() } } });
 }
 
+export async function reconcileProspectPreparationRuns() {
+  const staleRunningBefore = new Date(Date.now() - 15 * 60_000);
+  const staleQueuedBefore = new Date(Date.now() - 2 * 60 * 60_000);
+  const activeRuns = await prisma.prospectPreparationRun.findMany({
+    where: { status: { in: ["QUEUED", "RUNNING"] } },
+    select: { id: true, prospectWorkspaceId: true, status: true, heartbeatAt: true },
+  });
+  const stale = activeRuns.filter((run) => run.heartbeatAt < (run.status === "QUEUED" ? staleQueuedBefore : staleRunningBefore));
+  const staleIds = new Set(stale.map((run) => run.id));
+  const queuedWorkspaceIds = activeRuns.filter((run) => run.status === "QUEUED" && !staleIds.has(run.id)).map((run) => run.prospectWorkspaceId);
+  const runningWorkspaceIds = activeRuns.filter((run) => run.status === "RUNNING" && !staleIds.has(run.id)).map((run) => run.prospectWorkspaceId);
+  const results = await prisma.$transaction([
+    ...(stale.length ? [
+      prisma.prospectPreparationRun.updateMany({ where: { id: { in: stale.map((run) => run.id) }, status: { in: ["QUEUED", "RUNNING"] } }, data: { status: "FAILED", stage: "FAILED", failureCode: "STALE_RUN", failureMessage: "Preparation stopped reporting progress and can be retried.", completedAt: new Date() } }),
+      prisma.agentOutreachProspect.updateMany({ where: { prospectWorkspaceId: { in: stale.map((run) => run.prospectWorkspaceId) }, status: { in: ["PREVIEW_PENDING", "PREVIEW_GENERATING"] } }, data: { status: "PREVIEW_FAILED", lastError: "Preparation stopped reporting progress and can be retried." } }),
+    ] : []),
+    ...(queuedWorkspaceIds.length ? [prisma.agentOutreachProspect.updateMany({ where: { prospectWorkspaceId: { in: queuedWorkspaceIds }, status: "PREVIEW_GENERATING" }, data: { status: "PREVIEW_PENDING" } })] : []),
+    ...(runningWorkspaceIds.length ? [prisma.agentOutreachProspect.updateMany({ where: { prospectWorkspaceId: { in: runningWorkspaceIds }, status: "PREVIEW_PENDING" }, data: { status: "PREVIEW_GENERATING" } })] : []),
+    prisma.agentOutreachProspect.updateMany({
+      where: {
+        status: { in: ["PREVIEW_PENDING", "PREVIEW_GENERATING"] },
+        updatedAt: { lt: staleRunningBefore },
+        prospectWorkspace: { preparationRuns: { none: { status: { in: ["QUEUED", "RUNNING"] } } } },
+      },
+      data: { status: "PREVIEW_FAILED", lastError: "Preview preparation is no longer active and can be retried." },
+    }),
+  ]);
+  return { stale: stale.length, queued: queuedWorkspaceIds.length, running: runningWorkspaceIds.length, orphaned: results.at(-1)?.count || 0 };
+}
+
 export async function startProspectPreparation(id, input, adminSub) {
   let prospect = await prisma.prospectWorkspace.findUnique({ where: { id }, include: { client: { select: { lifecycle: true, industryKey: true } } } });
   if (!prospect || prospect.client.lifecycle !== "PROSPECT") throw Object.assign(new Error("Prospect workspace not found"), { status: 404, code: "NOT_FOUND" });
@@ -567,6 +597,10 @@ export async function executeProspectPreparation(runId) {
   if (!run || !["QUEUED", "RUNNING"].includes(run.status)) return run;
   await updatePreparationRun(runId, { status: "RUNNING", stage: "IMPORTING_LISTING", startedAt: run.startedAt || new Date() });
   const id = run.prospectWorkspaceId;
+  await prisma.agentOutreachProspect.updateMany({
+    where: { prospectWorkspaceId: id, status: { in: ["PREVIEW_PENDING", "PREVIEW_GENERATING"] } },
+    data: { status: "PREVIEW_GENERATING", lastError: null },
+  });
   const input = { sourceUrl: run.sourceUrl || undefined };
   const adminSub = run.requestedBy;
   const prospect = await prisma.prospectWorkspace.findUnique({ where: { id }, include: { client: true } });

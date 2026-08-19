@@ -4,6 +4,7 @@ const sendMail = vi.fn();
 const verify = vi.fn();
 const createProspect = vi.fn();
 const startProspectPreparation = vi.fn();
+const reconcileProspectPreparationRuns = vi.fn();
 const createTransport = vi.fn(() => ({ sendMail, verify }));
 const prismaMock = {
   agentDiscoveryRun: { create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
@@ -18,7 +19,7 @@ vi.mock("../prisma.js", () => ({ prisma: prismaMock }));
 vi.mock("nodemailer", () => ({ default: { createTransport } }));
 vi.mock("../config/env.js", () => ({ env: { APP_URL: "https://app.squadpitch.test" } }));
 vi.mock("../lib/tokenCrypto.js", () => ({ encryptToken: vi.fn((value) => `encrypted:${value}`), decryptToken: vi.fn((value) => value.replace(/^encrypted:/, "")) }));
-vi.mock("../domains/prospects/prospect.service.js", () => ({ createProspect, startProspectPreparation, digestSecret: vi.fn((value) => `digest:${value}`) }));
+vi.mock("../domains/prospects/prospect.service.js", () => ({ createProspect, startProspectPreparation, reconcileProspectPreparationRuns, digestSecret: vi.fn((value) => `digest:${value}`) }));
 
 const service = await import("../domains/prospects/outreach.service.js");
 
@@ -112,10 +113,10 @@ describe("agent outreach safety", () => {
     prismaMock.agentOutreachProspect.update.mockResolvedValue({});
     startProspectPreparation.mockResolvedValue({ run: { id: "run" } });
 
-    await expect(service.generatePreview("ready", "admin")).resolves.toEqual({ id: "ready", status: "PREVIEW_GENERATING" });
+    await expect(service.generatePreview("ready", "admin")).resolves.toEqual({ id: "ready", status: "PREVIEW_PENDING" });
 
     expect(createProspect).not.toHaveBeenCalled();
-    expect(prismaMock.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "ready" }, data: expect.objectContaining({ status: "PREVIEW_GENERATING", events: { create: { type: "preview_requeued" } } }) }));
+    expect(prismaMock.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "ready" }, data: expect.objectContaining({ status: "PREVIEW_PENDING", events: { create: { type: "preview_requeued" } } }) }));
     expect(startProspectPreparation).toHaveBeenCalledWith("workspace", expect.objectContaining({ selectedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] }), "admin");
   });
 
@@ -205,11 +206,11 @@ describe("agent outreach safety", () => {
     prismaMock.agentOutreachProspect.findUnique.mockResolvedValueOnce(qualified);
     createProspect.mockResolvedValue({ id: "p1", previewToken: "preview-token", claimToken: "claim-token" });
     startProspectPreparation.mockResolvedValue({ run: { id: "run1" } });
-    prismaMock.agentOutreachProspect.update.mockResolvedValue({ ...qualified, status: "PREVIEW_GENERATING" });
-    await expect(service.generatePreview("o1", "admin")).resolves.toEqual({ id: "o1", status: "PREVIEW_GENERATING" });
+    prismaMock.agentOutreachProspect.update.mockResolvedValue({ ...qualified, status: "PREVIEW_PENDING" });
+    await expect(service.generatePreview("o1", "admin")).resolves.toEqual({ id: "o1", status: "PREVIEW_PENDING" });
     expect(createProspect).toHaveBeenCalledWith(expect.objectContaining({ selectedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] }), "admin");
     expect(startProspectPreparation).toHaveBeenCalledWith("p1", expect.objectContaining({ selectedListings: [qualified.listings[0], qualified.listings[0], qualified.listings[0]] }), "admin");
-    expect(prismaMock.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ prospectWorkspaceId: "p1", status: "PREVIEW_GENERATING", claimUrlEncrypted: expect.stringContaining("#claim=claim-token") }) }));
+    expect(prismaMock.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ prospectWorkspaceId: "p1", status: "PREVIEW_PENDING", claimUrlEncrypted: expect.stringContaining("#claim=claim-token") }) }));
 
     const ready = { ...qualified, status: "READY_TO_EMAIL", claimUrlEncrypted: "encrypted:https://app.squadpitch.test/preview/preview-token#claim=claim-token", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: { id: "a1", displayName: "Test Sender" }, activeListingCount: 1 };
     prismaMock.agentOutreachProspect.findUnique.mockResolvedValueOnce(ready);

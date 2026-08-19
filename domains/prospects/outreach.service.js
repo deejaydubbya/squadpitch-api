@@ -5,7 +5,7 @@ import { prisma } from "../../prisma.js";
 import { env } from "../../config/env.js";
 import { assertSafeExternalUrl } from "../studio/urlCampaignIntake.service.js";
 import { encryptToken, decryptToken } from "../../lib/tokenCrypto.js";
-import { createProspect, digestSecret, startProspectPreparation } from "./prospect.service.js";
+import { createProspect, digestSecret, reconcileProspectPreparationRuns, startProspectPreparation } from "./prospect.service.js";
 import { getDiscoveryProvider } from "./discovery/providers.js";
 import { normalizePublicUrl } from "./discovery/urlIdentity.js";
 
@@ -293,6 +293,7 @@ export async function resumeDiscovery(id, options = {}) {
 }
 
 export async function listPipeline() {
+  await reconcileProspectPreparationRuns();
   await syncClaimed();
   const [prospects, runs, accounts, template] = await Promise.all([
     prisma.agentOutreachProspect.findMany({ include: { events: { orderBy: { createdAt: "desc" }, take: 20 }, prospectWorkspace: { select: { claimStatus: true, claimedAt: true } }, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } }, orderBy: { discoveredAt: "desc" } }),
@@ -325,12 +326,12 @@ export async function generatePreview(id, adminSub) {
     const origin = publicAppOrigin();
     const previewUrl = `${origin}/preview/${issued.previewToken}`;
     const claimUrl = `${previewUrl}#claim=${issued.claimToken}`;
-    await prisma.agentOutreachProspect.update({ where: { id }, data: { prospectWorkspaceId: workspaceId, status: "PREVIEW_GENERATING", previewUrlEncrypted: encryptToken(previewUrl), claimUrlEncrypted: encryptToken(claimUrl), events: { create: { type: "preview_queued" } } } });
+    await prisma.agentOutreachProspect.update({ where: { id }, data: { prospectWorkspaceId: workspaceId, status: "PREVIEW_PENDING", previewUrlEncrypted: encryptToken(previewUrl), claimUrlEncrypted: encryptToken(claimUrl), events: { create: { type: "preview_queued" } } } });
   } else {
-    await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "PREVIEW_GENERATING", lastError: null, events: { create: { type: "preview_requeued" } } } });
+    await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "PREVIEW_PENDING", lastError: null, events: { create: { type: "preview_requeued" } } } });
   }
   await startProspectPreparation(workspaceId, { sourceUrl, selectedListings, selectedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] }, adminSub);
-  return { id, status: "PREVIEW_GENERATING" };
+  return { id, status: "PREVIEW_PENDING" };
 }
 
 function render(template, values) { return template.replace(/{{\s*([a-z_]+)\s*}}/g, (_m, key) => values[key] ?? ""); }

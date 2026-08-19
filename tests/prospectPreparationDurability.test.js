@@ -27,6 +27,16 @@ describe("durable prospect preparation", () => {
     expect(service).toContain("COMPLETE_WITH_WARNINGS");
   });
 
+  it("distinguishes queued previews from actively generating previews and reconciles abandoned work", () => {
+    const prospectService = read("domains/prospects/prospect.service.js");
+    const outreachService = read("domains/prospects/outreach.service.js");
+    expect(outreachService).toContain('status: "PREVIEW_PENDING"');
+    expect(prospectService).toContain('data: { status: "PREVIEW_GENERATING", lastError: null }');
+    expect(prospectService).toContain("staleQueuedBefore");
+    expect(prospectService).toContain("staleRunningBefore");
+    expect(outreachService).toContain("reconcileProspectPreparationRuns");
+  });
+
   it("persists selected channels and derives generation and expected counts from them", () => {
     const schema = read("prisma/schema.prisma");
     const service = read("domains/prospects/prospect.service.js");
