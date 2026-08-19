@@ -32,7 +32,9 @@ describe("durable prospect preparation", () => {
     const service = read("domains/prospects/prospect.service.js");
     expect(schema).toContain("selectedChannels  String[]");
     expect(service).toContain("expectedCount: selectedChannels.length");
-    expect(service).toContain("for (const channel of selectedChannels)");
+    expect(service).toContain("for (const [channelIndex, channel] of selectedChannels.entries())");
+    expect(service).toContain("listingSelections[channelIndex % listingSelections.length]");
+    expect(service).toContain("dataItemId: item.id");
     expect(service).toContain("preferredChannels: normalizeProspectChannels(row.selectedChannels)");
     expect(service).not.toContain('for (const channel of ["INSTAGRAM", "FACEBOOK", "LINKEDIN"])');
   });

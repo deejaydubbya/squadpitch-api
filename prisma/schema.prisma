@@ -594,6 +594,7 @@ model ProspectPreparationRun {
   prospectWorkspaceId String
   requestedBy         String
   sourceUrl           String?
+  selectedListings    Json?
   status              ProspectPreparationStatus @default(QUEUED)
   stage               ProspectPreparationStage  @default(QUEUED)
   platformStates      Json

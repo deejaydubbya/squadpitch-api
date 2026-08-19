@@ -530,7 +530,7 @@ export async function startProspectPreparation(id, input, adminSub) {
   await prisma.prospectPreparationRun.updateMany({ where: { prospectWorkspaceId: id, status: { in: ["QUEUED", "RUNNING"] }, heartbeatAt: { lt: staleBefore } }, data: { status: "FAILED", stage: "FAILED", failureCode: "STALE_RUN", failureMessage: "Preparation stopped reporting progress and can be retried.", completedAt: new Date() } });
   let run;
   try {
-    run = await prisma.prospectPreparationRun.create({ data: { prospectWorkspaceId: id, requestedBy: adminSub, sourceUrl: input.sourceUrl || null, platformStates: initialPlatformStates(selectedChannels), expectedCount: selectedChannels.length, heartbeatAt: new Date() } });
+    run = await prisma.prospectPreparationRun.create({ data: { prospectWorkspaceId: id, requestedBy: adminSub, sourceUrl: input.sourceUrl || null, selectedListings: input.selectedListings || undefined, platformStates: initialPlatformStates(selectedChannels), expectedCount: selectedChannels.length, heartbeatAt: new Date() } });
   } catch (error) {
     if (error?.code !== "P2002") throw error;
     run = await prisma.prospectPreparationRun.findFirst({ where: { prospectWorkspaceId: id, status: { in: ["QUEUED", "RUNNING"] } }, orderBy: { createdAt: "desc" } });
@@ -572,38 +572,51 @@ export async function executeProspectPreparation(runId) {
   const prospect = await prisma.prospectWorkspace.findUnique({ where: { id }, include: { client: true } });
   if (!prospect || prospect.client.lifecycle !== "PROSPECT") throw Object.assign(new Error("Prospect workspace not found"), { status: 404, code: "NOT_FOUND" });
   if (prospect.client.industryKey !== "real_estate") throw importFailure("Automatic listing preparation is currently available for Real Estate prospects only");
-  const sourceUrl = input.sourceUrl || prospect.sourceUrl;
-  if (!sourceUrl) throw importFailure("No listing URL was supplied", { actions: ["ENTER_PROPERTY_ADDRESS", "ADD_PROPERTY_MANUALLY"] });
+  const requestedListings = Array.isArray(run.selectedListings) && run.selectedListings.length ? run.selectedListings : [{ listingUrl: input.sourceUrl || prospect.sourceUrl }];
+  const listingSelections = requestedListings.map((listing) => ({ ...listing, sourceUrl: listing.listingUrl || listing.sourceUrl })).filter((listing) => listing.sourceUrl);
+  if (!listingSelections.length) throw importFailure("No listing URL was supplied", { actions: ["ENTER_PROPERTY_ADDRESS", "ADD_PROPERTY_MANUALLY"] });
 
-  const analysis = await analyzeUrl(prospect.clientId, { url: sourceUrl });
-  const candidate = analysis.detectedType === "single_listing" ? analysis.listings?.[0] : null;
-  if (!candidate?.normalized || !isUsableProspectListing(candidate.normalized, analysis.confidence) || candidate.validation?.valid === false) {
-    throw importFailure("We couldn't import this listing automatically.", { actions: ["RETRY_IMPORT", "ENTER_PROPERTY_ADDRESS", "ADD_PROPERTY_MANUALLY"], reason: analysis.reason || analysis.detectedType });
+  const listingContexts = new Map();
+  for (const selection of listingSelections) {
+    if (listingContexts.has(selection.sourceUrl)) continue;
+    const analysis = await analyzeUrl(prospect.clientId, { url: selection.sourceUrl });
+    const candidate = analysis.detectedType === "single_listing" ? analysis.listings?.[0] : null;
+    if (!candidate?.normalized || !isUsableProspectListing(candidate.normalized, analysis.confidence) || candidate.validation?.valid === false) {
+      throw importFailure("We couldn't import this listing automatically.", { actions: ["RETRY_IMPORT", "ENTER_PROPERTY_ADDRESS", "ADD_PROPERTY_MANUALLY"], reason: analysis.reason || analysis.detectedType });
+    }
+    const selectedListing = { ...fillAddressFromTitle(candidate.normalized), sourceUrl: selection.sourceUrl };
+    const confirmed = await confirmUrl(prospect.clientId, { url: selection.sourceUrl, selectedListing });
+    await updatePreparationRun(runId, { stage: "ENRICHING" });
+    await enrichListingById(prospect.clientId, confirmed.dataItemId).catch(() => null);
+    let item = await prisma.workspaceDataItem.findFirst({ where: { id: confirmed.dataItemId, clientId: prospect.clientId, type: "PROPERTY", status: "ACTIVE" } });
+    if (!item) throw importFailure("The listing was resolved but the property could not be saved");
+    let propertyAssets = [];
+    await updatePreparationRun(runId, { stage: "PROCESSING_MEDIA" });
+    try { ({ item, assets: propertyAssets } = await cachePropertyImages(prospect.clientId, item, adminSub)); } catch { propertyAssets = []; }
+    listingContexts.set(selection.sourceUrl, { item, propertyAssets, candidate });
   }
-  const selectedListing = { ...fillAddressFromTitle(candidate.normalized), sourceUrl };
-  const confirmed = await confirmUrl(prospect.clientId, { url: sourceUrl, selectedListing });
-  await updatePreparationRun(runId, { stage: "ENRICHING" });
-  await enrichListingById(prospect.clientId, confirmed.dataItemId).catch(() => null);
-  let item = await prisma.workspaceDataItem.findFirst({ where: { id: confirmed.dataItemId, clientId: prospect.clientId, type: "PROPERTY", status: "ACTIVE" } });
-  if (!item) throw importFailure("The listing was resolved but the property could not be saved");
-  let propertyAssets = [];
-  await updatePreparationRun(runId, { stage: "PROCESSING_MEDIA" });
-  try { ({ item, assets: propertyAssets } = await cachePropertyImages(prospect.clientId, item, adminSub)); } catch { propertyAssets = []; }
 
-  const existing = await prisma.draft.findMany({ where: { clientId: prospect.clientId, status: "DRAFT", warnings: { has: `prospectProperty:${item.id}` } }, orderBy: { createdAt: "desc" } });
+  const itemIds = [...new Set([...listingContexts.values()].map((context) => context.item.id))];
+  const existing = await prisma.draft.findMany({ where: { clientId: prospect.clientId, status: "DRAFT", OR: itemIds.map((itemId) => ({ warnings: { has: `prospectProperty:${itemId}` } })) }, orderBy: { createdAt: "desc" } });
   const selectedChannels = normalizeProspectChannels(prospect.selectedChannels);
   const drafts = [];
-  for (const draft of existing) {
-    if (!selectedChannels.includes(draft.channel)) continue;
-    if (drafts.some((candidate) => candidate.channel === draft.channel)) continue;
-    const composition = validateProspectComposition(draft.body);
-    const validation = composition.valid ? validateGeneratedPropertyBody(draft.body, item) : composition;
-    if (validation.valid) drafts.push(draft);
-    else await prisma.draft.update({ where: { id: draft.id }, data: { status: "FAILED", warnings: { push: `PROSPECT_PROPERTY_FACT_GUARD:${validation.reason}` } } });
-  }
-  for (const channel of selectedChannels) {
-    const reusable = drafts.find((draft) => draft.channel === channel);
+  const draftContexts = new Map();
+  for (const [channelIndex, channel] of selectedChannels.entries()) {
+    const listing = listingSelections[channelIndex % listingSelections.length];
+    const context = listingContexts.get(listing.sourceUrl);
+    const { item, propertyAssets } = context;
+    let reusable = existing.find((draft) => draft.channel === channel && draft.warnings?.includes(`prospectProperty:${item.id}`));
     if (reusable) {
+      const composition = validateProspectComposition(reusable.body);
+      const validation = composition.valid ? validateGeneratedPropertyBody(reusable.body, item) : composition;
+      if (!validation.valid) {
+        await prisma.draft.update({ where: { id: reusable.id }, data: { status: "FAILED", warnings: { push: `PROSPECT_PROPERTY_FACT_GUARD:${validation.reason}` } } });
+        reusable = null;
+      }
+    }
+    if (reusable) {
+      drafts.push(reusable);
+      draftContexts.set(reusable.id, context);
       const fallback = reusable.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK");
       await updatePlatformRun(runId, channel, { status: fallback ? "FALLBACK_ACCEPTED" : "AI_ACCEPTED", attemptCount: fallback ? 3 : 0, provenance: fallback ? "FALLBACK" : "AI", rejectionCategory: fallback ? "PRIOR_ATTEMPTS_EXHAUSTED" : null });
       await updatePreparationRun(runId, { readyCount: drafts.filter((draft) => selectedChannels.includes(draft.channel)).length });
@@ -653,12 +666,14 @@ export async function executeProspectPreparation(runId) {
       await updatePlatformRun(runId, channel, { status: "FALLBACK_ACCEPTED", attemptCount: 3, provenance: "FALLBACK", rejectionCategory: lastRejectionCategory || "ATTEMPTS_EXHAUSTED" });
     }
     drafts.push(accepted);
+    draftContexts.set(accepted.id, context);
     logEvent("prospect.generation.completed", { platform: channel, attempts: acceptedAttempt || 3, provenance: accepted.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK") ? "FALLBACK" : "AI", rejectionCategory: accepted.warnings?.includes("PROSPECT_PROPERTY_VERIFIED_FALLBACK") ? (lastRejectionCategory || "ATTEMPTS_EXHAUSTED") : null, durationMs: Date.now() - generationStartedAt });
     await updatePreparationRun(runId, { readyCount: drafts.length });
   }
   await updatePreparationRun(runId, { stage: "SELECTING" });
-  const mediaPlan = buildPropertyMediaPlan(propertyAssets);
   for (const draft of drafts) {
+    const context = draftContexts.get(draft.id);
+    const mediaPlan = buildPropertyMediaPlan(context?.propertyAssets || []);
     const selectedAssets = mediaPlan[draft.channel] || [];
     const uniqueAssets = [...new Map(selectedAssets.map((asset) => [asset.id, asset])).values()];
     await prisma.draft.update({ where: { id: draft.id }, data: { mediaUrl: uniqueAssets[0]?.url || null, mediaType: uniqueAssets.length ? "image" : null } });
@@ -681,13 +696,14 @@ export async function executeProspectPreparation(runId) {
   const outreach = await prisma.agentOutreachProspect.findUnique({ where: { prospectWorkspaceId: id }, select: { id: true } });
   if (outreach) {
     await prisma.$transaction(async (tx) => {
-      const itemIds = [item.id, ...drafts.map((draft) => draft.id)];
+      const previewItemIds = [...itemIds, ...drafts.map((draft) => draft.id)];
       await tx.prospectPreviewItem.deleteMany({ where: { prospectWorkspaceId: id } });
-      await tx.prospectPreviewItem.createMany({ data: itemIds.map((recordId, sortOrder) => ({ prospectWorkspaceId: id, itemType: sortOrder === 0 ? "DATA_ITEM" : "DRAFT", dataItemId: sortOrder === 0 ? recordId : null, draftId: sortOrder === 0 ? null : recordId, sortOrder, addedBy: adminSub })) });
+      await tx.prospectPreviewItem.createMany({ data: previewItemIds.map((recordId, sortOrder) => ({ prospectWorkspaceId: id, itemType: sortOrder < itemIds.length ? "DATA_ITEM" : "DRAFT", dataItemId: sortOrder < itemIds.length ? recordId : null, draftId: sortOrder < itemIds.length ? null : recordId, sortOrder, addedBy: adminSub })) });
       await tx.agentOutreachProspect.update({ where: { id: outreach.id }, data: { status: "READY_TO_EMAIL", previewGeneratedAt: new Date(), lastError: null, events: { create: { type: "preview_generated" } } } });
     });
   }
-  return { itemId: item.id, draftIds: drafts.map((draft) => draft.id), imageImported: propertyAssets.length > 0, importedImageCount: propertyAssets.length, importQuality: candidate.quality, preparationState: "READY_UNSELECTED", runId };
+  const contexts = [...listingContexts.values()];
+  return { itemId: contexts[0].item.id, itemIds, draftIds: drafts.map((draft) => draft.id), imageImported: contexts.some((context) => context.propertyAssets.length > 0), importedImageCount: contexts.reduce((total, context) => total + context.propertyAssets.length, 0), importQuality: contexts[0].candidate.quality, preparationState: "READY_UNSELECTED", runId };
 }
 
 export async function rotatePreview(id) {

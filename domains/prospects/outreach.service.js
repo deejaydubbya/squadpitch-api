@@ -10,9 +10,35 @@ import { getDiscoveryProvider } from "./discovery/providers.js";
 import { normalizePublicUrl } from "./discovery/urlIdentity.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const DEFAULT_SUBJECT = "I made this for you, {{first_name}}";
-// TODO(outreach-copy): replace this editable fallback when approved prospect outreach copy is supplied.
-const DEFAULT_BODY = `Hi {{first_name}},\n\nI came across your listings and put together a Squadpitch preview for you.\n\nYou can see and claim it here:\n\n{{preview_url}}\n\nIf you'd rather not receive messages like this from me, you can unsubscribe using the link below.\n\n{{unsubscribe_url}}\n\nThanks,\n{{sender_name}}`;
+const DEFAULT_SUBJECT = "I created a free Squadpitch workspace for you";
+const DEFAULT_BODY = `Hi {{first_name}},
+
+I’m Daniel, the founder of Squadpitch. I’m reaching out to a small group of real estate agents and creating ready-to-claim workspaces for them so they can get started without having to build everything from scratch.
+
+Squadpitch helps real estate agents turn listings, open houses, sold properties, and other business updates into ready-to-post social media content using AI.
+
+I’ve already created a free workspace for you here:
+
+{{preview_url}}
+
+Important: when you create your Squadpitch account, please use the same email address I sent this message to. That’s how Squadpitch recognizes you and connects you with the workspace I created for you.
+
+Once you’re in, you can also start a 14-day trial of Squadpitch Pro with no credit card required to try the full set of Pro features. If you find it useful, you can choose a paid plan afterward.
+
+You can also learn more about Squadpitch here:
+
+Website: https://real-estate.squadpitch.com
+LinkedIn: https://www.linkedin.com/company/115992427
+
+I’m working directly with these first users, so I’d really appreciate any feedback you have. If you run into anything confusing or have an idea that would make Squadpitch more useful for agents, just reply to this email.
+
+Thanks,
+
+Daniel Wardlow
+Founder, Squadpitch
+
+If you’d rather not receive messages like this from me, you can unsubscribe here:
+{{unsubscribe_url}}`;
 
 function normalizedEmail(value) { return String(value || "").trim().toLowerCase(); }
 function text(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
@@ -56,6 +82,26 @@ export function qualifyDiscoveredAgent(person, listings) {
   if (!EMAIL_RE.test(email)) return { email, status: "INVALID_EMAIL", rejectionReason: "INVALID_EMAIL" };
   if (!listings.length) return { email, status: "NO_ACTIVE_LISTINGS", rejectionReason: "NO_ACTIVE_LISTINGS" };
   return { email, status: "QUALIFIED", rejectionReason: null };
+}
+
+function listingIdentity(listing) {
+  if (listing?.listingId) return `id:${String(listing.listingId).trim().toLowerCase()}`;
+  const url = normalizePublicUrl(listing?.listingUrl || listing?.sourceUrl);
+  return url ? `url:${url}` : null;
+}
+
+export function selectListingsForPreview(listings, targetCount = 3) {
+  const distinct = [];
+  const seen = new Set();
+  for (const listing of Array.isArray(listings) ? listings : []) {
+    const identity = listingIdentity(listing);
+    if (!identity || seen.has(identity)) continue;
+    seen.add(identity);
+    distinct.push(listing);
+    if (distinct.length === targetCount) break;
+  }
+  if (!distinct.length) return [];
+  return Array.from({ length: targetCount }, (_value, index) => distinct[index % distinct.length]);
 }
 
 async function fetchDiscoveryPage(url) {
@@ -212,14 +258,15 @@ function publicProspect(row) {
 export async function generatePreview(id, adminSub) {
   const outreach = await prisma.agentOutreachProspect.findUnique({ where: { id } });
   if (!outreach || !["QUALIFIED", "PREVIEW_PENDING", "PREVIEW_FAILED"].includes(outreach.status)) throw Object.assign(new Error("Prospect is not eligible for preview generation"), { status: 409, code: "INVALID_OUTREACH_STATE" });
-  const listing = outreach.listings?.[0];
-  if (!listing) throw Object.assign(new Error("Prospect no longer has an active listing"), { status: 422, code: "NO_ACTIVE_LISTINGS" });
-  const issued = await createProspect({ prospectName: outreach.fullName, prospectEmail: outreach.email, businessName: outreach.brokerage || `${outreach.fullName} Real Estate`, industryKey: "real_estate", websiteUrl: outreach.profileUrl, profileImageUrl: outreach.headshotUrl, sourceUrl: listing.listingUrl || listing.sourceUrl, acquisitionSource: `Agent discovery: ${outreach.sourceDomain}` }, adminSub);
+  const selectedListings = selectListingsForPreview(outreach.listings);
+  if (!selectedListings.length) throw Object.assign(new Error("Prospect no longer has an active listing"), { status: 422, code: "NO_ACTIVE_LISTINGS" });
+  const sourceUrl = selectedListings[0].listingUrl || selectedListings[0].sourceUrl;
+  const issued = await createProspect({ prospectName: outreach.fullName, prospectEmail: outreach.email, businessName: outreach.brokerage || `${outreach.fullName} Real Estate`, industryKey: "real_estate", websiteUrl: outreach.profileUrl, profileImageUrl: outreach.headshotUrl, sourceUrl, selectedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"], acquisitionSource: `Agent discovery: ${outreach.sourceDomain}` }, adminSub);
   const origin = publicAppOrigin();
   const previewUrl = `${origin}/preview/${issued.previewToken}`;
   const claimUrl = `${previewUrl}#claim=${issued.claimToken}`;
   await prisma.agentOutreachProspect.update({ where: { id }, data: { prospectWorkspaceId: issued.id, status: "PREVIEW_GENERATING", previewUrlEncrypted: encryptToken(previewUrl), claimUrlEncrypted: encryptToken(claimUrl), events: { create: { type: "preview_queued" } } } });
-  await startProspectPreparation(issued.id, { sourceUrl: listing.listingUrl || listing.sourceUrl }, adminSub);
+  await startProspectPreparation(issued.id, { sourceUrl, selectedListings }, adminSub);
   return { id, status: "PREVIEW_GENERATING" };
 }
 
@@ -286,7 +333,20 @@ export async function deleteSendingAccount(id) {
   if (inUse) throw Object.assign(new Error("Sending account has active outreach"), { status: 409, code: "SENDING_ACCOUNT_IN_USE" });
   await prisma.outreachSendingAccount.delete({ where: { id } });
 }
-export async function testSendingAccount(id) { const account = await prisma.outreachSendingAccount.findUnique({ where: { id } }); if (!account || account.provider !== "SMTP") throw Object.assign(new Error("SMTP account not found"), { status: 404 }); const transport = nodemailer.createTransport({ host: account.smtpHost, port: account.smtpPort, secure: account.smtpSecure, auth: { user: account.smtpUsername, pass: decryptToken(account.smtpPassword) } }); await transport.verify(); return { ok: true }; }
+function smtpConfigurationError(error) {
+  if (error?.code === "EAUTH" || error?.responseCode === 535) return Object.assign(new Error("SMTP authentication failed. Check the username and app password, then try again."), { status: 422, code: "SMTP_AUTH_FAILED" });
+  if (["ETIMEDOUT", "ESOCKET", "ECONNECTION", "ECONNREFUSED"].includes(error?.code)) return Object.assign(new Error("Could not connect to the SMTP server. Check the hostname, port, and TLS setting."), { status: 422, code: "SMTP_CONNECTION_FAILED" });
+  if (["CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE"].includes(error?.code)) return Object.assign(new Error("The SMTP server certificate could not be verified."), { status: 422, code: "SMTP_TLS_FAILED" });
+  return Object.assign(new Error("The SMTP settings could not be verified. Check the server configuration and try again."), { status: 422, code: "SMTP_VERIFICATION_FAILED" });
+}
+
+export async function testSendingAccount(id) {
+  const account = await prisma.outreachSendingAccount.findUnique({ where: { id } });
+  if (!account || account.provider !== "SMTP") throw Object.assign(new Error("SMTP account not found"), { status: 404, code: "SMTP_ACCOUNT_NOT_FOUND" });
+  const transport = nodemailer.createTransport({ host: account.smtpHost, port: account.smtpPort, secure: account.smtpSecure, auth: { user: account.smtpUsername, pass: decryptToken(account.smtpPassword) } });
+  try { await transport.verify(); } catch (error) { throw smtpConfigurationError(error); }
+  return { ok: true };
+}
 export async function unsubscribe(token) { const row = await prisma.agentOutreachProspect.findUnique({ where: { unsubscribeTokenHash: digestSecret(token || "") } }); if (!row?.normalizedEmail) return false; await prisma.$transaction([prisma.outreachSuppression.upsert({ where: { normalizedEmail: row.normalizedEmail }, create: { normalizedEmail: row.normalizedEmail, reason: "UNSUBSCRIBED", source: "EMAIL_LINK" }, update: { reason: "UNSUBSCRIBED", source: "EMAIL_LINK", restoredAt: null } }), prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "UNSUBSCRIBED", events: { create: { type: "unsubscribed" } } } })]); return true; }
 export async function syncClaimed(id) { const rows = await prisma.agentOutreachProspect.findMany({ where: { ...(id ? { id } : {}), status: { not: "CLAIMED" }, prospectWorkspace: { claimStatus: "CLAIMED" } }, select: { id: true, prospectWorkspace: { select: { claimedAt: true } } } }); await Promise.all(rows.map(row => prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "CLAIMED", claimedAt: row.prospectWorkspace.claimedAt, events: { create: { type: "claimed" } } } }))); }
 
