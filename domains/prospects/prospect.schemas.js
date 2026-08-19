@@ -9,6 +9,7 @@ export const CreateProspectSchema = z.object({
   businessName: z.string().trim().min(1).max(200),
   industryKey: z.enum(["real_estate", "car_sales"]),
   websiteUrl: optionalUrl,
+  profileImageUrl: optionalUrl,
   sourceUrl: optionalUrl,
   acquisitionSource: z.string().trim().max(120).optional(),
   operatorNote: z.string().trim().max(2000).optional(),

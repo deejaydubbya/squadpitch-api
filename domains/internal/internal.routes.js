@@ -145,7 +145,7 @@ internalRouter.delete(`${BASE}/prospects/:id/preview-token`, requireAdminRole, a
   } catch (err) { next(err); }
 });
 
-const DiscoverySchema = z.object({ sourceUrl: z.string().url(), maxPages: z.coerce.number().int().min(1).max(25).optional(), maxAgents: z.coerce.number().int().min(1).max(250).optional() });
+const DiscoverySchema = z.object({ sourceUrl: z.string().url(), maxPages: z.coerce.number().int().min(1).max(1000).optional(), maxAgents: z.coerce.number().int().min(1).max(10_000).optional() });
 const EmailDraftSchema = z.object({ subject: z.string().max(240).optional(), body: z.string().max(20_000).optional(), sendingAccountId: z.string().optional() });
 const SendingAccountSchema = z.object({
   provider: z.enum(["SMTP", "GMAIL"]), displayName: z.string().min(1).max(120), fromEmail: z.string().email(), replyTo: z.string().email().optional().or(z.literal("")),
@@ -156,7 +156,10 @@ const UpdateSendingAccountSchema = z.object({ displayName: z.string().min(1).max
 
 internalRouter.get(`${BASE}/agent-outreach`, requireAdminRole, async (_req, res, next) => { try { res.json(await outreachService.listPipeline()); } catch (err) { next(err); } });
 internalRouter.post(`${BASE}/agent-outreach/discoveries/analyze`, requireAdminRole, async (req, res, next) => { try { const parsed = DiscoverySchema.pick({ sourceUrl: true }).safeParse(req.body); if (!parsed.success) return validationError(res, parsed.error); res.json(await outreachService.analyzeDiscoverySource(parsed.data.sourceUrl)); } catch (err) { next(err); } });
-internalRouter.post(`${BASE}/agent-outreach/discoveries`, requireAdminRole, async (req, res, next) => { try { const parsed = DiscoverySchema.safeParse(req.body); if (!parsed.success) return validationError(res, parsed.error); res.status(201).json(await outreachService.discoverAgents(parsed.data.sourceUrl, req.auth0Sub, { maxPages: parsed.data.maxPages, maxAgents: parsed.data.maxAgents })); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/discoveries`, requireAdminRole, async (req, res, next) => { try { const parsed = DiscoverySchema.safeParse(req.body); if (!parsed.success) return validationError(res, parsed.error); res.status(202).json(await outreachService.discoverAgents(parsed.data.sourceUrl, req.auth0Sub, { maxPages: parsed.data.maxPages, maxAgents: parsed.data.maxAgents, background: true })); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/discoveries/:id/pause`, requireAdminRole, async (req, res, next) => { try { res.json(await outreachService.pauseDiscovery(req.params.id)); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/discoveries/:id/resume`, requireAdminRole, async (req, res, next) => { try { res.json(await outreachService.resumeDiscovery(req.params.id, { background: true })); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/discoveries/:id/stop`, requireAdminRole, async (req, res, next) => { try { res.json(await outreachService.stopDiscovery(req.params.id)); } catch (err) { next(err); } });
 internalRouter.post(`${BASE}/agent-outreach/prospects/:id/preview`, requireAdminRole, async (req, res, next) => { try { res.status(202).json(await outreachService.generatePreview(req.params.id, req.auth0Sub)); } catch (err) { next(err); } });
 internalRouter.post(`${BASE}/agent-outreach/prospects/:id/email`, requireAdminRole, async (req, res, next) => { try { const parsed = EmailDraftSchema.safeParse(req.body ?? {}); if (!parsed.success) return validationError(res, parsed.error); res.json(await outreachService.prepareEmail(req.params.id, parsed.data)); } catch (err) { next(err); } });
 internalRouter.post(`${BASE}/agent-outreach/prospects/:id/send`, requireAdminRole, async (req, res, next) => { try { res.json(await outreachService.sendOutreachEmail(req.params.id, req.body?.sendingAccountId)); } catch (err) { next(err); } });

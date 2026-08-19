@@ -58,6 +58,7 @@ export async function createProspect(input, adminSub) {
     const client = await tx.client.create({
       data: {
         name: input.businessName,
+        logoUrl: input.profileImageUrl || null,
         slug: await availableSlug(tx, input.businessName),
         industryKey: input.industryKey,
         lifecycle: "PROSPECT",

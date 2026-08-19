@@ -7,6 +7,7 @@ import { assertSafeExternalUrl } from "../studio/urlCampaignIntake.service.js";
 import { encryptToken, decryptToken } from "../../lib/tokenCrypto.js";
 import { createProspect, digestSecret, startProspectPreparation } from "./prospect.service.js";
 import { getDiscoveryProvider } from "./discovery/providers.js";
+import { normalizePublicUrl } from "./discovery/urlIdentity.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_SUBJECT = "I made this for you, {{first_name}}";
@@ -92,58 +93,101 @@ export async function analyzeDiscoverySource(sourceUrl) {
   return { provider: { key: provider.key, label: provider.label }, pageType, agentLinksFound: links.length, alreadyTargeted, potentiallyNew: links.length - alreadyTargeted, paginationDetected: provider.discoverDirectoryPages(url, html).length > 0, ready: pageType === "AGENT_DIRECTORY" && links.length > 0, samples: links.slice(0, 5).map(({ label, profileUrl, providerExternalId }) => ({ name: label, profileUrl, providerExternalId })) };
 }
 
+async function discoveryStatus(runId) {
+  return prisma.agentDiscoveryRun.findUnique({ where: { id: runId }, select: { status: true } });
+}
+
+async function executeDiscoveryRun(run, provider, url, options = {}) {
+  const resume = run.cursor && typeof run.cursor === "object" ? run.cursor : {};
+  const maxPages = options.maxPages ?? resume.maxPages ?? null, maxAgents = options.maxAgents ?? resume.maxAgents ?? null, delayMs = Math.max(Number(options.delayMs ?? 250), 0);
+  const pageQueue = [resume.nextPage || url.toString()].filter(Boolean), visitedPages = new Set(resume.visitedPages || []), visitedAgents = new Set(resume.visitedAgents || []);
+  let pagesScanned = run.pagesScanned || 0, agentLinksFound = run.agentLinksFound || 0, profilesFound = run.profilesFound || 0, newAgents = run.newAgentsCount || 0, qualified = run.qualifiedCount || 0, rejected = run.rejectedCount || 0, duplicates = run.duplicateCount || 0, suppressedCount = run.suppressedCount || 0, errors = run.errorCount || 0;
+  const saveProgress = (nextPage = null) => prisma.agentDiscoveryRun.update({ where: { id: run.id }, data: { pagesScanned, agentLinksFound, profilesFound, newAgentsCount: newAgents, qualifiedCount: qualified, rejectedCount: rejected, duplicateCount: duplicates, suppressedCount, errorCount: errors, cursor: { nextPage, currentPage: pagesScanned + 1, visitedPages: [...visitedPages], visitedAgents: [...visitedAgents], maxPages, maxAgents } } });
+  while (pageQueue.length && (maxPages == null || pagesScanned < maxPages) && (maxAgents == null || newAgents < maxAgents)) {
+    if ((await discoveryStatus(run.id))?.status !== "RUNNING") return saveProgress(pageQueue[0]);
+    const pageUrl = pageQueue.shift(), pageKey = normalizePublicUrl(pageUrl) || new URL(pageUrl).toString();
+    if (visitedPages.has(pageKey)) continue;
+    visitedPages.add(pageKey);
+    let html;
+    try { html = await fetchDiscoveryPage(pageUrl); pagesScanned += 1; } catch { errors += 1; await saveProgress(); continue; }
+    const [nextPage] = provider.discoverDirectoryPages(pageUrl, html);
+    const links = provider.discoverAgentLinks(pageUrl, html);
+    agentLinksFound += links.length;
+    for (const link of links) {
+      if (maxAgents != null && newAgents >= maxAgents) break;
+      if ((await discoveryStatus(run.id))?.status !== "RUNNING") { visitedPages.delete(pageKey); return saveProgress(pageUrl); }
+      const identityKey = `${link.provider}:${link.providerExternalId || link.normalizedProfileUrl}`;
+      if (visitedAgents.has(identityKey)) continue;
+      visitedAgents.add(identityKey);
+      if (await existingTarget(link)) { duplicates += 1; continue; }
+      try {
+        if ((await discoveryStatus(run.id))?.status !== "RUNNING") { visitedPages.delete(pageKey); return saveProgress(pageUrl); }
+        if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        const profileHtml = await fetchDiscoveryPage(link.profileUrl);
+        profilesFound += 1;
+        if ((await discoveryStatus(run.id))?.status !== "RUNNING") { visitedPages.delete(pageKey); return saveProgress(pageUrl); }
+        const agent = provider.parseProfile(link.profileUrl, profileHtml);
+        if (await existingTarget({ ...link, email: agent.email })) { duplicates += 1; continue; }
+        const email = normalizedEmail(agent.email) || null;
+        const suppressed = email ? await prisma.outreachSuppression.findFirst({ where: { normalizedEmail: email, restoredAt: null } }) : null;
+        let listings = [];
+        const preQualification = qualifyDiscoveredAgent(agent, [{}]);
+        if (!suppressed && preQualification.status === "QUALIFIED" && agent.listingsUrl) {
+          let listingPage = agent.listingsUrl;
+          const visitedListingPages = new Set(), listingKeys = new Set();
+          while (listingPage && !visitedListingPages.has(normalizePublicUrl(listingPage) || listingPage)) {
+            if ((await discoveryStatus(run.id))?.status !== "RUNNING") { visitedPages.delete(pageKey); return saveProgress(pageUrl); }
+            if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+            visitedListingPages.add(normalizePublicUrl(listingPage) || listingPage);
+            const listingHtml = await fetchDiscoveryPage(listingPage);
+            for (const listing of provider.parseListings(listingPage, listingHtml)) { const key = listing.listingId || listing.listingUrl; if (key && !listingKeys.has(key)) { listingKeys.add(key); listings.push(listing); } }
+            listingPage = provider.discoverListingPages?.(listingPage, listingHtml, agent.profileUrl)?.[0] || null;
+          }
+        }
+        let qualification = qualifyDiscoveredAgent(agent, listings);
+        if (suppressed) qualification = { email, status: "SUPPRESSED", rejectionReason: "SUPPRESSED" };
+        const prospect = await prisma.agentOutreachProspect.create({ data: { discoveryRunId: run.id, normalizedEmail: qualification.email, email: qualification.email, firstName: agent.firstName, lastName: agent.lastName, fullName: agent.fullName, phone: agent.phone, brokerage: agent.brokerage, office: agent.office, profileUrl: agent.profileUrl, headshotUrl: agent.headshotUrl, sourceUrl: url.toString(), sourceDomain: url.hostname.toLowerCase(), provider: agent.provider, providerExternalId: agent.providerExternalId, stableIdentity: agent.normalizedProfileUrl, status: qualification.status, rejectionReason: qualification.rejectionReason, listings, activeListingCount: listings.length, lastVerifiedAt: new Date(), events: { create: { type: qualification.status === "QUALIFIED" ? "qualified" : "rejected", message: qualification.rejectionReason } } } });
+        newAgents += 1;
+        if (prospect.status === "QUALIFIED") qualified += 1; else { rejected += 1; if (prospect.status === "SUPPRESSED") suppressedCount += 1; }
+      } catch (error) { if (error?.code === "P2002") duplicates += 1; else errors += 1; }
+    }
+    if ((await discoveryStatus(run.id))?.status !== "RUNNING") return saveProgress(nextPage || null);
+    if (nextPage && !visitedPages.has(normalizePublicUrl(nextPage))) pageQueue.push(nextPage);
+    await saveProgress(pageQueue[0] || null);
+  }
+  const foundAny = agentLinksFound > 0;
+  return prisma.agentDiscoveryRun.update({ where: { id: run.id }, data: { status: foundAny ? "COMPLETED" : "FAILED", pagesScanned, agentLinksFound, profilesFound, newAgentsCount: newAgents, qualifiedCount: qualified, rejectedCount: rejected, duplicateCount: duplicates, suppressedCount, errorCount: errors, cursor: { nextPage: null, currentPage: pagesScanned, visitedPages: [...visitedPages], visitedAgents: [...visitedAgents], maxPages, maxAgents }, completedAt: new Date(), ...(!foundAny ? { lastError: "No supported agent profile links were found" } : {}) } });
+}
+
 export async function discoverAgents(sourceUrl, adminSub, options = {}) {
   const url = assertSafeExternalUrl(sourceUrl);
   const provider = getDiscoveryProvider(url);
   const run = await prisma.agentDiscoveryRun.create({ data: { sourceUrl: url.toString(), sourceDomain: url.hostname.toLowerCase(), requestedBy: adminSub } });
   try {
     if (!provider) throw Object.assign(new Error("No agent discovery provider supports this URL"), { code: "UNSUPPORTED_PAGE" });
-    const maxPages = Math.min(Number(options.maxPages) || 10, 25), maxAgents = Math.min(Number(options.maxAgents) || 100, 250), delayMs = Math.max(Number(options.delayMs ?? 250), 0);
-    const pageQueue = [url.toString()], visitedPages = new Set(), visitedAgents = new Set();
-    let pagesScanned = 0, agentLinksFound = 0, profilesFound = 0, newAgents = 0, qualified = 0, rejected = 0, duplicates = 0, suppressedCount = 0, errors = 0;
-    while (pageQueue.length && pagesScanned < maxPages && newAgents < maxAgents) {
-      const pageUrl = pageQueue.shift();
-      const pageKey = new URL(pageUrl).toString();
-      if (visitedPages.has(pageKey)) continue;
-      visitedPages.add(pageKey);
-      let html;
-      try { html = await fetchDiscoveryPage(pageUrl); pagesScanned += 1; } catch { errors += 1; continue; }
-      for (const next of provider.discoverDirectoryPages(pageUrl, html)) if (!visitedPages.has(new URL(next).toString())) pageQueue.push(next);
-      const links = provider.discoverAgentLinks(pageUrl, html);
-      agentLinksFound += links.length;
-      for (const link of links) {
-        if (newAgents >= maxAgents) break;
-        const identityKey = `${link.provider}:${link.providerExternalId || link.normalizedProfileUrl}`;
-        if (visitedAgents.has(identityKey)) continue;
-        visitedAgents.add(identityKey);
-        if (await existingTarget(link)) { duplicates += 1; continue; }
-        try {
-          if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
-          const profileHtml = await fetchDiscoveryPage(link.profileUrl);
-          profilesFound += 1;
-          const agent = provider.parseProfile(link.profileUrl, profileHtml);
-          if (await existingTarget({ ...link, email: agent.email })) { duplicates += 1; continue; }
-          const email = normalizedEmail(agent.email) || null;
-          const suppressed = email ? await prisma.outreachSuppression.findFirst({ where: { normalizedEmail: email, restoredAt: null } }) : null;
-          let listings = [];
-          const preQualification = qualifyDiscoveredAgent(agent, [{}]);
-          if (!suppressed && preQualification.status === "QUALIFIED" && agent.listingsUrl) {
-            if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
-            listings = provider.parseListings(agent.listingsUrl, await fetchDiscoveryPage(agent.listingsUrl));
-          }
-          let qualification = qualifyDiscoveredAgent(agent, listings);
-          if (suppressed) qualification = { email, status: "SUPPRESSED", rejectionReason: "SUPPRESSED" };
-          const prospect = await prisma.agentOutreachProspect.create({ data: { discoveryRunId: run.id, normalizedEmail: qualification.email, email: qualification.email, firstName: agent.firstName, lastName: agent.lastName, fullName: agent.fullName, phone: agent.phone, brokerage: agent.brokerage, office: agent.office, profileUrl: agent.profileUrl, headshotUrl: agent.headshotUrl, sourceUrl: url.toString(), sourceDomain: url.hostname.toLowerCase(), provider: agent.provider, providerExternalId: agent.providerExternalId, stableIdentity: agent.normalizedProfileUrl, status: qualification.status, rejectionReason: qualification.rejectionReason, listings, activeListingCount: listings.length, lastVerifiedAt: new Date(), events: { create: { type: qualification.status === "QUALIFIED" ? "qualified" : "rejected", message: qualification.rejectionReason } } } });
-          newAgents += 1;
-          if (prospect.status === "QUALIFIED") qualified += 1; else { rejected += 1; if (prospect.status === "SUPPRESSED") suppressedCount += 1; }
-        } catch (error) { if (error?.code === "P2002") duplicates += 1; else errors += 1; }
-      }
-    }
-    const foundAny = agentLinksFound > 0;
-    return prisma.agentDiscoveryRun.update({ where: { id: run.id }, data: { status: foundAny ? "COMPLETED" : "FAILED", pagesScanned, agentLinksFound, profilesFound, newAgentsCount: newAgents, qualifiedCount: qualified, rejectedCount: rejected, duplicateCount: duplicates, suppressedCount, errorCount: errors, cursor: { visitedPages: [...visitedPages], visitedAgents: [...visitedAgents], maxPages, maxAgents }, completedAt: new Date(), ...(!foundAny ? { lastError: "No supported agent profile links were found" } : {}) } });
+    const limits = { ...options, maxPages: options.maxPages == null ? null : Math.min(Number(options.maxPages), 1000), maxAgents: options.maxAgents == null ? null : Math.min(Number(options.maxAgents), 10_000) };
+    if (options.background) { void executeDiscoveryRun(run, provider, url, limits).catch(async (error) => { await prisma.agentDiscoveryRun.updateMany({ where: { id: run.id, status: "RUNNING" }, data: { status: "FAILED", lastError: error.message, completedAt: new Date() } }); }); return run; }
+    return executeDiscoveryRun(run, provider, url, limits);
   } catch (error) {
     return prisma.agentDiscoveryRun.update({ where: { id: run.id }, data: { status: "FAILED", pagesScanned: 1, errorCount: 1, lastError: error.message, completedAt: new Date() } });
   }
+}
+
+export async function pauseDiscovery(id) {
+  await prisma.agentDiscoveryRun.updateMany({ where: { id, status: "RUNNING" }, data: { status: "PAUSED" } });
+  return prisma.agentDiscoveryRun.findUnique({ where: { id } });
+}
+export async function stopDiscovery(id) {
+  await prisma.agentDiscoveryRun.updateMany({ where: { id, status: { in: ["RUNNING", "PAUSED"] } }, data: { status: "STOPPED", completedAt: new Date() } });
+  return prisma.agentDiscoveryRun.findUnique({ where: { id } });
+}
+export async function resumeDiscovery(id, options = {}) {
+  const run = await prisma.agentDiscoveryRun.findUnique({ where: { id } });
+  if (!run || run.status !== "PAUSED") throw Object.assign(new Error("Only a paused discovery can be resumed"), { status: 409, code: "INVALID_DISCOVERY_STATE" });
+  const url = assertSafeExternalUrl(run.sourceUrl), provider = getDiscoveryProvider(url);
+  const resumed = await prisma.agentDiscoveryRun.update({ where: { id }, data: { status: "RUNNING", completedAt: null } });
+  if (options.background) { void executeDiscoveryRun(resumed, provider, url, options).catch(async (error) => { await prisma.agentDiscoveryRun.updateMany({ where: { id, status: "RUNNING" }, data: { status: "FAILED", lastError: error.message, completedAt: new Date() } }); }); return resumed; }
+  return executeDiscoveryRun(resumed, provider, url, options);
 }
 
 export async function listPipeline() {
@@ -168,7 +212,7 @@ export async function generatePreview(id, adminSub) {
   if (!outreach || !["QUALIFIED", "PREVIEW_PENDING", "PREVIEW_FAILED"].includes(outreach.status)) throw Object.assign(new Error("Prospect is not eligible for preview generation"), { status: 409, code: "INVALID_OUTREACH_STATE" });
   const listing = outreach.listings?.[0];
   if (!listing) throw Object.assign(new Error("Prospect no longer has an active listing"), { status: 422, code: "NO_ACTIVE_LISTINGS" });
-  const issued = await createProspect({ prospectName: outreach.fullName, prospectEmail: outreach.email, businessName: outreach.brokerage || `${outreach.fullName} Real Estate`, industryKey: "real_estate", websiteUrl: outreach.profileUrl, sourceUrl: listing.listingUrl || listing.sourceUrl, acquisitionSource: `Agent discovery: ${outreach.sourceDomain}` }, adminSub);
+  const issued = await createProspect({ prospectName: outreach.fullName, prospectEmail: outreach.email, businessName: outreach.brokerage || `${outreach.fullName} Real Estate`, industryKey: "real_estate", websiteUrl: outreach.profileUrl, profileImageUrl: outreach.headshotUrl, sourceUrl: listing.listingUrl || listing.sourceUrl, acquisitionSource: `Agent discovery: ${outreach.sourceDomain}` }, adminSub);
   const origin = publicAppOrigin();
   const previewUrl = `${origin}/preview/${issued.previewToken}`;
   const claimUrl = `${previewUrl}#claim=${issued.claimToken}`;
