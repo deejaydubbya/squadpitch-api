@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
-import { buildProspectAttemptGuidance, composeStructuredProspectBody, repairStructuredProspectDraft, validateGeneratedPropertyBody, validateProspectComposition, validateStructuredProspectDraft } from "../domains/prospects/prospect.service.js";
+import { buildProspectAttemptGuidance, coldwellListingFallback, composeStructuredProspectBody, repairStructuredProspectDraft, validateGeneratedPropertyBody, validateProspectComposition, validateStructuredProspectDraft } from "../domains/prospects/prospect.service.js";
 
 const root = new URL("..", import.meta.url);
 const read = (path) => fs.readFileSync(new URL(path, root), "utf8");
@@ -18,6 +18,22 @@ describe("durable prospect preparation", () => {
     expect(routes).toContain("startProspectPreparation");
     expect(routes).not.toContain("prospectService.prepareProspect(");
     expect(worker).toContain("executeProspectPreparation(job.data.runId)");
+    expect(worker).toContain("concurrency: 2");
+  });
+
+  it("uses a sparse, source-attributed fallback for canonical Coldwell listing URLs", () => {
+    expect(coldwellListingFallback({ listingUrl: "https://www.coldwellbankerhomes.com/oh/westerville/336-wyndham-park-s/pid_73070920", listingId: "73070920", photoUrls: ["https://s.cbhomes.com/p/i/spacer/1-x-1/1.gif"] })).toMatchObject({
+      title: "336 Wyndham Park S, Westerville, OH",
+      address: { street: "336 Wyndham Park S", city: "Westerville", state: "OH", zip: null },
+      images: [],
+      sourceId: "73070920",
+      extractionFallback: "COLDWELL_CANONICAL_URL",
+    });
+  });
+
+  it("does not use the canonical URL fallback for unrelated or non-address URLs", () => {
+    expect(coldwellListingFallback({ listingUrl: "https://example.com/oh/westerville/336-wyndham-park-s/pid_1" })).toBeNull();
+    expect(coldwellListingFallback({ listingUrl: "https://www.coldwellbankerhomes.com/oh/westerville/homes-for-sale/" })).toBeNull();
   });
 
   it("queues outreach delivery and processes it with a single delay-aware worker", () => {
@@ -33,6 +49,8 @@ describe("durable prospect preparation", () => {
     for (const state of ["NOT_STARTED", "GENERATING", "VALIDATING", "RETRYING", "AI_ACCEPTED", "FALLBACK_ACCEPTED"]) expect(service).toContain(state);
     expect(service).toContain("STALE_RUN");
     expect(service).toContain("COMPLETE_WITH_WARNINGS");
+    expect(service).toContain("singleListingOnly: true");
+    expect(service).toContain("{ maxImages: 6 }");
   });
 
   it("distinguishes queued previews from actively generating previews and reconciles abandoned work", () => {

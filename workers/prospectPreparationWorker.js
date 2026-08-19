@@ -15,5 +15,5 @@ export function startProspectPreparationWorker() {
       await failPreparationRun(job.data.runId, error);
       throw error;
     }
-  }, { connection, concurrency: 1, ...CONSERVATIVE_WORKER_OPTIONS, lockDuration: 10 * 60_000 });
+  }, { connection, concurrency: 2, ...CONSERVATIVE_WORKER_OPTIONS, lockDuration: 10 * 60_000 });
 }

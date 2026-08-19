@@ -26,7 +26,7 @@ export function propertyImageSourceKey(url) {
 }
 export function scenePresentation(scene) { const [tag, title] = SCENE_PRESENTATION[scene] || SCENE_PRESENTATION.other_detail; return { tags: [tag], title }; }
 function folderName(item) { const d = item.dataJson || {}; return `Property — ${[d.street, d.city].filter(Boolean).join(", ") || item.title}`.slice(0, 120); }
-function sourceImages(item) { const d = item.dataJson || {}; const preserved = Array.isArray(d.sourceImages) && d.sourceImages.length ? d.sourceImages : null; return (preserved || [d.originalImageUrl, d.imageUrl, ...(Array.isArray(d.images) ? d.images.map((v) => typeof v === "string" ? v : v?.url) : [])]).filter((v) => typeof v === "string" && /^https?:\/\//i.test(v) && !/mls_logos|logo|\.svg(?:\?|$)/i.test(v)); }
+function sourceImages(item) { const d = item.dataJson || {}; const preserved = Array.isArray(d.sourceImages) && d.sourceImages.length ? d.sourceImages : null; return (preserved || [d.originalImageUrl, d.imageUrl, ...(Array.isArray(d.images) ? d.images.map((v) => typeof v === "string" ? v : v?.url) : [])]).filter((v) => typeof v === "string" && /^https?:\/\//i.test(v) && !/mls_logos|logo|spacer|pixel|(?:^|[\/_-])1[\/_-]x[\/_-]1(?:[\/_\-.]|$)|\.svg(?:\?|$)/i.test(v)); }
 
 async function classify(asset) {
   const existingScene = asset.tags?.find((tag) => tag.startsWith("prospect-scene:"))?.slice(15);
@@ -37,9 +37,9 @@ async function classify(asset) {
   } catch { return { scene: "other_detail", obstructed: false, clearWholePropertyView: false }; }
 }
 
-export async function ingestPropertyMedia(clientId, item, actor) {
+export async function ingestPropertyMedia(clientId, item, actor, { maxImages = Infinity } = {}) {
   const folder = await prisma.assetFolder.upsert({ where: { propertyDataItemId: item.id }, create: { clientId, name: folderName(item), propertyDataItemId: item.id }, update: { name: folderName(item) } });
-  const unique = [...new Map(sourceImages(item).map((url) => [propertyImageSourceKey(url), url])).entries()];
+  const unique = [...new Map(sourceImages(item).map((url) => [propertyImageSourceKey(url), url])).entries()].slice(0, maxImages);
   const legacy = await prisma.mediaAsset.findMany({ where: { clientId, tags: { has: `property:${item.id}` }, propertyDataItemId: null }, orderBy: { createdAt: "asc" } });
   const assets = [];
   for (const [sourceKey, externalUrl] of unique) {

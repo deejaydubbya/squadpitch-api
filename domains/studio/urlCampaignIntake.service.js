@@ -168,7 +168,7 @@ async function getWorkspaceIndustryKey(clientId) {
   return row?.industryKey ?? null;
 }
 
-export async function analyzeUrl(clientId, { url, preferredIntent } = {}) {
+export async function analyzeUrl(clientId, { url, preferredIntent, singleListingOnly = false } = {}) {
   const parsed = assertSafeExternalUrl(url);
   const intent = preferredIntent === "single_post" || preferredIntent === "campaign"
     ? preferredIntent
@@ -209,6 +209,21 @@ export async function analyzeUrl(clientId, { url, preferredIntent } = {}) {
       listings: [singleAttempt.preview],
       suggestedNextStep: "review_listing",
       preferredIntent: intent,
+    };
+  }
+
+  // Automated prospect preparation already knows it was given a canonical
+  // listing URL. Do not perform the same expensive scrape a second time just
+  // to classify the page as an index/business page.
+  if (singleListingOnly) {
+    return {
+      url: parsed.toString(),
+      detectedType: singleAttempt.preview ? "single_listing" : "unknown",
+      confidence: singleAttempt.confidence,
+      listings: singleAttempt.preview ? [singleAttempt.preview] : [],
+      suggestedNextStep: singleAttempt.preview ? "review_listing" : "use_as_idea",
+      preferredIntent: intent,
+      reason: singleAttempt.preview ? null : "Could not extract listing details",
     };
   }
 

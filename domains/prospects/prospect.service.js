@@ -231,6 +231,42 @@ export function isUsableProspectListing(listing, confidence = 0) {
   return confidence >= 0.6 || (confidence >= 0.5 && hasCompleteAddress && hasPrice && hasAuthenticMedia);
 }
 
+function titleCaseSlug(value) {
+  const preserve = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw"]);
+  return value.split("-").filter(Boolean).map((part) => preserve.has(part) ? part.toUpperCase() : `${part[0]?.toUpperCase() || ""}${part.slice(1)}`).join(" ");
+}
+
+export function coldwellListingFallback(selection) {
+  const sourceUrl = selection?.listingUrl || selection?.sourceUrl;
+  try {
+    const parsed = new URL(sourceUrl);
+    if (!/(?:^|\.)coldwellbankerhomes\.com$/i.test(parsed.hostname)) return null;
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const pidIndex = parts.findIndex((part) => part === "pid" || part.startsWith("pid_"));
+    const statePart = parts[0], cityPart = parts[1], streetPart = parts[2];
+    if (pidIndex < 3 || !/^[a-z]{2}$/i.test(statePart) || !/^\d+[a-z]?(?:-|$)/i.test(streetPart || "")) return null;
+    const street = titleCaseSlug(streetPart);
+    const city = titleCaseSlug(cityPart);
+    const state = statePart.toUpperCase();
+    return {
+      title: `${street}, ${city}, ${state}`,
+      description: null,
+      price: typeof selection.price === "number" ? selection.price : null,
+      status: "active",
+      address: { street, city, state, zip: selection.postalCode || null },
+      beds: selection.beds ?? null,
+      baths: selection.baths ?? null,
+      sqft: selection.squareFeet ?? null,
+      images: (selection.photoUrls || []).filter((url) => !/spacer|pixel|1[-_/]x[-_/]1/i.test(url)),
+      listingUrl: sourceUrl,
+      sourceUrl,
+      sourceType: "url",
+      sourceId: selection.listingId || null,
+      extractionFallback: "COLDWELL_CANONICAL_URL",
+    };
+  } catch { return null; }
+}
+
 const UNSUPPORTED_PROPERTY_COPY = [
   /\b(?:beautiful|charming|desirable|peaceful|stunning)\b/i,
   /\b(?:welcoming|lovely|serene|tranquil|cozy)\b/i,
@@ -499,7 +535,9 @@ async function classifyPropertyAsset(asset, actor) {
 }
 
 async function cachePropertyImages(clientId, item, actor) {
-  return ingestPropertyMedia(clientId, item, actor);
+  // Six source images are enough to build the three compact preview
+  // galleries. Avoid downloading and vision-classifying an entire MLS album.
+  return ingestPropertyMedia(clientId, item, actor, { maxImages: 6 });
 }
 
 function initialPlatformStates(channels) {
@@ -613,12 +651,13 @@ export async function executeProspectPreparation(runId) {
   const listingContexts = new Map();
   for (const selection of listingSelections) {
     if (listingContexts.has(selection.sourceUrl)) continue;
-    const analysis = await analyzeUrl(prospect.clientId, { url: selection.sourceUrl });
+    const analysis = await analyzeUrl(prospect.clientId, { url: selection.sourceUrl, singleListingOnly: true });
     const candidate = analysis.detectedType === "single_listing" ? analysis.listings?.[0] : null;
-    if (!candidate?.normalized || !isUsableProspectListing(candidate.normalized, analysis.confidence) || candidate.validation?.valid === false) {
+    const fallback = coldwellListingFallback(selection);
+    if ((!candidate?.normalized || !isUsableProspectListing(candidate.normalized, analysis.confidence) || candidate.validation?.valid === false) && !fallback) {
       throw importFailure("We couldn't import this listing automatically.", { actions: ["RETRY_IMPORT", "ENTER_PROPERTY_ADDRESS", "ADD_PROPERTY_MANUALLY"], reason: analysis.reason || analysis.detectedType });
     }
-    const selectedListing = { ...fillAddressFromTitle(candidate.normalized), sourceUrl: selection.sourceUrl };
+    const selectedListing = { ...fillAddressFromTitle(candidate?.normalized && isUsableProspectListing(candidate.normalized, analysis.confidence) && candidate.validation?.valid !== false ? candidate.normalized : fallback), sourceUrl: selection.sourceUrl };
     const confirmed = await confirmUrl(prospect.clientId, { url: selection.sourceUrl, selectedListing });
     await updatePreparationRun(runId, { stage: "ENRICHING" });
     await enrichListingById(prospect.clientId, confirmed.dataItemId).catch(() => null);

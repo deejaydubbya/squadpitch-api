@@ -31,7 +31,7 @@ describe("prospect workspace release contracts", () => {
     expect(service).toContain("confirmUrl(prospect.clientId");
     expect(service).toContain("enrichListingById(prospect.clientId");
     expect(service).toContain("generateDraft({");
-    expect(service).toContain("ingestPropertyMedia(clientId, item, actor)");
+    expect(service).toContain("ingestPropertyMedia(clientId, item, actor, { maxImages: 6 })");
     expect(propertyMedia).toContain("assertSafeExternalUrl(externalUrl)");
     expect(service).toContain("PROSPECT_PROPERTY_FACT_GUARD");
     expect(service).toContain("validateGeneratedPropertyBody");
