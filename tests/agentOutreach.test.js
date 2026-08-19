@@ -4,6 +4,7 @@ const sendMail = vi.fn();
 const verify = vi.fn();
 const createProspect = vi.fn();
 const startProspectPreparation = vi.fn();
+const createTransport = vi.fn(() => ({ sendMail, verify }));
 const prismaMock = {
   agentDiscoveryRun: { create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
   agentOutreachProspect: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
@@ -13,7 +14,7 @@ const prismaMock = {
 };
 
 vi.mock("../prisma.js", () => ({ prisma: prismaMock }));
-vi.mock("nodemailer", () => ({ default: { createTransport: vi.fn(() => ({ sendMail, verify })) } }));
+vi.mock("nodemailer", () => ({ default: { createTransport } }));
 vi.mock("../config/env.js", () => ({ env: { APP_URL: "https://app.squadpitch.test" } }));
 vi.mock("../lib/tokenCrypto.js", () => ({ encryptToken: vi.fn((value) => `encrypted:${value}`), decryptToken: vi.fn((value) => value.replace(/^encrypted:/, "")) }));
 vi.mock("../domains/prospects/prospect.service.js", () => ({ createProspect, startProspectPreparation, digestSecret: vi.fn((value) => `digest:${value}`) }));
@@ -102,6 +103,19 @@ describe("agent outreach safety", () => {
     expect(new Set(selected.map((listing) => listing.listingId))).toEqual(new Set(["A", "B", "C"]));
   });
 
+  it("regenerates a ready preview in its existing claimable workspace", async () => {
+    const listing = { listingId: "A", listingUrl: "https://broker.example/listing/A" };
+    prismaMock.agentOutreachProspect.findUnique.mockResolvedValue({ id: "ready", prospectWorkspaceId: "workspace", fullName: "Ready Agent", email: "ready@example.com", status: "READY_TO_EMAIL", sourceDomain: "broker.example", listings: [listing] });
+    prismaMock.agentOutreachProspect.update.mockResolvedValue({});
+    startProspectPreparation.mockResolvedValue({ run: { id: "run" } });
+
+    await expect(service.generatePreview("ready", "admin")).resolves.toEqual({ id: "ready", status: "PREVIEW_GENERATING" });
+
+    expect(createProspect).not.toHaveBeenCalled();
+    expect(prismaMock.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "ready" }, data: expect.objectContaining({ status: "PREVIEW_GENERATING", events: { create: { type: "preview_requeued" } } }) }));
+    expect(startProspectPreparation).toHaveBeenCalledWith("workspace", expect.objectContaining({ selectedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] }), "admin");
+  });
+
   it("acquires an atomic send lock before contacting SMTP", async () => {
     const row = { id: "o1", email: "test@example.com", normalizedEmail: "test@example.com", status: "READY_TO_EMAIL", emailSentAt: null, emailSubject: "Hello", emailBody: "Body", claimUrlEncrypted: "encrypted:https://app/preview/x", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: null };
     const account = { id: "a1", provider: "SMTP", enabled: true, displayName: "Sender", fromEmail: "sender@example.com", smtpHost: "smtp.example.com", smtpPort: 465, smtpSecure: true, smtpUsername: "user", smtpPassword: "encrypted:secret", hourlyLimit: 10, dailyLimit: 20, delaySeconds: 1 };
@@ -146,13 +160,41 @@ describe("agent outreach safety", () => {
   it("reports rejected SMTP credentials as an actionable configuration error", async () => {
     prismaMock.outreachSendingAccount.findUnique.mockResolvedValue({ id: "a1", provider: "SMTP", smtpHost: "smtp.example.com", smtpPort: 465, smtpSecure: true, smtpUsername: "user", smtpPassword: "encrypted:bad-password" });
     verify.mockRejectedValueOnce(Object.assign(new Error("Invalid login"), { code: "EAUTH", responseCode: 535 }));
-    await expect(service.testSendingAccount("a1")).rejects.toMatchObject({ status: 422, code: "SMTP_AUTH_FAILED", message: expect.stringContaining("app password") });
+    await expect(service.testSendingAccount("a1")).rejects.toMatchObject({ status: 422, code: "SMTP_AUTH_FAILED", message: expect.stringContaining("authentication failed") });
   });
 
   it("reports unreachable SMTP settings without exposing transport details", async () => {
     prismaMock.outreachSendingAccount.findUnique.mockResolvedValue({ id: "a1", provider: "SMTP", smtpHost: "smtp.example.com", smtpPort: 465, smtpSecure: true, smtpUsername: "user", smtpPassword: "encrypted:secret" });
     verify.mockRejectedValueOnce(Object.assign(new Error("connect ETIMEDOUT 192.0.2.1"), { code: "ETIMEDOUT" }));
-    await expect(service.testSendingAccount("a1")).rejects.toMatchObject({ status: 422, code: "SMTP_CONNECTION_FAILED", message: expect.not.stringContaining("192.0.2.1") });
+    await expect(service.testSendingAccount("a1")).rejects.toMatchObject({ status: 422, code: "SMTP_TIMEOUT", message: expect.not.stringContaining("192.0.2.1") });
+  });
+
+  it.each([
+    [{ smtpEncryption: "STARTTLS", smtpPort: 587 }, { secure: false, requireTLS: true }],
+    [{ smtpEncryption: "SSL_TLS", smtpPort: 465 }, { secure: true }],
+    [{ smtpEncryption: "NONE", smtpPort: 25 }, { secure: false, ignoreTLS: true }],
+  ])("maps explicit SMTP encryption safely", (configuration, expected) => {
+    expect(service.smtpTransportOptions({ smtpHost: "smtp.example.com", smtpUsername: "user", smtpPassword: "encrypted:secret", smtpSecure: false, ...configuration })).toMatchObject(expected);
+  });
+
+  it("classifies Microsoft SMTP AUTH policy rejection separately", async () => {
+    prismaMock.outreachSendingAccount.findUnique.mockResolvedValue({ id: "a1", provider: "SMTP", smtpHost: "smtp.office365.com", smtpPort: 587, smtpEncryption: "STARTTLS", smtpUsername: "user@example.com", smtpPassword: "encrypted:secret" });
+    verify.mockRejectedValueOnce(Object.assign(new Error("Authentication unsuccessful"), { code: "EAUTH", responseCode: 535, response: "535 5.7.139 SmtpClientAuthentication is disabled for the Mailbox" }));
+    await expect(service.testSendingAccount("a1")).rejects.toMatchObject({ status: 422, code: "SMTP_AUTH_DISABLED" });
+  });
+
+  it("classifies TLS negotiation failures without disabling certificate checks", async () => {
+    prismaMock.outreachSendingAccount.findUnique.mockResolvedValue({ id: "a1", provider: "SMTP", smtpHost: "smtp.example.com", smtpPort: 587, smtpEncryption: "STARTTLS", smtpUsername: "user", smtpPassword: "encrypted:secret" });
+    verify.mockRejectedValueOnce(Object.assign(new Error("certificate verify failed"), { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" }));
+    await expect(service.testSendingAccount("a1")).rejects.toMatchObject({ status: 422, code: "SMTP_TLS_ERROR", message: expect.stringContaining("TLS negotiation failed") });
+    expect(createTransport).toHaveBeenLastCalledWith(expect.not.objectContaining({ tls: expect.objectContaining({ rejectUnauthorized: false }) }));
+  });
+
+  it("returns safe successful SMTP phase diagnostics", async () => {
+    prismaMock.outreachSendingAccount.findUnique.mockResolvedValue({ id: "a1", provider: "SMTP", smtpHost: "smtp.office365.com", smtpPort: 587, smtpEncryption: "STARTTLS", smtpUsername: "user@example.com", smtpPassword: "encrypted:secret" });
+    verify.mockResolvedValueOnce(true);
+    await expect(service.testSendingAccount("a1")).resolves.toEqual({ ok: true, diagnostic: { serverReached: true, tlsEstablished: true, authentication: "SUCCEEDED", code: "SMTP_VERIFIED" } });
+    expect(createTransport).toHaveBeenLastCalledWith(expect.objectContaining({ secure: false, requireTLS: true }));
   });
 
   it("moves one fake agent from qualified through preview, email, and claimed without external delivery", async () => {

@@ -543,6 +543,7 @@ model OutreachSendingAccount {
   smtpUsername      String?
   smtpPassword      String?         @db.Text
   smtpSecure        Boolean         @default(true)
+  smtpEncryption    String          @default("SSL_TLS")
   enabled           Boolean         @default(true)
   isDefault         Boolean         @default(false)
   hourlyLimit       Int             @default(25)

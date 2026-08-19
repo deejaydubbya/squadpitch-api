@@ -257,16 +257,22 @@ function publicProspect(row) {
 
 export async function generatePreview(id, adminSub) {
   const outreach = await prisma.agentOutreachProspect.findUnique({ where: { id } });
-  if (!outreach || !["QUALIFIED", "PREVIEW_PENDING", "PREVIEW_FAILED"].includes(outreach.status)) throw Object.assign(new Error("Prospect is not eligible for preview generation"), { status: 409, code: "INVALID_OUTREACH_STATE" });
+  if (!outreach || !["QUALIFIED", "PREVIEW_PENDING", "PREVIEW_FAILED", "READY_TO_EMAIL", "EMAIL_FAILED"].includes(outreach.status)) throw Object.assign(new Error("Prospect is not eligible for preview generation"), { status: 409, code: "INVALID_OUTREACH_STATE" });
   const selectedListings = selectListingsForPreview(outreach.listings);
   if (!selectedListings.length) throw Object.assign(new Error("Prospect no longer has an active listing"), { status: 422, code: "NO_ACTIVE_LISTINGS" });
   const sourceUrl = selectedListings[0].listingUrl || selectedListings[0].sourceUrl;
-  const issued = await createProspect({ prospectName: outreach.fullName, prospectEmail: outreach.email, businessName: outreach.brokerage || `${outreach.fullName} Real Estate`, industryKey: "real_estate", websiteUrl: outreach.profileUrl, profileImageUrl: outreach.headshotUrl, sourceUrl, selectedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"], acquisitionSource: `Agent discovery: ${outreach.sourceDomain}` }, adminSub);
-  const origin = publicAppOrigin();
-  const previewUrl = `${origin}/preview/${issued.previewToken}`;
-  const claimUrl = `${previewUrl}#claim=${issued.claimToken}`;
-  await prisma.agentOutreachProspect.update({ where: { id }, data: { prospectWorkspaceId: issued.id, status: "PREVIEW_GENERATING", previewUrlEncrypted: encryptToken(previewUrl), claimUrlEncrypted: encryptToken(claimUrl), events: { create: { type: "preview_queued" } } } });
-  await startProspectPreparation(issued.id, { sourceUrl, selectedListings }, adminSub);
+  let workspaceId = outreach.prospectWorkspaceId;
+  if (!workspaceId) {
+    const issued = await createProspect({ prospectName: outreach.fullName, prospectEmail: outreach.email, businessName: outreach.brokerage || `${outreach.fullName} Real Estate`, industryKey: "real_estate", websiteUrl: outreach.profileUrl, profileImageUrl: outreach.headshotUrl, sourceUrl, selectedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"], acquisitionSource: `Agent discovery: ${outreach.sourceDomain}` }, adminSub);
+    workspaceId = issued.id;
+    const origin = publicAppOrigin();
+    const previewUrl = `${origin}/preview/${issued.previewToken}`;
+    const claimUrl = `${previewUrl}#claim=${issued.claimToken}`;
+    await prisma.agentOutreachProspect.update({ where: { id }, data: { prospectWorkspaceId: workspaceId, status: "PREVIEW_GENERATING", previewUrlEncrypted: encryptToken(previewUrl), claimUrlEncrypted: encryptToken(claimUrl), events: { create: { type: "preview_queued" } } } });
+  } else {
+    await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "PREVIEW_GENERATING", lastError: null, events: { create: { type: "preview_requeued" } } } });
+  }
+  await startProspectPreparation(workspaceId, { sourceUrl, selectedListings, selectedChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] }, adminSub);
   return { id, status: "PREVIEW_GENERATING" };
 }
 
@@ -299,7 +305,7 @@ export async function sendOutreachEmail(id, sendingAccountId) {
   if (locked.count !== 1) throw Object.assign(new Error("This outreach is already sending or no longer eligible"), { status: 409, code: "OUTREACH_SEND_LOCKED" });
   try {
     if (account.provider !== "SMTP") throw Object.assign(new Error("Gmail OAuth is not connected yet"), { code: "GMAIL_NOT_CONNECTED" });
-    const transport = nodemailer.createTransport({ host: account.smtpHost, port: account.smtpPort, secure: account.smtpSecure, auth: { user: account.smtpUsername, pass: decryptToken(account.smtpPassword) } });
+    const transport = nodemailer.createTransport(smtpTransportOptions(account));
     const info = await transport.sendMail({ from: { name: account.displayName, address: account.fromEmail }, replyTo: account.replyTo || undefined, to: row.email, subject: row.emailSubject, text: row.emailBody });
     return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "EMAIL_SENT", emailSentAt: new Date(), emailProviderId: info.messageId, lastError: null, events: { create: { type: "email_sent" } } } }));
   } catch (error) {
@@ -308,12 +314,12 @@ export async function sendOutreachEmail(id, sendingAccountId) {
   }
 }
 
-export async function listSendingAccounts() { return prisma.outreachSendingAccount.findMany({ select: { id: true, provider: true, displayName: true, fromEmail: true, replyTo: true, smtpHost: true, smtpPort: true, smtpUsername: true, smtpSecure: true, enabled: true, isDefault: true, hourlyLimit: true, dailyLimit: true, delaySeconds: true, createdAt: true }, orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }] }); }
+export async function listSendingAccounts() { return prisma.outreachSendingAccount.findMany({ select: { id: true, provider: true, displayName: true, fromEmail: true, replyTo: true, smtpHost: true, smtpPort: true, smtpUsername: true, smtpSecure: true, smtpEncryption: true, enabled: true, isDefault: true, hourlyLimit: true, dailyLimit: true, delaySeconds: true, createdAt: true }, orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }] }); }
 export async function saveSendingAccount(input, adminSub) {
   if (input.provider === "GMAIL") throw Object.assign(new Error("Gmail OAuth connection is not configured; use SMTP for Google Workspace with an app password"), { status: 501, code: "GMAIL_OAUTH_DEFERRED" });
   return prisma.$transaction(async (tx) => {
     if (input.isDefault) await tx.outreachSendingAccount.updateMany({ data: { isDefault: false } });
-    const row = await tx.outreachSendingAccount.create({ data: { provider: input.provider, displayName: input.displayName, fromEmail: normalizedEmail(input.fromEmail), replyTo: input.replyTo || null, smtpHost: input.smtpHost, smtpPort: input.smtpPort, smtpUsername: input.smtpUsername, smtpPassword: encryptToken(input.smtpPassword), smtpSecure: input.smtpSecure, enabled: input.enabled, isDefault: input.isDefault, hourlyLimit: input.hourlyLimit, dailyLimit: input.dailyLimit, delaySeconds: input.delaySeconds, createdByAdminSub: adminSub } });
+    const row = await tx.outreachSendingAccount.create({ data: { provider: input.provider, displayName: input.displayName, fromEmail: normalizedEmail(input.fromEmail), replyTo: input.replyTo || null, smtpHost: input.smtpHost, smtpPort: input.smtpPort, smtpUsername: input.smtpUsername, smtpPassword: encryptToken(input.smtpPassword), smtpEncryption: input.smtpEncryption, smtpSecure: input.smtpEncryption === "SSL_TLS", enabled: input.enabled, isDefault: input.isDefault, hourlyLimit: input.hourlyLimit, dailyLimit: input.dailyLimit, delaySeconds: input.delaySeconds, createdByAdminSub: adminSub } });
     return { ...row, smtpPassword: undefined };
   });
 }
@@ -323,6 +329,7 @@ export async function updateSendingAccount(id, input) {
     if (!existing) throw Object.assign(new Error("Sending account not found"), { status: 404, code: "NOT_FOUND" });
     if (input.isDefault) await tx.outreachSendingAccount.updateMany({ where: { id: { not: id } }, data: { isDefault: false } });
     const { smtpPassword: replacementPassword, ...changes } = input;
+    if (changes.smtpEncryption) changes.smtpSecure = changes.smtpEncryption === "SSL_TLS";
     const row = await tx.outreachSendingAccount.update({ where: { id }, data: { ...changes, smtpPassword: replacementPassword ? encryptToken(replacementPassword) : existing.smtpPassword } });
     const { smtpPassword, ...safe } = row;
     return safe;
@@ -334,18 +341,37 @@ export async function deleteSendingAccount(id) {
   await prisma.outreachSendingAccount.delete({ where: { id } });
 }
 function smtpConfigurationError(error) {
-  if (error?.code === "EAUTH" || error?.responseCode === 535) return Object.assign(new Error("SMTP authentication failed. Check the username and app password, then try again."), { status: 422, code: "SMTP_AUTH_FAILED" });
-  if (["ETIMEDOUT", "ESOCKET", "ECONNECTION", "ECONNREFUSED"].includes(error?.code)) return Object.assign(new Error("Could not connect to the SMTP server. Check the hostname, port, and TLS setting."), { status: 422, code: "SMTP_CONNECTION_FAILED" });
-  if (["CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE"].includes(error?.code)) return Object.assign(new Error("The SMTP server certificate could not be verified."), { status: 422, code: "SMTP_TLS_FAILED" });
+  const response = String(error?.response || error?.message || "");
+  if ((error?.code === "EAUTH" || error?.responseCode === 535) && /5\.7\.(139|57)|smtp.*auth.*disabled|authentication.*disabled/i.test(response)) return Object.assign(new Error("Microsoft 365 rejected SMTP authentication for this mailbox or tenant."), { status: 422, code: "SMTP_AUTH_DISABLED" });
+  if (error?.code === "EAUTH" || error?.responseCode === 535) return Object.assign(new Error("The SMTP server was reached, but authentication failed. Check credentials and whether SMTP authentication is allowed for this mailbox."), { status: 422, code: "SMTP_AUTH_FAILED" });
+  if (error?.code === "ETIMEDOUT") return Object.assign(new Error("Connection to the SMTP server timed out."), { status: 422, code: "SMTP_TIMEOUT" });
+  if (["ETLS", "ESOCKET", "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "ERR_SSL_WRONG_VERSION_NUMBER"].includes(error?.code)) return Object.assign(new Error("The SMTP server was reached, but TLS negotiation failed. Check encryption mode and port."), { status: 422, code: "SMTP_TLS_ERROR" });
+  if (["EDNS", "ECONNECTION", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(error?.code)) return Object.assign(new Error("Unable to reach the SMTP server."), { status: 422, code: "SMTP_NETWORK_ERROR" });
   return Object.assign(new Error("The SMTP settings could not be verified. Check the server configuration and try again."), { status: 422, code: "SMTP_VERIFICATION_FAILED" });
+}
+
+export function smtpTransportOptions(account) {
+  const encryption = account.smtpEncryption || (Number(account.smtpPort) === 587 ? "STARTTLS" : account.smtpSecure ? "SSL_TLS" : "NONE");
+  return {
+    host: account.smtpHost,
+    port: account.smtpPort,
+    secure: encryption === "SSL_TLS",
+    ...(encryption === "STARTTLS" ? { requireTLS: true } : {}),
+    ...(encryption === "NONE" ? { ignoreTLS: true } : {}),
+    auth: { user: account.smtpUsername, pass: decryptToken(account.smtpPassword) },
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 30_000,
+  };
 }
 
 export async function testSendingAccount(id) {
   const account = await prisma.outreachSendingAccount.findUnique({ where: { id } });
   if (!account || account.provider !== "SMTP") throw Object.assign(new Error("SMTP account not found"), { status: 404, code: "SMTP_ACCOUNT_NOT_FOUND" });
-  const transport = nodemailer.createTransport({ host: account.smtpHost, port: account.smtpPort, secure: account.smtpSecure, auth: { user: account.smtpUsername, pass: decryptToken(account.smtpPassword) } });
+  const options = smtpTransportOptions(account);
+  const transport = nodemailer.createTransport(options);
   try { await transport.verify(); } catch (error) { throw smtpConfigurationError(error); }
-  return { ok: true };
+  return { ok: true, diagnostic: { serverReached: true, tlsEstablished: account.smtpEncryption !== "NONE", authentication: "SUCCEEDED", code: "SMTP_VERIFIED" } };
 }
 export async function unsubscribe(token) { const row = await prisma.agentOutreachProspect.findUnique({ where: { unsubscribeTokenHash: digestSecret(token || "") } }); if (!row?.normalizedEmail) return false; await prisma.$transaction([prisma.outreachSuppression.upsert({ where: { normalizedEmail: row.normalizedEmail }, create: { normalizedEmail: row.normalizedEmail, reason: "UNSUBSCRIBED", source: "EMAIL_LINK" }, update: { reason: "UNSUBSCRIBED", source: "EMAIL_LINK", restoredAt: null } }), prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "UNSUBSCRIBED", events: { create: { type: "unsubscribed" } } } })]); return true; }
 export async function syncClaimed(id) { const rows = await prisma.agentOutreachProspect.findMany({ where: { ...(id ? { id } : {}), status: { not: "CLAIMED" }, prospectWorkspace: { claimStatus: "CLAIMED" } }, select: { id: true, prospectWorkspace: { select: { claimedAt: true } } } }); await Promise.all(rows.map(row => prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "CLAIMED", claimedAt: row.prospectWorkspace.claimedAt, events: { create: { type: "claimed" } } } }))); }
