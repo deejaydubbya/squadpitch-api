@@ -7,6 +7,55 @@ const LISTING_RE = /\/[^/]+\/pid_\d+\/?$/i;
 const DIRECTORY_RE = /^(.*\/agents)(?:\/p_(\d+))?\/?$/i;
 
 function clean(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
+const ZIP_RE = /^\d{5}(?:-\d{4})?$/;
+const STREET_RE = /^\d+[A-Za-z]?(?:[-/]\d+[A-Za-z]?)?\s+\S.+$/;
+
+function addressFromFullText(value) {
+  const match = clean(value).match(/^(.+?),\s*([^,]+),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$/i);
+  return match ? { streetAddress: match[1], city: match[2], state: match[3], postalCode: match[4] } : {};
+}
+function streetFromCardText(value) { return clean(value).replace(/^(?:active|for sale)\s+/i, "").split(/\s+\$[\d,.]+|\s+\d+(?:\.\d+)?\s*(?:beds?|bd)\b/i)[0].trim() || null; }
+
+export function normalizeColdwellListingAddress(input = {}, listingUrl = null) {
+  const fromFull = addressFromFullText(input.fullAddress || input.address || "");
+  const streetAddress = clean(input.streetAddress || input.street || fromFull.streetAddress) || null;
+  const city = clean(input.city || fromFull.city) || null;
+  const state = clean(input.state || fromFull.state).toUpperCase() || null;
+  const postalCode = clean(input.postalCode || input.zip || fromFull.postalCode) || null;
+  const zipGluedToHouse = /^\d{5}(?:-\d{4})?(?:\d+|\s+\d+)\s/i.test(streetAddress || "");
+  const zipAppended = /\s\d{5}(?:-\d{4})?$/.test(streetAddress || "");
+  const zipInsideStreet = postalCode && (streetAddress || "").replace(/\D/g, "").startsWith(postalCode.replace(/\D/g, "")) && streetAddress !== postalCode;
+  const repeatedStreet = /^(.{4,}?)\s+\1$/i.test(streetAddress || "");
+  const escapedCity = city?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const cityAppended = escapedCity ? new RegExp(`\\s${escapedCity}$`, "i").test(streetAddress || "") : false;
+  const validStreet = !streetAddress || STREET_RE.test(streetAddress);
+  const validPostalCode = !postalCode || ZIP_RE.test(postalCode);
+  const suspicious = Boolean(zipGluedToHouse || zipAppended || zipInsideStreet || repeatedStreet || cityAppended || !validStreet || !validPostalCode);
+  if (suspicious) return { streetAddress: null, city: city || null, state: state || null, postalCode: validPostalCode ? postalCode : null, fullAddress: null, addressParsingStatus: "SUSPICIOUS", listingUrl };
+  const statePostal = [state, postalCode].filter(Boolean).join(" ");
+  const fullAddress = [streetAddress, city, statePostal].filter(Boolean).join(", ") || null;
+  return { streetAddress, city, state, postalCode, fullAddress, addressParsingStatus: streetAddress ? (city && state && postalCode ? "COMPLETE" : "PARTIAL") : "INCOMPLETE", listingUrl };
+}
+
+function jsonLdValues($) {
+  const values = [];
+  const visit = (value) => { if (!value || typeof value !== "object") return; if (Array.isArray(value)) return value.forEach(visit); values.push(value); if (Array.isArray(value["@graph"])) value["@graph"].forEach(visit); };
+  $("script[type='application/ld+json']").each((_i, node) => { try { visit(JSON.parse($(node).text())); } catch {} });
+  return values;
+}
+
+function structuredAddress($) {
+  for (const value of jsonLdValues($)) {
+    const address = value?.address?.streetAddress ? value.address : value?.["@type"] === "PostalAddress" ? value : null;
+    if (address) return { streetAddress: address.streetAddress, city: address.addressLocality, state: address.addressRegion, postalCode: address.postalCode };
+  }
+  return {
+    streetAddress: $("[itemprop='streetAddress']").first().attr("content") || $("[itemprop='streetAddress']").first().text(),
+    city: $("[itemprop='addressLocality']").first().attr("content") || $("[itemprop='addressLocality']").first().text(),
+    state: $("[itemprop='addressRegion']").first().attr("content") || $("[itemprop='addressRegion']").first().text(),
+    postalCode: $("[itemprop='postalCode']").first().attr("content") || $("[itemprop='postalCode']").first().text(),
+  };
+}
 function nameFromProfileUrl(value) {
   try {
     const slug = new URL(value).pathname.match(/\/agent\/([^/]+)\/aid_\d+/i)?.[1];
@@ -82,8 +131,16 @@ export const coldwellBankerHomesProvider = {
   },
   parseListings(url, html) {
     const $ = cheerio.load(html), listings = [], seen = new Set();
-    $("a[href]").each((_i, node) => { const href = absoluteSameDomain($(node).attr("href"), url); if (!href || !LISTING_RE.test(new URL(href).pathname)) return; const container = $(node).closest("article,li,[class*='listing'],[class*='property'],[data-listing-id]"); const containerText = clean(container.text() || $(node).parent().text() || $(node).text()); if (INACTIVE_RE.test(containerText)) return; const listingUrl = normalizePublicUrl(href); if (!listingUrl || seen.has(listingUrl)) return; seen.add(listingUrl); const listingId = new URL(listingUrl).pathname.match(/pid_(\d+)/i)?.[1] || null; const price = containerText.match(/\$[\d,.]+/)?.[0] || null; const facts = containerText.match(/(\d+(?:\.\d+)?)\s*(?:beds?|bd).*?(\d+(?:\.\d+)?)\s*(?:baths?|ba).*?([\d,]+)\s*(?:sq\.?\s*ft|sqft)/i); const address = clean($(node).attr("aria-label") || container.find("[class*='address'],address").first().text() || $(node).text()) || null; const photos = [...new Set(container.find("img").map((_j, image) => $(image).attr("src") || $(image).attr("data-src")).get().filter(Boolean))]; listings.push({ listingId, listingUrl, sourceUrl: listingUrl, address, price, beds: facts ? Number(facts[1]) : null, baths: facts ? Number(facts[2]) : null, squareFeet: facts ? Number(facts[3].replace(/,/g, "")) : null, photoUrls: photos, status: "ACTIVE", verifiedAt: new Date().toISOString() }); });
+    $("a[href]").each((_i, node) => { const href = absoluteSameDomain($(node).attr("href"), url); if (!href || !LISTING_RE.test(new URL(href).pathname)) return; const container = $(node).closest("article,li,[class*='listing'],[class*='property'],[data-listing-id]"); const containerText = clean(container.text() || $(node).parent().text() || $(node).text()); if (INACTIVE_RE.test(containerText)) return; const listingUrl = normalizePublicUrl(href); if (!listingUrl || seen.has(listingUrl)) return; seen.add(listingUrl); const listingId = new URL(listingUrl).pathname.match(/pid_(\d+)/i)?.[1] || null; const price = containerText.match(/\$[\d,.]+/)?.[0] || null; const facts = containerText.match(/(\d+(?:\.\d+)?)\s*(?:beds?|bd).*?(\d+(?:\.\d+)?)\s*(?:baths?|ba).*?([\d,]+)\s*(?:sq\.?\s*ft|sqft)/i); const addressNode = container.find("[class*='address'],address").first(); const rawAddress = clean($(node).attr("aria-label") || addressNode.attr("data-address") || addressNode.text() || $(node).text()) || null; const component = (name) => clean(container.find(`[itemprop='${name}']`).first().attr("content") || container.find(`[itemprop='${name}']`).first().text()); const parsedFull = addressFromFullText(rawAddress); const normalizedAddress = normalizeColdwellListingAddress({ streetAddress: component("streetAddress") || parsedFull.streetAddress || streetFromCardText(rawAddress), city: component("addressLocality") || parsedFull.city, state: component("addressRegion") || parsedFull.state, postalCode: component("postalCode") || parsedFull.postalCode }, listingUrl); const photos = [...new Set(container.find("img").map((_j, image) => $(image).attr("src") || $(image).attr("data-src")).get().filter(Boolean))]; listings.push({ listingId, listingUrl, sourceUrl: listingUrl, address: normalizedAddress.fullAddress || normalizedAddress.streetAddress, ...normalizedAddress, price, beds: facts ? Number(facts[1]) : null, baths: facts ? Number(facts[2]) : null, squareFeet: facts ? Number(facts[3].replace(/,/g, "")) : null, photoUrls: photos, status: "ACTIVE", verifiedAt: new Date().toISOString() }); });
     return listings;
+  },
+  parseListingDetail(url, html) {
+    const $ = cheerio.load(html);
+    const structured = structuredAddress($);
+    const heading = clean($("h1").first().text() || $("meta[property='og:title']").attr("content") || $("title").text());
+    const parsedHeading = addressFromFullText(heading);
+    const normalized = normalizeColdwellListingAddress({ streetAddress: structured.streetAddress || parsedHeading.streetAddress || streetFromCardText(heading), city: structured.city || parsedHeading.city, state: structured.state || parsedHeading.state, postalCode: structured.postalCode || parsedHeading.postalCode }, normalizePublicUrl(url));
+    return { listingUrl: normalizePublicUrl(url), sourceUrl: normalizePublicUrl(url), address: normalized.fullAddress || normalized.streetAddress, ...normalized };
   },
   discoverListingPages(url, html, profileUrl) {
     const $ = cheerio.load(html), currentPath = new URL(url).pathname, currentPage = Number(currentPath.match(/\/p_(\d+)\/?$/i)?.[1] || 1);

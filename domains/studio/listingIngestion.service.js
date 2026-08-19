@@ -896,7 +896,7 @@ function autoDetectColumns(headers) {
  * Extract listing data from scraped HTML/markdown content.
  * Uses meta tags (og:title, og:image) + best-effort text parsing.
  */
-function extractListingFromScrapedData(scraped, url) {
+export function extractListingFromScrapedData(scraped, url) {
   const listing = {
     title: null,
     description: null,
@@ -963,10 +963,17 @@ function extractListingFromScrapedData(scraped, url) {
   const yearMatch = text.match(/(?:built\s+(?:in\s+)?|year\s*built:?\s*)(\d{4})/i);
   if (yearMatch) listing.yearBuilt = yearMatch[1];
 
-  // Address: try to find address patterns (number + street name)
-  const addressMatch = text.match(/(\d+\s+[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*\s+(?:St|Ave|Blvd|Dr|Rd|Ln|Ct|Way|Pl|Cir|Terr?|Loop|Pike|Pkwy|Hwy)\.?)/);
-  if (addressMatch) {
-    listing.address.street = addressMatch[1];
+  // Coldwell and similar listing titles expose a canonical, delimited full
+  // address. Prefer those components over flattened DOM text, where adjacent
+  // ZIP and street spans can become "43055183 Rugg Ave".
+  const titleAddress = String(scraped.title || "").match(/^(.+?),\s*([^,]+),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\b/i);
+  if (titleAddress) {
+    listing.address = { street: titleAddress[1].trim(), city: titleAddress[2].trim(), state: titleAddress[3].toUpperCase(), zip: titleAddress[4] };
+  } else {
+    // Last-resort body fallback. A 7+ digit leading number is not a plausible
+    // house number here and commonly means ZIP + house number were glued.
+    const addressMatch = text.match(/(\d+\s+[A-Z][a-zA-Z]+(?:\s+[A-Z0-9#-][a-zA-Z0-9#-]*)*\s+(?:St|Ave|Blvd|Dr|Rd|Ln|Ct|Way|Pl|Cir|Terr?|Loop|Pike|Pkwy|Hwy)\.?)/);
+    if (addressMatch && !/^\d{7,}\s/.test(addressMatch[1])) listing.address.street = addressMatch[1];
   }
 
   return listing;

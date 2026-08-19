@@ -82,7 +82,35 @@ describe("Coldwell Banker Homes discovery provider", () => {
       <article>Sold <a href="/oh/columbus/home/456-old/pid_2/">456 Old St</a></article>
       <article>Pending <a href="/oh/columbus/home/789-wait/pid_3/">789 Wait St</a></article>`);
     expect(listings).toHaveLength(1);
-    expect(listings[0]).toMatchObject({ address: "123 Main St $450,000", price: "$450,000", status: "ACTIVE" });
+    expect(listings[0]).toMatchObject({ streetAddress: "123 Main St", address: "123 Main St", price: "$450,000", status: "ACTIVE" });
     expect(provider.parseListings("https://www.coldwellbankerhomes.com/a/listings/", "<p>No active listings.</p>")).toEqual([]);
+  });
+
+  it.each([
+    ["130 E Walnut St", "Westerville", "OH", "43082"],
+    ["183 Rugg Ave", "Newark", "OH", "43055"],
+    ["12960 Appleton Rd", "Johnstown", "OH", "43031"],
+    ["42 W 3rd St", "Columbus", "OH", "43215"],
+  ])("keeps address components separate for %s", (streetAddress, city, state, postalCode) => {
+    const result = provider.parseListingDetail("https://www.coldwellbankerhomes.com/oh/example/home/pid_1/", `<script type="application/ld+json">${JSON.stringify({ "@type": "SingleFamilyResidence", address: { "@type": "PostalAddress", streetAddress, addressLocality: city, addressRegion: state, postalCode } })}</script>`);
+    expect(result).toMatchObject({ streetAddress, city, state, postalCode, fullAddress: `${streetAddress}, ${city}, ${state} ${postalCode}`, address: `${streetAddress}, ${city}, ${state} ${postalCode}`, addressParsingStatus: "COMPLETE" });
+    expect(result.streetAddress).not.toContain(postalCode);
+  });
+
+  it("rejects ZIP-glued collection text and recovers from detail structured data", () => {
+    const url = "https://www.coldwellbankerhomes.com/oh/newark/183-rugg-ave/pid_73026102/";
+    const [collection] = provider.parseListings("https://www.coldwellbankerhomes.com/agent/listings/", `<article><address><span>43055</span><span>183 Rugg Ave</span></address><a href="${url}">Details</a></article>`);
+    expect(collection).toMatchObject({ streetAddress: null, fullAddress: null, address: null, addressParsingStatus: "SUSPICIOUS" });
+    expect(collection.address).not.toBe("43055183 Rugg Ave");
+
+    const detail = provider.parseListingDetail(url, `<script type="application/ld+json">{"@type":"SingleFamilyResidence","address":{"@type":"PostalAddress","streetAddress":"183 Rugg Ave","addressLocality":"Newark","addressRegion":"OH","postalCode":"43055"}}</script>`);
+    expect(detail).toMatchObject({ streetAddress: "183 Rugg Ave", city: "Newark", state: "OH", postalCode: "43055", fullAddress: "183 Rugg Ave, Newark, OH 43055", addressParsingStatus: "COMPLETE" });
+  });
+
+  it.each(["183 Rugg Ave 183 Rugg Ave", "43055 183 Rugg Ave", "183 Rugg Ave 43055", "43055183 Rugg Ave"])('rejects corrupted street candidate "%s"', (streetAddress) => {
+    const normalized = provider.parseListingDetail("https://www.coldwellbankerhomes.com/oh/newark/183-rugg-ave/pid_1/", `<h1>${streetAddress}</h1>`);
+    expect(normalized.streetAddress).toBeNull();
+    expect(normalized.fullAddress).toBeNull();
+    expect(normalized.addressParsingStatus).toBe("SUSPICIOUS");
   });
 });

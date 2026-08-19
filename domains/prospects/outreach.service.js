@@ -230,7 +230,19 @@ async function executeDiscoveryRun(run, provider, url, options = {}) {
             if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
             visitedListingPages.add(normalizePublicUrl(listingPage) || listingPage);
             const listingHtml = await fetchDiscoveryPage(listingPage);
-            for (const listing of provider.parseListings(listingPage, listingHtml)) { const key = listing.listingId || listing.listingUrl; if (key && !listingKeys.has(key)) { listingKeys.add(key); listings.push(listing); } }
+            for (let listing of provider.parseListings(listingPage, listingHtml)) {
+              const key = listing.listingId || listing.listingUrl;
+              if (!key || listingKeys.has(key)) continue;
+              if (listing.addressParsingStatus === "SUSPICIOUS" && provider.parseListingDetail && listing.listingUrl) {
+                try {
+                  if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+                  const detail = provider.parseListingDetail(listing.listingUrl, await fetchDiscoveryPage(listing.listingUrl));
+                  if (detail.streetAddress && detail.addressParsingStatus !== "SUSPICIOUS") listing = { ...listing, ...detail, address: detail.fullAddress || detail.streetAddress };
+                } catch {}
+              }
+              listingKeys.add(key);
+              listings.push(listing);
+            }
             listingPage = provider.discoverListingPages?.(listingPage, listingHtml, agent.profileUrl)?.[0] || null;
           }
         }
