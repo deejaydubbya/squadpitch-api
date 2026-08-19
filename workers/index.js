@@ -23,6 +23,7 @@ const starters = [
   ["./contactRetentionWorker.js", "startContactRetentionWorker"],
   ["./accountLifecycleWorker.js", "startAccountLifecycleWorker"],
   ["./prospectPreparationWorker.js", "startProspectPreparationWorker"],
+  ["./outreachEmailWorker.js", "startOutreachEmailWorker"],
   ["./referralQualificationWorker.js", "startReferralQualificationWorker"],
 ];
 

@@ -8,6 +8,7 @@ import { encryptToken, decryptToken } from "../../lib/tokenCrypto.js";
 import { createProspect, digestSecret, reconcileProspectPreparationRuns, startProspectPreparation } from "./prospect.service.js";
 import { getDiscoveryProvider } from "./discovery/providers.js";
 import { normalizePublicUrl } from "./discovery/urlIdentity.js";
+import { getOutreachEmailQueue } from "../../lib/queues.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_SUBJECT = "I created a free Squadpitch workspace for you";
@@ -351,7 +352,30 @@ export async function prepareEmail(id, input = {}) {
   return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { emailSubject: rendered.subject, emailBody: rendered.textBody, emailHtmlBody: rendered.htmlBody, unsubscribeTokenHash: digestSecret(token), ...(input.sendingAccountId ? { sendingAccountId: input.sendingAccountId } : {}) }, include: { events: true, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } } }));
 }
 
-export async function sendOutreachEmail(id, sendingAccountId) {
+export async function queueOutreachEmail(id, sendingAccountId) {
+  await syncClaimed(id);
+  const row = await prisma.agentOutreachProspect.findUnique({ where: { id }, include: { sendingAccount: true, prospectWorkspace: { select: { claimStatus: true } } } });
+  const account = sendingAccountId ? await prisma.outreachSendingAccount.findUnique({ where: { id: sendingAccountId } }) : row?.sendingAccount || await prisma.outreachSendingAccount.findFirst({ where: { enabled: true, isDefault: true } });
+  if (!row || row.emailSentAt) return row ? publicProspect(row) : null;
+  if (row.status === "EMAIL_QUEUED") return publicProspect(row);
+  if (row.status === "CLAIMED" || row.prospectWorkspace?.claimStatus === "CLAIMED") throw Object.assign(new Error("Claimed prospects cannot receive outreach"), { status: 409, code: "PROSPECT_CLAIMED" });
+  if (row.status === "UNSUBSCRIBED" || !row.email) throw Object.assign(new Error("This prospect is not eligible for email"), { status: 409, code: "EMAIL_NOT_ELIGIBLE" });
+  if (!account?.enabled || !row.emailSubject || !row.emailBody || !row.emailHtmlBody || !row.claimUrlEncrypted) throw Object.assign(new Error("Prepare the email and select an enabled sending account"), { status: 409, code: "EMAIL_NOT_READY" });
+  if (await prisma.outreachSuppression.findFirst({ where: { normalizedEmail: row.normalizedEmail, restoredAt: null } })) throw Object.assign(new Error("This address is suppressed"), { status: 409, code: "EMAIL_SUPPRESSED" });
+  const queue = getOutreachEmailQueue();
+  if (!queue) throw Object.assign(new Error("Outreach email worker is unavailable"), { status: 503, code: "QUEUE_UNAVAILABLE" });
+  const locked = await prisma.agentOutreachProspect.updateMany({ where: { id, emailSentAt: null, status: { in: ["READY_TO_EMAIL", "EMAIL_FAILED"] } }, data: { status: "EMAIL_QUEUED", sendingAccountId: account.id, lastError: null } });
+  if (locked.count !== 1) throw Object.assign(new Error("This outreach is already queued or no longer eligible"), { status: 409, code: "OUTREACH_SEND_LOCKED" });
+  try {
+    await queue.add("send", { prospectId: id, sendingAccountId: account.id }, { jobId: `outreach-${id}-${Date.now()}` });
+  } catch (error) {
+    await prisma.agentOutreachProspect.updateMany({ where: { id, status: "EMAIL_QUEUED" }, data: { status: "EMAIL_FAILED", lastError: "Email could not be queued. Try again." } });
+    throw Object.assign(new Error("Email could not be queued"), { status: 503, code: "QUEUE_ENQUEUE_FAILED", cause: error });
+  }
+  return { id, status: "EMAIL_QUEUED" };
+}
+
+export async function sendOutreachEmail(id, sendingAccountId, options = {}) {
   await syncClaimed(id);
   const row = await prisma.agentOutreachProspect.findUnique({ where: { id }, include: { sendingAccount: true, prospectWorkspace: { select: { claimStatus: true } } } });
   const account = sendingAccountId ? await prisma.outreachSendingAccount.findUnique({ where: { id: sendingAccountId } }) : row?.sendingAccount || await prisma.outreachSendingAccount.findFirst({ where: { enabled: true, isDefault: true } });
@@ -363,7 +387,9 @@ export async function sendOutreachEmail(id, sendingAccountId) {
   const sinceHour = new Date(Date.now() - 3_600_000), sinceDay = new Date(Date.now() - 86_400_000);
   const [hourly, daily, latest] = await Promise.all([prisma.agentOutreachProspect.count({ where: { sendingAccountId: account.id, emailSentAt: { gte: sinceHour } } }), prisma.agentOutreachProspect.count({ where: { sendingAccountId: account.id, emailSentAt: { gte: sinceDay } } }), prisma.agentOutreachProspect.findFirst({ where: { sendingAccountId: account.id, emailSentAt: { not: null } }, orderBy: { emailSentAt: "desc" }, select: { emailSentAt: true } })]);
   if (hourly >= account.hourlyLimit || daily >= account.dailyLimit) throw Object.assign(new Error("Sending account rate limit reached"), { status: 429, code: "OUTREACH_RATE_LIMIT" });
-  if (latest?.emailSentAt && Date.now() - latest.emailSentAt.getTime() < account.delaySeconds * 1000) throw Object.assign(new Error("Sending account delay has not elapsed"), { status: 429, code: "OUTREACH_SEND_DELAY" });
+  const remainingDelayMs = latest?.emailSentAt ? Math.max(0, account.delaySeconds * 1000 - (Date.now() - latest.emailSentAt.getTime())) : 0;
+  if (remainingDelayMs && options.waitForDelay) await new Promise((resolve) => setTimeout(resolve, remainingDelayMs));
+  else if (remainingDelayMs) throw Object.assign(new Error("Sending account delay has not elapsed"), { status: 429, code: "OUTREACH_SEND_DELAY" });
   const locked = await prisma.agentOutreachProspect.updateMany({ where: { id, emailSentAt: null, status: { in: ["READY_TO_EMAIL", "EMAIL_FAILED", "EMAIL_QUEUED"] } }, data: { status: "EMAIL_SENDING", sendingAccountId: account.id } });
   if (locked.count !== 1) throw Object.assign(new Error("This outreach is already sending or no longer eligible"), { status: 409, code: "OUTREACH_SEND_LOCKED" });
   try {
@@ -375,6 +401,11 @@ export async function sendOutreachEmail(id, sendingAccountId) {
     await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "EMAIL_FAILED", lastError: error.message, events: { create: { type: "email_failed", message: error.message } } } });
     throw error;
   }
+}
+
+export async function failQueuedOutreachEmail(id, error) {
+  const message = error?.message || "Email delivery failed";
+  return prisma.agentOutreachProspect.updateMany({ where: { id, status: { in: ["EMAIL_QUEUED", "EMAIL_SENDING"] } }, data: { status: "EMAIL_FAILED", lastError: message, events: { create: { type: "email_failed", message } } } });
 }
 
 export async function listSendingAccounts() { return prisma.outreachSendingAccount.findMany({ select: { id: true, provider: true, displayName: true, fromEmail: true, replyTo: true, smtpHost: true, smtpPort: true, smtpUsername: true, smtpSecure: true, smtpEncryption: true, enabled: true, isDefault: true, hourlyLimit: true, dailyLimit: true, delaySeconds: true, createdAt: true }, orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }] }); }

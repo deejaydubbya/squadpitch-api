@@ -20,6 +20,14 @@ describe("durable prospect preparation", () => {
     expect(worker).toContain("executeProspectPreparation(job.data.runId)");
   });
 
+  it("queues outreach delivery and processes it with a single delay-aware worker", () => {
+    const routes = read("domains/internal/internal.routes.js");
+    const worker = read("workers/outreachEmailWorker.js");
+    expect(routes).toContain("queueOutreachEmail");
+    expect(worker).toContain("waitForDelay: true");
+    expect(worker).toContain("concurrency: 1");
+  });
+
   it("records per-platform attempts, provenance, stale failure, and terminal warning state", () => {
     const service = read("domains/prospects/prospect.service.js");
     for (const state of ["NOT_STARTED", "GENERATING", "VALIDATING", "RETRYING", "AI_ACCEPTED", "FALLBACK_ACCEPTED"]) expect(service).toContain(state);

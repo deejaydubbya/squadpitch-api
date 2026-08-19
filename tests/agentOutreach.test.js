@@ -5,6 +5,7 @@ const verify = vi.fn();
 const createProspect = vi.fn();
 const startProspectPreparation = vi.fn();
 const reconcileProspectPreparationRuns = vi.fn();
+const queueAdd = vi.fn();
 const createTransport = vi.fn(() => ({ sendMail, verify }));
 const prismaMock = {
   agentDiscoveryRun: { create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
@@ -19,6 +20,7 @@ vi.mock("../prisma.js", () => ({ prisma: prismaMock }));
 vi.mock("nodemailer", () => ({ default: { createTransport } }));
 vi.mock("../config/env.js", () => ({ env: { APP_URL: "https://app.squadpitch.test" } }));
 vi.mock("../lib/tokenCrypto.js", () => ({ encryptToken: vi.fn((value) => `encrypted:${value}`), decryptToken: vi.fn((value) => value.replace(/^encrypted:/, "")) }));
+vi.mock("../lib/queues.js", () => ({ getOutreachEmailQueue: vi.fn(() => ({ add: queueAdd })) }));
 vi.mock("../domains/prospects/prospect.service.js", () => ({ createProspect, startProspectPreparation, reconcileProspectPreparationRuns, digestSecret: vi.fn((value) => `digest:${value}`) }));
 
 const service = await import("../domains/prospects/outreach.service.js");
@@ -29,6 +31,7 @@ describe("agent outreach safety", () => {
     prismaMock.agentOutreachProspect.findMany.mockResolvedValue([]);
     prismaMock.outreachSuppression.findFirst.mockResolvedValue(null);
     prismaMock.outreachEmailTemplate.upsert.mockResolvedValue({ id: "default", ...service.outreachTemplate });
+    queueAdd.mockResolvedValue({ id: "job" });
   });
 
   it.each([
@@ -129,6 +132,20 @@ describe("agent outreach safety", () => {
     prismaMock.agentOutreachProspect.findFirst.mockResolvedValue(null);
     prismaMock.agentOutreachProspect.updateMany.mockResolvedValue({ count: 0 });
     await expect(service.sendOutreachEmail("o1", "a1")).rejects.toMatchObject({ code: "OUTREACH_SEND_LOCKED" });
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it("queues each eligible email immediately instead of rejecting the configured send delay", async () => {
+    const row = { id: "o1", email: "test@example.com", normalizedEmail: "test@example.com", status: "READY_TO_EMAIL", emailSentAt: null, emailSubject: "Hello", emailBody: "Body", emailHtmlBody: "<p>Body</p>", claimUrlEncrypted: "encrypted:https://app/preview/x", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: null };
+    const account = { id: "a1", enabled: true, delaySeconds: 60 };
+    prismaMock.agentOutreachProspect.findUnique.mockResolvedValue(row);
+    prismaMock.outreachSendingAccount.findUnique.mockResolvedValue(account);
+    prismaMock.agentOutreachProspect.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(service.queueOutreachEmail("o1", "a1")).resolves.toEqual({ id: "o1", status: "EMAIL_QUEUED" });
+
+    expect(prismaMock.agentOutreachProspect.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "EMAIL_QUEUED", sendingAccountId: "a1" }) }));
+    expect(queueAdd).toHaveBeenCalledWith("send", { prospectId: "o1", sendingAccountId: "a1" }, expect.objectContaining({ jobId: expect.stringContaining("outreach-o1-") }));
     expect(sendMail).not.toHaveBeenCalled();
   });
 
