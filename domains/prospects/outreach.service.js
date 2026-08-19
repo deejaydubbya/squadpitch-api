@@ -193,7 +193,7 @@ export async function resumeDiscovery(id, options = {}) {
 export async function listPipeline() {
   await syncClaimed();
   const [prospects, runs, accounts] = await Promise.all([
-    prisma.agentOutreachProspect.findMany({ include: { events: { orderBy: { createdAt: "desc" }, take: 20 }, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } }, orderBy: { discoveredAt: "desc" } }),
+    prisma.agentOutreachProspect.findMany({ include: { events: { orderBy: { createdAt: "desc" }, take: 20 }, prospectWorkspace: { select: { claimStatus: true, claimedAt: true } }, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } }, orderBy: { discoveredAt: "desc" } }),
     prisma.agentDiscoveryRun.findMany({ orderBy: { createdAt: "desc" }, take: 10 }),
     listSendingAccounts(),
   ]);
@@ -204,7 +204,9 @@ function publicProspect(row) {
   let previewUrl = null, claimUrl = null;
   try { previewUrl = row.previewUrlEncrypted ? decryptToken(row.previewUrlEncrypted) : null; claimUrl = row.claimUrlEncrypted ? decryptToken(row.claimUrlEncrypted) : null; } catch {}
   const { previewUrlEncrypted, claimUrlEncrypted, unsubscribeTokenHash, ...safe } = row;
-  return { ...safe, previewUrl, claimUrl };
+  const manualOutreach = row.status === "MANUAL_OUTREACH";
+  const status = manualOutreach ? (row.prospectWorkspace?.claimStatus === "CLAIMED" ? "CLAIMED" : "UNCLAIMED") : row.status;
+  return { ...safe, status, outreachType: manualOutreach ? "MANUAL" : "AUTOMATED", previewUrl, claimUrl };
 }
 
 export async function generatePreview(id, adminSub) {
