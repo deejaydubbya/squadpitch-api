@@ -36,6 +36,8 @@ import { CreateProspectSchema, PopulateProspectSchema, PrepareProspectSchema, Pr
 import { UpdateFeedbackSchema } from "../feedback/feedback.schemas.js";
 import { updateAdminFeedback } from "../feedback/feedback.service.js";
 import * as prospectService from "../prospects/prospect.service.js";
+import * as outreachService from "../prospects/outreach.service.js";
+import { z } from "zod";
 
 export const internalRouter = Router();
 
@@ -142,6 +144,26 @@ internalRouter.delete(`${BASE}/prospects/:id/preview-token`, requireAdminRole, a
     res.status(204).end();
   } catch (err) { next(err); }
 });
+
+const DiscoverySchema = z.object({ sourceUrl: z.string().url(), maxPages: z.coerce.number().int().min(1).max(25).optional(), maxAgents: z.coerce.number().int().min(1).max(250).optional() });
+const EmailDraftSchema = z.object({ subject: z.string().max(240).optional(), body: z.string().max(20_000).optional(), sendingAccountId: z.string().optional() });
+const SendingAccountSchema = z.object({
+  provider: z.enum(["SMTP", "GMAIL"]), displayName: z.string().min(1).max(120), fromEmail: z.string().email(), replyTo: z.string().email().optional().or(z.literal("")),
+  smtpHost: z.string().min(1).optional(), smtpPort: z.coerce.number().int().min(1).max(65535).optional(), smtpUsername: z.string().optional(), smtpPassword: z.string().optional(),
+  smtpSecure: z.boolean().default(true), enabled: z.boolean().default(true), isDefault: z.boolean().default(false), hourlyLimit: z.coerce.number().int().min(1).max(1000).default(25), dailyLimit: z.coerce.number().int().min(1).max(10000).default(100), delaySeconds: z.coerce.number().int().min(1).max(3600).default(60),
+}).superRefine((value, ctx) => { if (value.provider === "SMTP") for (const key of ["smtpHost", "smtpPort", "smtpUsername", "smtpPassword"]) if (!value[key]) ctx.addIssue({ code: "custom", path: [key], message: `${key} is required for SMTP` }); });
+const UpdateSendingAccountSchema = z.object({ displayName: z.string().min(1).max(120).optional(), fromEmail: z.string().email().optional(), replyTo: z.string().email().nullable().optional(), smtpHost: z.string().min(1).optional(), smtpPort: z.coerce.number().int().min(1).max(65535).optional(), smtpUsername: z.string().optional(), smtpPassword: z.string().min(1).optional(), smtpSecure: z.boolean().optional(), enabled: z.boolean().optional(), isDefault: z.boolean().optional(), hourlyLimit: z.coerce.number().int().min(1).max(1000).optional(), dailyLimit: z.coerce.number().int().min(1).max(10000).optional(), delaySeconds: z.coerce.number().int().min(1).max(3600).optional() });
+
+internalRouter.get(`${BASE}/agent-outreach`, requireAdminRole, async (_req, res, next) => { try { res.json(await outreachService.listPipeline()); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/discoveries/analyze`, requireAdminRole, async (req, res, next) => { try { const parsed = DiscoverySchema.pick({ sourceUrl: true }).safeParse(req.body); if (!parsed.success) return validationError(res, parsed.error); res.json(await outreachService.analyzeDiscoverySource(parsed.data.sourceUrl)); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/discoveries`, requireAdminRole, async (req, res, next) => { try { const parsed = DiscoverySchema.safeParse(req.body); if (!parsed.success) return validationError(res, parsed.error); res.status(201).json(await outreachService.discoverAgents(parsed.data.sourceUrl, req.auth0Sub, { maxPages: parsed.data.maxPages, maxAgents: parsed.data.maxAgents })); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/prospects/:id/preview`, requireAdminRole, async (req, res, next) => { try { res.status(202).json(await outreachService.generatePreview(req.params.id, req.auth0Sub)); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/prospects/:id/email`, requireAdminRole, async (req, res, next) => { try { const parsed = EmailDraftSchema.safeParse(req.body ?? {}); if (!parsed.success) return validationError(res, parsed.error); res.json(await outreachService.prepareEmail(req.params.id, parsed.data)); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/prospects/:id/send`, requireAdminRole, async (req, res, next) => { try { res.json(await outreachService.sendOutreachEmail(req.params.id, req.body?.sendingAccountId)); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/sending-accounts`, requireAdminRole, async (req, res, next) => { try { const parsed = SendingAccountSchema.safeParse(req.body); if (!parsed.success) return validationError(res, parsed.error); res.status(201).json(await outreachService.saveSendingAccount(parsed.data, req.auth0Sub)); } catch (err) { next(err); } });
+internalRouter.post(`${BASE}/agent-outreach/sending-accounts/:id/test`, requireAdminRole, async (req, res, next) => { try { res.json(await outreachService.testSendingAccount(req.params.id)); } catch (err) { next(err); } });
+internalRouter.patch(`${BASE}/agent-outreach/sending-accounts/:id`, requireAdminRole, async (req, res, next) => { try { const parsed = UpdateSendingAccountSchema.safeParse(req.body); if (!parsed.success) return validationError(res, parsed.error); res.json(await outreachService.updateSendingAccount(req.params.id, parsed.data)); } catch (err) { next(err); } });
+internalRouter.delete(`${BASE}/agent-outreach/sending-accounts/:id`, requireAdminRole, async (req, res, next) => { try { await outreachService.deleteSendingAccount(req.params.id); res.status(204).end(); } catch (err) { next(err); } });
 
 // Read-only, synthetic hosted-AI verification. This route never publishes,
 // creates drafts, invokes integrations, or persists verification fixtures.

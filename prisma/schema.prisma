@@ -72,6 +72,42 @@ enum ProspectPreviewItemType {
   DRAFT
 }
 
+enum OutreachStatus {
+  DISCOVERED
+  QUALIFIED
+  PREVIEW_PENDING
+  PREVIEW_GENERATING
+  READY_TO_EMAIL
+  EMAIL_QUEUED
+  EMAIL_SENDING
+  EMAIL_SENT
+  CLAIMED
+  NO_EMAIL
+  INVALID_EMAIL
+  NO_ACTIVE_LISTINGS
+  DUPLICATE
+  SCRAPE_ERROR
+  UNSUPPORTED_PAGE
+  PREVIEW_FAILED
+  EMAIL_FAILED
+  BOUNCED
+  UNSUBSCRIBED
+  SUPPRESSED
+}
+
+enum OutreachRunStatus {
+  RUNNING
+  PAUSED
+  STOPPED
+  COMPLETED
+  FAILED
+}
+
+enum SendingProvider {
+  SMTP
+  GMAIL
+}
+
 // LINKEDIN                    = LinkedIn Personal Profile (existing flow,
 //                              unchanged). Uses the Sign In + Share
 //                              products on the original LinkedIn app.
@@ -394,13 +430,143 @@ model ProspectWorkspace {
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
 
-  client          Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  previewItems    ProspectPreviewItem[]
-  preparationRuns ProspectPreparationRun[]
+  client           Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  previewItems     ProspectPreviewItem[]
+  preparationRuns  ProspectPreparationRun[]
+  outreachProspect AgentOutreachProspect?
 
   @@index([claimStatus, claimExpiresAt])
   @@index([prospectEmail])
   @@map("prospect_workspaces")
+}
+
+model AgentDiscoveryRun {
+  id              String            @id @default(cuid())
+  sourceUrl       String
+  sourceDomain    String
+  status          OutreachRunStatus @default(RUNNING)
+  pagesScanned    Int               @default(0)
+  profilesFound   Int               @default(0)
+  agentLinksFound Int               @default(0)
+  newAgentsCount  Int               @default(0)
+  qualifiedCount  Int               @default(0)
+  rejectedCount   Int               @default(0)
+  duplicateCount  Int               @default(0)
+  suppressedCount Int               @default(0)
+  errorCount      Int               @default(0)
+  cursor          Json?
+  requestedBy     String
+  lastError       String?           @db.Text
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  completedAt     DateTime?
+
+  prospects AgentOutreachProspect[]
+
+  @@index([status, createdAt])
+  @@map("agent_discovery_runs")
+}
+
+model AgentOutreachProspect {
+  id                   String         @id @default(cuid())
+  discoveryRunId       String?
+  prospectWorkspaceId  String?        @unique
+  normalizedEmail      String?        @unique
+  email                String?
+  firstName            String?
+  lastName             String?
+  fullName             String
+  phone                String?
+  brokerage            String?
+  office               String?
+  profileUrl           String?
+  headshotUrl          String?
+  sourceUrl            String
+  sourceDomain         String
+  provider             String?
+  providerExternalId   String?
+  stableIdentity       String?        @unique
+  status               OutreachStatus @default(DISCOVERED)
+  rejectionReason      String?
+  listings             Json
+  activeListingCount   Int            @default(0)
+  lastVerifiedAt       DateTime?
+  previewUrlEncrypted  String?        @db.Text
+  claimUrlEncrypted    String?        @db.Text
+  unsubscribeTokenHash String?        @unique
+  previewGeneratedAt   DateTime?
+  emailSubject         String?
+  emailBody            String?        @db.Text
+  sendingAccountId     String?
+  emailProviderId      String?
+  emailSentAt          DateTime?
+  claimedAt            DateTime?
+  lastError            String?        @db.Text
+  discoveredAt         DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  discoveryRun      AgentDiscoveryRun?      @relation(fields: [discoveryRunId], references: [id], onDelete: SetNull)
+  prospectWorkspace ProspectWorkspace?      @relation(fields: [prospectWorkspaceId], references: [id], onDelete: SetNull)
+  sendingAccount    OutreachSendingAccount? @relation(fields: [sendingAccountId], references: [id], onDelete: SetNull)
+  events            AgentOutreachEvent[]
+
+  @@unique([provider, providerExternalId])
+  @@index([status, discoveredAt])
+  @@index([sourceDomain])
+  @@index([sendingAccountId, emailSentAt])
+  @@map("agent_outreach_prospects")
+}
+
+model AgentOutreachEvent {
+  id         String   @id @default(cuid())
+  prospectId String
+  type       String
+  message    String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  prospect AgentOutreachProspect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  @@index([prospectId, createdAt])
+  @@map("agent_outreach_events")
+}
+
+model OutreachSendingAccount {
+  id                String          @id @default(cuid())
+  provider          SendingProvider
+  displayName       String
+  fromEmail         String
+  replyTo           String?
+  smtpHost          String?
+  smtpPort          Int?
+  smtpUsername      String?
+  smtpPassword      String?         @db.Text
+  smtpSecure        Boolean         @default(true)
+  enabled           Boolean         @default(true)
+  isDefault         Boolean         @default(false)
+  hourlyLimit       Int             @default(25)
+  dailyLimit        Int             @default(100)
+  delaySeconds      Int             @default(60)
+  createdByAdminSub String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  prospects AgentOutreachProspect[]
+
+  @@index([enabled, isDefault])
+  @@map("outreach_sending_accounts")
+}
+
+model OutreachSuppression {
+  id              String    @id @default(cuid())
+  normalizedEmail String    @unique
+  reason          String
+  source          String
+  createdAt       DateTime  @default(now())
+  restoredAt      DateTime?
+
+  @@index([restoredAt])
+  @@map("outreach_suppressions")
 }
 
 enum ProspectPreparationStatus {

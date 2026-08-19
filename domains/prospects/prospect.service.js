@@ -555,7 +555,10 @@ export async function failPreparationRun(runId, error) {
   const run = await prisma.prospectPreparationRun.findUnique({ where: { id: runId }, select: { platformStates: true } });
   const terminal = new Set(["AI_ACCEPTED", "FALLBACK_ACCEPTED"]);
   const platformStates = Object.fromEntries(Object.entries(run?.platformStates || {}).map(([channel, state]) => [channel, terminal.has(state.status) ? state : { ...state, status: "FAILED", rejectionCategory: error?.code || "PREPARATION_FAILED", updatedAt: new Date().toISOString() }]));
-  return prisma.prospectPreparationRun.updateMany({ where: { id: runId, status: { in: ["QUEUED", "RUNNING"] } }, data: { status: "FAILED", stage: "FAILED", platformStates, failureCode: error?.code || "PREPARATION_FAILED", failureMessage: message, completedAt: new Date(), heartbeatAt: new Date() } });
+  const result = await prisma.prospectPreparationRun.updateMany({ where: { id: runId, status: { in: ["QUEUED", "RUNNING"] } }, data: { status: "FAILED", stage: "FAILED", platformStates, failureCode: error?.code || "PREPARATION_FAILED", failureMessage: message, completedAt: new Date(), heartbeatAt: new Date() } });
+  const failedRun = result.count ? await prisma.prospectPreparationRun.findUnique({ where: { id: runId }, select: { prospectWorkspaceId: true } }) : null;
+  if (failedRun) await prisma.agentOutreachProspect.updateMany({ where: { prospectWorkspaceId: failedRun.prospectWorkspaceId }, data: { status: "PREVIEW_FAILED", lastError: message } });
+  return result;
 }
 
 export async function executeProspectPreparation(runId) {
@@ -674,6 +677,15 @@ export async function executeProspectPreparation(runId) {
   const finalRun = await prisma.prospectPreparationRun.findUnique({ where: { id: runId } });
   const warningCount = Object.values(finalRun.platformStates || {}).filter((state) => state.provenance === "FALLBACK").length;
   await updatePreparationRun(runId, { status: warningCount ? "COMPLETE_WITH_WARNINGS" : "COMPLETE", stage: "COMPLETE", readyCount: drafts.length, warningCount, completedAt: new Date() });
+  const outreach = await prisma.agentOutreachProspect.findUnique({ where: { prospectWorkspaceId: id }, select: { id: true } });
+  if (outreach) {
+    await prisma.$transaction(async (tx) => {
+      const itemIds = [item.id, ...drafts.map((draft) => draft.id)];
+      await tx.prospectPreviewItem.deleteMany({ where: { prospectWorkspaceId: id } });
+      await tx.prospectPreviewItem.createMany({ data: itemIds.map((recordId, sortOrder) => ({ prospectWorkspaceId: id, itemType: sortOrder === 0 ? "DATA_ITEM" : "DRAFT", dataItemId: sortOrder === 0 ? recordId : null, draftId: sortOrder === 0 ? null : recordId, sortOrder, addedBy: adminSub })) });
+      await tx.agentOutreachProspect.update({ where: { id: outreach.id }, data: { status: "READY_TO_EMAIL", previewGeneratedAt: new Date(), lastError: null, events: { create: { type: "preview_generated" } } } });
+    });
+  }
   return { itemId: item.id, draftIds: drafts.map((draft) => draft.id), imageImported: propertyAssets.length > 0, importedImageCount: propertyAssets.length, importQuality: candidate.quality, preparationState: "READY_UNSELECTED", runId };
 }
 
@@ -804,6 +816,8 @@ export async function claimWorkspace({ claimToken, prospectId, user, auth0Sub, v
     if (updated.count !== 1) throw Object.assign(new Error("This workspace was already claimed"), { status: 409, code: "CLAIM_RACE_LOST" });
     await tx.client.update({ where: { id: row.clientId }, data: { lifecycle: "CUSTOMER", status: "ACTIVE", createdBy: auth0Sub } });
     await tx.contentPreferences.upsert({ where: { clientId: row.clientId }, create: { clientId: row.clientId, preferredChannels: normalizeProspectChannels(row.selectedChannels) }, update: { preferredChannels: normalizeProspectChannels(row.selectedChannels) } });
+    const outreach = await tx.agentOutreachProspect.findUnique({ where: { prospectWorkspaceId: row.id }, select: { id: true } });
+    if (outreach) await tx.agentOutreachProspect.update({ where: { id: outreach.id }, data: { status: "CLAIMED", claimedAt, events: { create: { type: "claimed" } } } });
     return { clientId: row.clientId, businessName: row.client.name };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   if (outcome.claimError === "CLAIM_EXPIRED") throw Object.assign(new Error("This claim link has expired"), { status: 410, code: "CLAIM_EXPIRED" });

@@ -4,6 +4,7 @@ import { writeAudit } from "../../lib/auditLog.js";
 import { rateLimit } from "express-rate-limit";
 import { requireAuthoritativeVerifiedEmail, resendAuth0Verification, resolveAuthoritativeIdentity } from "../../lib/auth0Identity.js";
 import * as service from "./prospect.service.js";
+import { unsubscribe } from "./outreach.service.js";
 
 export const prospectPublicRouter = express.Router();
 export const prospectClaimRouter = express.Router();
@@ -20,6 +21,13 @@ prospectPublicRouter.post("/api/v1/public/prospect-claims/inspect", async (req, 
   try {
     const claim = await service.inspectClaim(req.body?.claimToken);
     res.set("Cache-Control", "private, no-store").json(claim);
+  } catch (err) { next(err); }
+});
+
+prospectPublicRouter.get("/api/v1/public/outreach/unsubscribe", async (req, res, next) => {
+  try {
+    const removed = await unsubscribe(req.query?.token);
+    res.status(removed ? 200 : 404).type("html").send(removed ? "<h1>You have been unsubscribed.</h1><p>Squadpitch will not send further outreach to this address.</p>" : "<h1>This unsubscribe link is invalid.</h1>");
   } catch (err) { next(err); }
 });
 

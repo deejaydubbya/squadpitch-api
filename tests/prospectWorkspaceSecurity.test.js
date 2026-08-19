@@ -66,6 +66,7 @@ describe("prospect workspace security", () => {
       },
       client: { update: vi.fn().mockResolvedValue({ id: "c1" }) },
       contentPreferences: { upsert: vi.fn() },
+      agentOutreachProspect: { findUnique: vi.fn().mockResolvedValue({ id: "outreach1" }), update: vi.fn() },
     };
     prismaMock.$transaction.mockImplementation((callback) => callback(tx));
     const result = await service.claimWorkspace({ claimToken: service.generateSecret(), user: { id: "u1", email: "stale@example.com" }, auth0Sub: "auth0|jane", verifiedEmail: "JANE@example.com" });
@@ -73,6 +74,7 @@ describe("prospect workspace security", () => {
     expect(tx.prospectWorkspace.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ claimStatus: "CLAIMED", claimTokenHash: null }) }));
     expect(tx.client.update).toHaveBeenCalledWith({ where: { id: "c1" }, data: { lifecycle: "CUSTOMER", status: "ACTIVE", createdBy: "auth0|jane" } });
     expect(tx.contentPreferences.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { preferredChannels: ["INSTAGRAM", "FACEBOOK", "LINKEDIN"] } }));
+    expect(tx.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "outreach1" }, data: expect.objectContaining({ status: "CLAIMED", claimedAt: expect.any(Date) }) }));
   });
 
   it("discovers every active matching claim by normalized verified email", async () => {
