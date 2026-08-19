@@ -39,6 +39,50 @@ Founder, Squadpitch
 
 If you’d rather not receive messages like this from me, you can unsubscribe here:
 {{unsubscribe_url}}`;
+const DEFAULT_HTML_BODY = `<div style="max-width:600px;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:16px;line-height:1.6;color:#202124;background:#ffffff;">
+  <p>Hi {{first_name}},</p>
+  <p>I'm Daniel, the founder of Squadpitch. I'm reaching out to a small group of real estate agents and creating ready-to-claim workspaces for them so they can get started without having to build everything from scratch.</p>
+  <p>Squadpitch helps real estate agents turn listings, open houses, sold properties, and other business updates into ready-to-post social media content using AI.</p>
+  <p>I've already created a free workspace for you here:</p>
+  <p><a href="{{preview_url}}" style="display:inline-block;padding:10px 16px;border-radius:6px;background:#166534;color:#ffffff;text-decoration:none;font-weight:600;">View &amp; Claim Your Workspace</a></p>
+  <p style="font-size:13px;color:#5f6368;">If the button doesn't work, use this link: <a href="{{preview_url}}" style="color:#166534;word-break:break-all;">{{preview_url}}</a></p>
+  <p><strong>Important:</strong> when you create your Squadpitch account, <strong>please use the same email address I sent this message to.</strong> That's how Squadpitch recognizes you and connects you with the workspace I created for you.</p>
+  <p>Once you're in, you can also start a 14-day trial of Squadpitch Pro with no credit card required to try the full set of Pro features. If you find it useful, you can choose a paid plan afterward.</p>
+  <p>You can also learn more about Squadpitch here:</p>
+  <p><a href="https://real-estate.squadpitch.com" style="color:#166534;">Squadpitch website</a><br><a href="https://www.linkedin.com/company/115992427" style="color:#166534;">Squadpitch on LinkedIn</a></p>
+  <p>I'm working directly with these first users, so I'd really appreciate any feedback you have. If you run into anything confusing or have an idea that would make Squadpitch more useful for agents, just reply to this email.</p>
+  <p>Thanks,</p>
+  <p>Daniel Wardlow<br>Founder, Squadpitch</p>
+  <p style="margin-top:28px;font-size:12px;line-height:1.5;color:#5f6368;">If you'd rather not receive messages like this from me, you can unsubscribe <a href="{{unsubscribe_url}}" style="color:#5f6368;">here</a>.</p>
+</div>`;
+
+const ALLOWED_EMAIL_TAGS = new Set(["div", "p", "br", "a", "strong", "b", "em", "i", "span", "table", "tbody", "tr", "td"]);
+function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]); }
+function safeEmailUrl(value) { try { const url = new URL(String(value)); return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.toString() : "#"; } catch { return "#"; } }
+export function sanitizeEmailHtml(html) {
+  const $ = cheerio.load(String(html || ""), null, false);
+  $("*").each((_index, node) => {
+    const tag = node.tagName?.toLowerCase();
+    if (!ALLOWED_EMAIL_TAGS.has(tag)) { $(node).replaceWith($(node).contents()); return; }
+    for (const attribute of Object.keys(node.attribs || {})) if (!["href", "style"].includes(attribute.toLowerCase())) $(node).removeAttr(attribute);
+    if (tag === "a") $(node).attr("href", safeEmailUrl($(node).attr("href")));
+    if ($(node).attr("style")) {
+      const style = $(node).attr("style").replace(/url\s*\([^)]*\)|expression\s*\([^)]*\)|@import|javascript:/gi, "");
+      $(node).attr("style", style);
+    }
+  });
+  return $.html();
+}
+
+async function canonicalTemplate() {
+  return prisma.outreachEmailTemplate.upsert({ where: { id: "default" }, create: { id: "default", subject: DEFAULT_SUBJECT, textBody: DEFAULT_BODY, htmlBody: DEFAULT_HTML_BODY }, update: {} });
+}
+
+export async function updateOutreachTemplate(input) {
+  // Keep placeholders intact in storage. Every rendered delivery is sanitized
+  // after escaped dynamic values have been substituted.
+  return prisma.outreachEmailTemplate.upsert({ where: { id: "default" }, create: { id: "default", subject: input.subject, textBody: input.textBody, htmlBody: input.htmlBody }, update: { subject: input.subject, textBody: input.textBody, htmlBody: input.htmlBody } });
+}
 
 function normalizedEmail(value) { return String(value || "").trim().toLowerCase(); }
 function text(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
@@ -238,12 +282,13 @@ export async function resumeDiscovery(id, options = {}) {
 
 export async function listPipeline() {
   await syncClaimed();
-  const [prospects, runs, accounts] = await Promise.all([
+  const [prospects, runs, accounts, template] = await Promise.all([
     prisma.agentOutreachProspect.findMany({ include: { events: { orderBy: { createdAt: "desc" }, take: 20 }, prospectWorkspace: { select: { claimStatus: true, claimedAt: true } }, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } }, orderBy: { discoveredAt: "desc" } }),
     prisma.agentDiscoveryRun.findMany({ orderBy: { createdAt: "desc" }, take: 10 }),
     listSendingAccounts(),
+    canonicalTemplate(),
   ]);
-  return { prospects: prospects.map(publicProspect), runs, accounts, template: { subject: DEFAULT_SUBJECT, body: DEFAULT_BODY } };
+  return { prospects: prospects.map(publicProspect), runs, accounts, template };
 }
 
 function publicProspect(row) {
@@ -277,6 +322,10 @@ export async function generatePreview(id, adminSub) {
 }
 
 function render(template, values) { return template.replace(/{{\s*([a-z_]+)\s*}}/g, (_m, key) => values[key] ?? ""); }
+export function renderMultipartTemplate(template, values) {
+  const safeValues = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, ["preview_url", "unsubscribe_url"].includes(key) ? escapeHtml(safeEmailUrl(value)) : escapeHtml(value)]));
+  return { subject: render(template.subject, values), textBody: render(template.textBody, values), htmlBody: sanitizeEmailHtml(render(template.htmlBody, safeValues)) };
+}
 export async function prepareEmail(id, input = {}) {
   const row = await prisma.agentOutreachProspect.findUnique({ where: { id }, include: { sendingAccount: true, prospectWorkspace: { select: { claimStatus: true } } } });
   if (!row?.claimUrlEncrypted || row.prospectWorkspace?.claimStatus !== "CLAIMABLE" || !["READY_TO_EMAIL", "EMAIL_FAILED"].includes(row.status)) throw Object.assign(new Error("A ready, claimable preview is required"), { status: 409, code: "PREVIEW_REQUIRED" });
@@ -284,8 +333,9 @@ export async function prepareEmail(id, input = {}) {
   const token = crypto.randomBytes(24).toString("base64url");
   const listing = row.listings?.[0] || {};
   const values = { first_name: row.firstName || row.fullName, agent_name: row.fullName, brokerage: row.brokerage || "", listing_address: listing.address || "", listing_count: String(row.activeListingCount), preview_url: decryptToken(row.claimUrlEncrypted), sender_name: selectedAccount?.displayName || "Squadpitch", unsubscribe_url: `${publicAppOrigin()}/api/public/outreach/unsubscribe?token=${token}` };
-  const emailSubject = render(input.subject || DEFAULT_SUBJECT, values), emailBody = render(input.body || DEFAULT_BODY, values);
-  return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { emailSubject, emailBody, unsubscribeTokenHash: digestSecret(token), ...(input.sendingAccountId ? { sendingAccountId: input.sendingAccountId } : {}) }, include: { events: true, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } } }));
+  const storedTemplate = await canonicalTemplate();
+  const rendered = renderMultipartTemplate({ subject: input.subject || storedTemplate.subject, textBody: input.textBody || input.body || storedTemplate.textBody, htmlBody: input.htmlBody || storedTemplate.htmlBody }, values);
+  return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { emailSubject: rendered.subject, emailBody: rendered.textBody, emailHtmlBody: rendered.htmlBody, unsubscribeTokenHash: digestSecret(token), ...(input.sendingAccountId ? { sendingAccountId: input.sendingAccountId } : {}) }, include: { events: true, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } } }));
 }
 
 export async function sendOutreachEmail(id, sendingAccountId) {
@@ -295,7 +345,7 @@ export async function sendOutreachEmail(id, sendingAccountId) {
   if (!row || row.emailSentAt) return row ? publicProspect(row) : null;
   if (row.status === "CLAIMED" || row.prospectWorkspace?.claimStatus === "CLAIMED") throw Object.assign(new Error("Claimed prospects cannot receive outreach"), { status: 409, code: "PROSPECT_CLAIMED" });
   if (row.status === "UNSUBSCRIBED" || !row.email) throw Object.assign(new Error("This prospect is not eligible for email"), { status: 409, code: "EMAIL_NOT_ELIGIBLE" });
-  if (!account?.enabled || !row.emailSubject || !row.emailBody || !row.claimUrlEncrypted) throw Object.assign(new Error("Prepare the email and select an enabled sending account"), { status: 409, code: "EMAIL_NOT_READY" });
+  if (!account?.enabled || !row.emailSubject || !row.emailBody || !row.emailHtmlBody || !row.claimUrlEncrypted) throw Object.assign(new Error("Prepare the email and select an enabled sending account"), { status: 409, code: "EMAIL_NOT_READY" });
   if (await prisma.outreachSuppression.findFirst({ where: { normalizedEmail: row.normalizedEmail, restoredAt: null } })) throw Object.assign(new Error("This address is suppressed"), { status: 409, code: "EMAIL_SUPPRESSED" });
   const sinceHour = new Date(Date.now() - 3_600_000), sinceDay = new Date(Date.now() - 86_400_000);
   const [hourly, daily, latest] = await Promise.all([prisma.agentOutreachProspect.count({ where: { sendingAccountId: account.id, emailSentAt: { gte: sinceHour } } }), prisma.agentOutreachProspect.count({ where: { sendingAccountId: account.id, emailSentAt: { gte: sinceDay } } }), prisma.agentOutreachProspect.findFirst({ where: { sendingAccountId: account.id, emailSentAt: { not: null } }, orderBy: { emailSentAt: "desc" }, select: { emailSentAt: true } })]);
@@ -306,7 +356,7 @@ export async function sendOutreachEmail(id, sendingAccountId) {
   try {
     if (account.provider !== "SMTP") throw Object.assign(new Error("Gmail OAuth is not connected yet"), { code: "GMAIL_NOT_CONNECTED" });
     const transport = nodemailer.createTransport(smtpTransportOptions(account));
-    const info = await transport.sendMail({ from: { name: account.displayName, address: account.fromEmail }, replyTo: account.replyTo || undefined, to: row.email, subject: row.emailSubject, text: row.emailBody });
+    const info = await transport.sendMail({ from: { name: account.displayName, address: account.fromEmail }, replyTo: account.replyTo || undefined, to: row.email, subject: row.emailSubject, text: row.emailBody, html: row.emailHtmlBody });
     return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "EMAIL_SENT", emailSentAt: new Date(), emailProviderId: info.messageId, lastError: null, events: { create: { type: "email_sent" } } } }));
   } catch (error) {
     await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "EMAIL_FAILED", lastError: error.message, events: { create: { type: "email_failed", message: error.message } } } });
@@ -376,4 +426,4 @@ export async function testSendingAccount(id) {
 export async function unsubscribe(token) { const row = await prisma.agentOutreachProspect.findUnique({ where: { unsubscribeTokenHash: digestSecret(token || "") } }); if (!row?.normalizedEmail) return false; await prisma.$transaction([prisma.outreachSuppression.upsert({ where: { normalizedEmail: row.normalizedEmail }, create: { normalizedEmail: row.normalizedEmail, reason: "UNSUBSCRIBED", source: "EMAIL_LINK" }, update: { reason: "UNSUBSCRIBED", source: "EMAIL_LINK", restoredAt: null } }), prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "UNSUBSCRIBED", events: { create: { type: "unsubscribed" } } } })]); return true; }
 export async function syncClaimed(id) { const rows = await prisma.agentOutreachProspect.findMany({ where: { ...(id ? { id } : {}), status: { not: "CLAIMED" }, prospectWorkspace: { claimStatus: "CLAIMED" } }, select: { id: true, prospectWorkspace: { select: { claimedAt: true } } } }); await Promise.all(rows.map(row => prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "CLAIMED", claimedAt: row.prospectWorkspace.claimedAt, events: { create: { type: "claimed" } } } }))); }
 
-export const outreachTemplate = { subject: DEFAULT_SUBJECT, body: DEFAULT_BODY };
+export const outreachTemplate = { subject: DEFAULT_SUBJECT, textBody: DEFAULT_BODY, htmlBody: DEFAULT_HTML_BODY };

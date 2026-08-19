@@ -12,6 +12,14 @@ describe("explicit prospect preview selection", () => {
     await expect(service.getPublicPreview(service.generateSecret())).resolves.toMatchObject({ items: [], drafts: [], preparationState: "NOT_STARTED" });
   });
 
+  it("returns an available agent profile image and gracefully permits none", async () => {
+    const base = { previewStatus: "ACTIVE", claimStatus: "CLAIMABLE", claimExpiresAt: new Date(Date.now() + 60_000), prospectName: "Jane Agent", previewItems: [] };
+    prismaMock.prospectWorkspace.findUnique.mockResolvedValueOnce({ ...base, client: { lifecycle: "PROSPECT", name: "Jane Realty", industryKey: "real_estate", logoUrl: "https://cdn.example/jane.jpg", brandProfile: null } });
+    await expect(service.getPublicPreview(service.generateSecret())).resolves.toMatchObject({ logoUrl: "https://cdn.example/jane.jpg" });
+    prismaMock.prospectWorkspace.findUnique.mockResolvedValueOnce({ ...base, client: { lifecycle: "PROSPECT", name: "Jane Realty", industryKey: "real_estate", logoUrl: null, brandProfile: null } });
+    await expect(service.getPublicPreview(service.generateSecret())).resolves.toMatchObject({ logoUrl: null });
+  });
+
   it("returns the exact stored body and all DraftAssets in their query order", async () => {
     const body = "🏡 Exact generated opener\n\n978 US Rt 52 · $425,000\n\n#GeorgetownOH #NewListing";
     prismaMock.prospectWorkspace.findUnique.mockResolvedValue({

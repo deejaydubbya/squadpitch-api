@@ -10,6 +10,7 @@ const prismaMock = {
   agentOutreachProspect: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
   outreachSuppression: { findFirst: vi.fn(), upsert: vi.fn() },
   outreachSendingAccount: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn() },
+  outreachEmailTemplate: { upsert: vi.fn() },
   $transaction: vi.fn(),
 };
 
@@ -26,6 +27,7 @@ describe("agent outreach safety", () => {
     vi.clearAllMocks();
     prismaMock.agentOutreachProspect.findMany.mockResolvedValue([]);
     prismaMock.outreachSuppression.findFirst.mockResolvedValue(null);
+    prismaMock.outreachEmailTemplate.upsert.mockResolvedValue({ id: "default", ...service.outreachTemplate });
   });
 
   it.each([
@@ -48,17 +50,18 @@ describe("agent outreach safety", () => {
 
   it("uses the approved canonical outreach template and all required links", () => {
     expect(service.outreachTemplate.subject).toBe("I created a free Squadpitch workspace for you");
-    expect(service.outreachTemplate.body).toContain("I’m Daniel, the founder of Squadpitch");
-    expect(service.outreachTemplate.body).toContain("ready-to-claim workspaces");
-    expect(service.outreachTemplate.body).toContain("same email address I sent this message to");
-    expect(service.outreachTemplate.body).toContain("14-day trial of Squadpitch Pro with no credit card required");
-    expect(service.outreachTemplate.body).toContain("https://real-estate.squadpitch.com");
-    expect(service.outreachTemplate.body).toContain("https://www.linkedin.com/company/115992427");
-    expect(service.outreachTemplate.body).toContain("I’d really appreciate any feedback");
-    expect(service.outreachTemplate.body).toContain("Daniel Wardlow\nFounder, Squadpitch");
-    expect(service.outreachTemplate.body).toContain("{{preview_url}}");
-    expect(service.outreachTemplate.body).toContain("{{unsubscribe_url}}");
-    expect(service.outreachTemplate.body.match(/{{preview_url}}/g)).toHaveLength(1);
+    expect(service.outreachTemplate.textBody).toContain("I’m Daniel, the founder of Squadpitch");
+    expect(service.outreachTemplate.textBody).toContain("ready-to-claim workspaces");
+    expect(service.outreachTemplate.textBody).toContain("same email address I sent this message to");
+    expect(service.outreachTemplate.textBody).toContain("14-day trial of Squadpitch Pro with no credit card required");
+    expect(service.outreachTemplate.textBody).toContain("https://real-estate.squadpitch.com");
+    expect(service.outreachTemplate.textBody).toContain("https://www.linkedin.com/company/115992427");
+    expect(service.outreachTemplate.textBody).toContain("I’d really appreciate any feedback");
+    expect(service.outreachTemplate.textBody).toContain("Daniel Wardlow\nFounder, Squadpitch");
+    expect(service.outreachTemplate.textBody).toContain("{{preview_url}}");
+    expect(service.outreachTemplate.textBody).toContain("{{unsubscribe_url}}");
+    expect(service.outreachTemplate.htmlBody).toContain("View &amp; Claim Your Workspace");
+    expect(service.outreachTemplate.htmlBody).toContain('href="{{preview_url}}"');
   });
 
   it("never generates a preview for a zero-listing rejection", async () => {
@@ -117,7 +120,7 @@ describe("agent outreach safety", () => {
   });
 
   it("acquires an atomic send lock before contacting SMTP", async () => {
-    const row = { id: "o1", email: "test@example.com", normalizedEmail: "test@example.com", status: "READY_TO_EMAIL", emailSentAt: null, emailSubject: "Hello", emailBody: "Body", claimUrlEncrypted: "encrypted:https://app/preview/x", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: null };
+    const row = { id: "o1", email: "test@example.com", normalizedEmail: "test@example.com", status: "READY_TO_EMAIL", emailSentAt: null, emailSubject: "Hello", emailBody: "Body", emailHtmlBody: "<p>Body</p>", claimUrlEncrypted: "encrypted:https://app/preview/x", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: null };
     const account = { id: "a1", provider: "SMTP", enabled: true, displayName: "Sender", fromEmail: "sender@example.com", smtpHost: "smtp.example.com", smtpPort: 465, smtpSecure: true, smtpUsername: "user", smtpPassword: "encrypted:secret", hourlyLimit: 10, dailyLimit: 20, delaySeconds: 1 };
     prismaMock.agentOutreachProspect.findUnique.mockResolvedValue(row);
     prismaMock.outreachSendingAccount.findUnique.mockResolvedValue(account);
@@ -129,7 +132,7 @@ describe("agent outreach safety", () => {
   });
 
   it("enforces account delay server-side", async () => {
-    const row = { id: "o1", email: "test@example.com", normalizedEmail: "test@example.com", status: "READY_TO_EMAIL", emailSentAt: null, emailSubject: "Hello", emailBody: "Body", claimUrlEncrypted: "encrypted:https://app/preview/x", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: null };
+    const row = { id: "o1", email: "test@example.com", normalizedEmail: "test@example.com", status: "READY_TO_EMAIL", emailSentAt: null, emailSubject: "Hello", emailBody: "Body", emailHtmlBody: "<p>Body</p>", claimUrlEncrypted: "encrypted:https://app/preview/x", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: null };
     const account = { id: "a1", enabled: true, hourlyLimit: 10, dailyLimit: 20, delaySeconds: 60 };
     prismaMock.agentOutreachProspect.findUnique.mockResolvedValue(row);
     prismaMock.outreachSendingAccount.findUnique.mockResolvedValue(account);
@@ -221,11 +224,36 @@ describe("agent outreach safety", () => {
     expect(drafted.emailBody).toContain("14-day trial of Squadpitch Pro with no credit card required");
     expect(drafted.emailBody).toContain("Daniel Wardlow\nFounder, Squadpitch");
     expect(drafted.emailBody).not.toMatch(/{{\s*(first_name|preview_url|unsubscribe_url)\s*}}/);
+    expect(drafted.emailHtmlBody).toContain("Hi Test");
+    expect(drafted.emailHtmlBody).toContain('href="https://app.squadpitch.test/preview/preview-token#claim=claim-token"');
+    expect(drafted.emailHtmlBody).toContain("View &amp; Claim Your Workspace");
+    expect(drafted.emailHtmlBody).toContain("/api/public/outreach/unsubscribe?token=");
+    expect(drafted.emailHtmlBody).not.toMatch(/{{\s*(first_name|preview_url|unsubscribe_url)\s*}}/);
 
     prismaMock.agentOutreachProspect.findMany.mockResolvedValueOnce([{ id: "o1", prospectWorkspace: { claimedAt: new Date("2026-08-18T12:00:00Z") } }]);
     prismaMock.agentOutreachProspect.update.mockResolvedValueOnce({ status: "CLAIMED" });
     await service.syncClaimed("o1");
     expect(prismaMock.agentOutreachProspect.update).toHaveBeenLastCalledWith(expect.objectContaining({ where: { id: "o1" }, data: expect.objectContaining({ status: "CLAIMED", claimedAt: new Date("2026-08-18T12:00:00Z") }) }));
     expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it("escapes dynamic HTML values and sends text plus HTML multipart", async () => {
+    const rendered = service.renderMultipartTemplate(service.outreachTemplate, { first_name: '<img src=x onerror=alert(1)>', preview_url: "https://app.squadpitch.test/preview/x#claim=y", unsubscribe_url: "https://app.squadpitch.test/unsubscribe?t=z" });
+    expect(rendered.htmlBody).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(rendered.htmlBody).not.toContain("<img");
+    expect(rendered.textBody).toContain("https://app.squadpitch.test/preview/x#claim=y");
+
+    const row = { id: "mail", email: "agent@example.com", normalizedEmail: "agent@example.com", status: "READY_TO_EMAIL", emailSentAt: null, emailSubject: rendered.subject, emailBody: rendered.textBody, emailHtmlBody: rendered.htmlBody, claimUrlEncrypted: "encrypted:https://app/preview/x", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: null };
+    const account = { id: "smtp", provider: "SMTP", enabled: true, displayName: "Daniel", fromEmail: "daniel@example.com", smtpHost: "smtp.example.com", smtpPort: 587, smtpEncryption: "STARTTLS", smtpUsername: "user", smtpPassword: "encrypted:secret", hourlyLimit: 10, dailyLimit: 20, delaySeconds: 1 };
+    prismaMock.agentOutreachProspect.findUnique.mockResolvedValue(row);
+    prismaMock.outreachSendingAccount.findUnique.mockResolvedValue(account);
+    prismaMock.agentOutreachProspect.count.mockResolvedValue(0);
+    prismaMock.agentOutreachProspect.findFirst.mockResolvedValue(null);
+    prismaMock.agentOutreachProspect.updateMany.mockResolvedValue({ count: 1 });
+    prismaMock.agentOutreachProspect.update.mockResolvedValue({ ...row, status: "EMAIL_SENT", emailSentAt: new Date(), events: [] });
+    sendMail.mockResolvedValue({ messageId: "message-1" });
+
+    await service.sendOutreachEmail("mail", "smtp");
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ text: rendered.textBody, html: rendered.htmlBody }));
   });
 });

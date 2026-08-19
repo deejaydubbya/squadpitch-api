@@ -498,6 +498,7 @@ model AgentOutreachProspect {
   previewGeneratedAt   DateTime?
   emailSubject         String?
   emailBody            String?        @db.Text
+  emailHtmlBody        String?        @db.Text
   sendingAccountId     String?
   emailProviderId      String?
   emailSentAt          DateTime?
@@ -516,6 +517,16 @@ model AgentOutreachProspect {
   @@index([sourceDomain])
   @@index([sendingAccountId, emailSentAt])
   @@map("agent_outreach_prospects")
+}
+
+model OutreachEmailTemplate {
+  id        String   @id @default("default")
+  subject   String
+  textBody  String   @db.Text
+  htmlBody  String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("outreach_email_templates")
 }
 
 model AgentOutreachEvent {
