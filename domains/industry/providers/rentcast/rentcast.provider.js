@@ -19,7 +19,7 @@ export const rentcastPropertyProvider = {
 
   /** @returns {boolean} */
   isAvailable() {
-    return Boolean(env.RENTCAST_API_KEY);
+    return env.RENTCAST_ENABLED && Boolean(env.RENTCAST_API_KEY);
   },
 
   /**

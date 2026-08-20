@@ -4,15 +4,22 @@ import { writeAudit } from "../../lib/auditLog.js";
 import { rateLimit } from "express-rate-limit";
 import { requireAuthoritativeVerifiedEmail, resendAuth0Verification, resolveAuthoritativeIdentity } from "../../lib/auth0Identity.js";
 import * as service from "./prospect.service.js";
-import { unsubscribe } from "./outreach.service.js";
+import { unsubscribe, trackOpen, trackClick, trackPreviewView, trackClaimStarted, ingestDeliveryEvent } from "./outreach.service.js";
+import { env } from "../../config/env.js";
 
 export const prospectPublicRouter = express.Router();
 export const prospectClaimRouter = express.Router();
+const PIXEL=Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==","base64");
+prospectPublicRouter.get("/api/v1/public/outreach/track/open/:token.gif", async(req,res)=>{ try{await trackOpen(req.params.token,req.get("user-agent"));}catch{} res.set({"Cache-Control":"no-store","Content-Type":"image/gif"}).send(PIXEL); });
+prospectPublicRouter.get("/api/v1/public/outreach/track/click/:token", async(req,res)=>{ try{const destination=await trackClick(req.params.token,req.get("user-agent"),req.method); if(destination)return res.redirect(302,destination);}catch{} return res.redirect(302,"/"); });
+prospectPublicRouter.post("/api/v1/public/outreach/track/claim-start/:token", async(req,res)=>{ try{await trackClaimStarted(req.params.token,req.get("user-agent"));}catch{} res.status(204).end(); });
+prospectPublicRouter.post("/api/v1/public/outreach/webhooks/delivery", async(req,res)=>{ if(!env.OUTREACH_DELIVERY_WEBHOOK_SECRET||req.get("x-outreach-webhook-secret")!==env.OUTREACH_DELIVERY_WEBHOOK_SECRET)return res.status(401).json({ok:false}); try{return res.json(await ingestDeliveryEvent(req.body||{}));}catch{return res.status(400).json({ok:false});} });
 
 prospectPublicRouter.get("/api/v1/public/prospect-previews/:token", async (req, res, next) => {
   try {
     const preview = await service.getPublicPreview(req.params.token);
     if (!preview) return sendError(res, 404, "PREVIEW_UNAVAILABLE", "This preview is unavailable");
+    await trackPreviewView(req.query?.outreach, req.params.token, req.get("user-agent")).catch(()=>false);
     res.set("Cache-Control", "private, no-store").json(preview);
   } catch (err) { next(err); }
 });

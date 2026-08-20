@@ -79,6 +79,9 @@ export function getPropertyEnrichmentStatus() {
   if (!env.PROPERTY_ENRICHMENT_ENABLED) {
     return { enabled: false, ready: true, provider: "disabled" };
   }
+  if (env.PROPERTY_API_PROVIDER === "rentcast" && !env.RENTCAST_ENABLED) {
+    return { enabled: false, ready: true, provider: "rentcast-disabled" };
+  }
   try {
     const provider = getActiveProvider();
     return {

@@ -57,7 +57,7 @@ const DEFAULT_HTML_BODY = `<div style="max-width:600px;margin:0;padding:0;font-f
   <p style="margin-top:28px;font-size:12px;line-height:1.5;color:#5f6368;">If you'd rather not receive messages like this from me, you can unsubscribe <a href="{{unsubscribe_url}}" style="color:#5f6368;">here</a>.</p>
 </div>`;
 
-const ALLOWED_EMAIL_TAGS = new Set(["div", "p", "br", "a", "strong", "b", "em", "i", "span", "table", "tbody", "tr", "td"]);
+const ALLOWED_EMAIL_TAGS = new Set(["div", "p", "br", "a", "img", "strong", "b", "em", "i", "span", "table", "tbody", "tr", "td"]);
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]); }
 function safeEmailUrl(value) { try { const url = new URL(String(value)); return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.toString() : "#"; } catch { return "#"; } }
 export function sanitizeEmailHtml(html) {
@@ -65,7 +65,7 @@ export function sanitizeEmailHtml(html) {
   $("*").each((_index, node) => {
     const tag = node.tagName?.toLowerCase();
     if (!ALLOWED_EMAIL_TAGS.has(tag)) { $(node).replaceWith($(node).contents()); return; }
-    for (const attribute of Object.keys(node.attribs || {})) if (!["href", "style"].includes(attribute.toLowerCase())) $(node).removeAttr(attribute);
+    for (const attribute of Object.keys(node.attribs || {})) if (!["href", "src", "width", "height", "alt", "style"].includes(attribute.toLowerCase())) $(node).removeAttr(attribute);
     if (tag === "a") $(node).attr("href", safeEmailUrl($(node).attr("href")));
     if ($(node).attr("style")) {
       const style = $(node).attr("style").replace(/url\s*\([^)]*\)|expression\s*\([^)]*\)|@import|javascript:/gi, "");
@@ -302,7 +302,14 @@ export async function listPipeline() {
     listSendingAccounts(),
     canonicalTemplate(),
   ]);
-  return { prospects: prospects.map(publicProspect), runs, accounts, template };
+  return { prospects: prospects.map(publicProspect), funnel: buildFunnel(prospects), runs, accounts, template };
+}
+
+function buildFunnel(rows) {
+  const sent=rows.filter(r=>r.emailSentAt), delivered=rows.filter(r=>r.emailDeliveredAt), opened=rows.filter(r=>r.emailFirstOpenedAt), clicked=rows.filter(r=>r.claimLinkFirstClickedAt), previewed=rows.filter(r=>r.previewFirstViewedAt), started=rows.filter(r=>r.claimStartedAt), claimed=rows.filter(r=>r.claimedAt), unsubscribed=rows.filter(r=>r.unsubscribedAt||r.status==="UNSUBSCRIBED"), bounced=rows.filter(r=>r.bouncedAt||r.status==="BOUNCED");
+  const humanClicked=clicked.filter(r=>r.events?.some(e=>e.type==="CLAIM_LINK_CLICKED"&&e.metadata?.isSuspectedAutomated!==true));
+  const rate=(n,d)=>d?Math.round(n/d*1000)/10:null;
+  return { sent:sent.length,deliveryConfirmed:delivered.length,deliveryUnknown:sent.filter(r=>!r.emailDeliveredAt&&!r.bouncedAt).length,uniqueEstimatedOpened:opened.length,rawUniqueClicked:clicked.length,likelyHumanUniqueClicked:humanClicked.length,uniquePreviewViewed:previewed.length,uniqueClaimStarted:started.length,claimed:claimed.length,unsubscribed:unsubscribed.length,bounced:bounced.length,rates:{confirmedDelivery:rate(delivered.length,sent.length),estimatedOpen:rate(opened.length,sent.length),clickThrough:rate(humanClicked.length,sent.length),previewView:rate(previewed.length,sent.length),claimStart:rate(started.length,sent.length),finalClaim:rate(claimed.length,sent.length),clickToPreview:rate(previewed.length,humanClicked.length),previewToClaimStart:rate(started.length,previewed.length),claimStartToClaim:rate(claimed.length,started.length)}};
 }
 
 function publicProspect(row) {
@@ -345,11 +352,12 @@ export async function prepareEmail(id, input = {}) {
   if (!row?.claimUrlEncrypted || row.prospectWorkspace?.claimStatus !== "CLAIMABLE" || !["READY_TO_EMAIL", "EMAIL_FAILED"].includes(row.status)) throw Object.assign(new Error("A ready, claimable preview is required"), { status: 409, code: "PREVIEW_REQUIRED" });
   const selectedAccount = input.sendingAccountId ? await prisma.outreachSendingAccount.findUnique({ where: { id: input.sendingAccountId } }) : row.sendingAccount;
   const token = crypto.randomBytes(24).toString("base64url");
+  const openToken = crypto.randomBytes(32).toString("base64url"), clickToken = crypto.randomBytes(32).toString("base64url");
   const listing = row.listings?.[0] || {};
-  const values = { first_name: row.firstName || row.fullName, agent_name: row.fullName, brokerage: row.brokerage || "", listing_address: listing.address || "", listing_count: String(row.activeListingCount), preview_url: decryptToken(row.claimUrlEncrypted), sender_name: selectedAccount?.displayName || "Squadpitch", unsubscribe_url: `${publicAppOrigin()}/api/public/outreach/unsubscribe?token=${token}` };
+  const values = { first_name: row.firstName || row.fullName, agent_name: row.fullName, brokerage: row.brokerage || "", listing_address: listing.address || "", listing_count: String(row.activeListingCount), preview_url: `${publicAppOrigin()}/api/public/outreach/track/click/${clickToken}`, sender_name: selectedAccount?.displayName || "Squadpitch", unsubscribe_url: `${publicAppOrigin()}/api/public/outreach/unsubscribe?token=${token}` };
   const storedTemplate = await canonicalTemplate();
-  const rendered = renderMultipartTemplate({ subject: input.subject || storedTemplate.subject, textBody: input.textBody || input.body || storedTemplate.textBody, htmlBody: input.htmlBody || storedTemplate.htmlBody }, values);
-  return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { emailSubject: rendered.subject, emailBody: rendered.textBody, emailHtmlBody: rendered.htmlBody, unsubscribeTokenHash: digestSecret(token), ...(input.sendingAccountId ? { sendingAccountId: input.sendingAccountId } : {}) }, include: { events: true, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } } }));
+  const rendered = renderMultipartTemplate({ subject: input.subject || storedTemplate.subject, textBody: input.textBody || input.body || storedTemplate.textBody, htmlBody: `${input.htmlBody || storedTemplate.htmlBody}<img src="${publicAppOrigin()}/api/public/outreach/track/open/${openToken}.gif" width="1" height="1" alt="" style="display:none" />` }, values);
+  return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { emailSubject: rendered.subject, emailBody: rendered.textBody, emailHtmlBody: rendered.htmlBody, unsubscribeTokenHash: digestSecret(token), openTrackingTokenHash: digestSecret(openToken), clickTrackingTokenHash: digestSecret(clickToken), ...(input.sendingAccountId ? { sendingAccountId: input.sendingAccountId } : {}) }, include: { events: true, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } } }));
 }
 
 export async function queueOutreachEmail(id, sendingAccountId) {
@@ -396,7 +404,7 @@ export async function sendOutreachEmail(id, sendingAccountId, options = {}) {
     if (account.provider !== "SMTP") throw Object.assign(new Error("Gmail OAuth is not connected yet"), { code: "GMAIL_NOT_CONNECTED" });
     const transport = nodemailer.createTransport(smtpTransportOptions(account));
     const info = await transport.sendMail({ from: { name: account.displayName, address: account.fromEmail }, replyTo: account.replyTo || undefined, to: row.email, subject: row.emailSubject, text: row.emailBody, html: row.emailHtmlBody });
-    return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "EMAIL_SENT", emailSentAt: new Date(), emailProviderId: info.messageId, lastError: null, events: { create: { type: "email_sent" } } } }));
+    return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "EMAIL_SENT", emailSentAt: new Date(), emailProviderId: info.messageId, lastError: null, events: { create: { type: "EMAIL_SENT", idempotencyKey: `outreach-sent:${id}`, providerMessageId: info.messageId, sendingAccountId: account.id, workspaceId: row.prospectWorkspaceId } } } }));
   } catch (error) {
     await prisma.agentOutreachProspect.update({ where: { id }, data: { status: "EMAIL_FAILED", lastError: error.message, events: { create: { type: "email_failed", message: error.message } } } });
     throw error;
@@ -467,7 +475,20 @@ export async function testSendingAccount(id) {
   try { await transport.verify(); } catch (error) { throw smtpConfigurationError(error); }
   return { ok: true, diagnostic: { serverReached: true, tlsEstablished: account.smtpEncryption !== "NONE", authentication: "SUCCEEDED", code: "SMTP_VERIFIED" } };
 }
-export async function unsubscribe(token) { const row = await prisma.agentOutreachProspect.findUnique({ where: { unsubscribeTokenHash: digestSecret(token || "") } }); if (!row?.normalizedEmail) return false; await prisma.$transaction([prisma.outreachSuppression.upsert({ where: { normalizedEmail: row.normalizedEmail }, create: { normalizedEmail: row.normalizedEmail, reason: "UNSUBSCRIBED", source: "EMAIL_LINK" }, update: { reason: "UNSUBSCRIBED", source: "EMAIL_LINK", restoredAt: null } }), prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "UNSUBSCRIBED", events: { create: { type: "unsubscribed" } } } })]); return true; }
+export async function unsubscribe(token) { const row = await prisma.agentOutreachProspect.findUnique({ where: { unsubscribeTokenHash: digestSecret(token || "") } }); if (!row?.normalizedEmail) return false; const now=new Date(); await prisma.$transaction([prisma.outreachSuppression.upsert({ where: { normalizedEmail: row.normalizedEmail }, create: { normalizedEmail: row.normalizedEmail, reason: "UNSUBSCRIBED", source: "EMAIL_LINK" }, update: { reason: "UNSUBSCRIBED", source: "EMAIL_LINK", restoredAt: null } }), prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "UNSUBSCRIBED", unsubscribedAt: now, events: { create: { type: "UNSUBSCRIBED" } } } })]); return true; }
+
+function suspectedAutomated(userAgent="", method="GET") { return method === "HEAD" || /bot|crawler|spider|scanner|proofpoint|mimecast|barracuda|safelinks|urlscan/i.test(String(userAgent)); }
+export async function trackOpen(token, userAgent) { const row=await prisma.agentOutreachProspect.findUnique({where:{openTrackingTokenHash:digestSecret(token||"")}}); if(!row)return false; const now=new Date(); await prisma.agentOutreachProspect.update({where:{id:row.id},data:{emailFirstOpenedAt:row.emailFirstOpenedAt||now,emailLastOpenedAt:now,emailOpenCount:{increment:1},events:{create:{type:"EMAIL_OPENED",metadata:{userAgent:String(userAgent||"").slice(0,300),estimated:true,isSuspectedAutomated:suspectedAutomated(userAgent)}}}}}); return true; }
+export async function trackClick(token, userAgent, method="GET") { const row=await prisma.agentOutreachProspect.findUnique({where:{clickTrackingTokenHash:digestSecret(token||"")}}); if(!row)return null; const now=new Date(), automated=suspectedAutomated(userAgent,method); await prisma.agentOutreachProspect.update({where:{id:row.id},data:{claimLinkFirstClickedAt:row.claimLinkFirstClickedAt||now,claimLinkLastClickedAt:now,claimLinkClickCount:{increment:1},events:{create:{type:"CLAIM_LINK_CLICKED",metadata:{userAgent:String(userAgent||"").slice(0,300),isSuspectedAutomated:automated}}}}}); const destination=new URL(decryptToken(row.claimUrlEncrypted)); destination.searchParams.set("outreach",token); return destination.toString(); }
+export async function trackPreviewView(token, previewToken, userAgent) { if(!token||!previewToken)return false; const workspace=await prisma.prospectWorkspace.findUnique({where:{previewTokenHash:digestSecret(previewToken)},select:{id:true}}); const row=await prisma.agentOutreachProspect.findUnique({where:{clickTrackingTokenHash:digestSecret(token)},select:{id:true,prospectWorkspaceId:true,previewFirstViewedAt:true}}); if(!workspace||!row||row.prospectWorkspaceId!==workspace.id)return false; const now=new Date(); await prisma.agentOutreachProspect.update({where:{id:row.id},data:{previewFirstViewedAt:row.previewFirstViewedAt||now,previewLastViewedAt:now,previewViewCount:{increment:1},events:{create:{type:"PREVIEW_VIEWED",workspaceId:workspace.id,metadata:{source:"email",userAgent:String(userAgent||"").slice(0,300),isSuspectedAutomated:suspectedAutomated(userAgent)}}}}}); return true; }
+export async function trackClaimStarted(token, userAgent) { const row=await prisma.agentOutreachProspect.findUnique({where:{clickTrackingTokenHash:digestSecret(token||"")},select:{id:true,prospectWorkspaceId:true,claimStartedAt:true}}); if(!row)return false; const now=new Date(); await prisma.agentOutreachProspect.update({where:{id:row.id},data:{claimStartedAt:row.claimStartedAt||now,events:{create:{type:"CLAIM_STARTED",workspaceId:row.prospectWorkspaceId,metadata:{userAgent:String(userAgent||"").slice(0,300),isSuspectedAutomated:suspectedAutomated(userAgent)}}}}}); return true; }
 export async function syncClaimed(id) { const rows = await prisma.agentOutreachProspect.findMany({ where: { ...(id ? { id } : {}), status: { not: "CLAIMED" }, prospectWorkspace: { claimStatus: "CLAIMED" } }, select: { id: true, prospectWorkspace: { select: { claimedAt: true } } } }); await Promise.all(rows.map(row => prisma.agentOutreachProspect.update({ where: { id: row.id }, data: { status: "CLAIMED", claimedAt: row.prospectWorkspace.claimedAt, events: { create: { type: "claimed" } } } }))); }
+
+export async function ingestDeliveryEvent(input) {
+  const providerMessageId=String(input.providerMessageId||"").trim(), eventId=String(input.eventId||"").trim(); if(!providerMessageId||!eventId)return {matched:false};
+  const row=await prisma.agentOutreachProspect.findFirst({where:{emailProviderId:providerMessageId}}); if(!row)return {matched:false};
+  const key=`outreach-provider:${String(input.provider||"generic")}:${eventId}`, now=new Date(), kind=String(input.type||"").toUpperCase();
+  try { if(kind==="DELIVERED") await prisma.agentOutreachProspect.update({where:{id:row.id},data:{emailDeliveredAt:row.emailDeliveredAt||now,events:{create:{type:"EMAIL_DELIVERED",idempotencyKey:key,providerMessageId}}}}); else { const hard=kind==="HARD_BOUNCE"; await prisma.$transaction([prisma.agentOutreachProspect.update({where:{id:row.id},data:{status:hard?"BOUNCED":row.status,bouncedAt:hard?(row.bouncedAt||now):row.bouncedAt,events:{create:{type:hard?"EMAIL_BOUNCED":"EMAIL_DELIVERY_FAILED",idempotencyKey:key,providerMessageId,metadata:{classification:kind}}}}}),...(hard&&row.normalizedEmail?[prisma.outreachSuppression.upsert({where:{normalizedEmail:row.normalizedEmail},create:{normalizedEmail:row.normalizedEmail,reason:"HARD_BOUNCE",source:"PROVIDER_WEBHOOK"},update:{reason:"HARD_BOUNCE",source:"PROVIDER_WEBHOOK",restoredAt:null}})]:[])]); } return {matched:true,duplicate:false}; } catch(error){if(error?.code==="P2002")return {matched:true,duplicate:true};throw error;}
+}
 
 export const outreachTemplate = { subject: DEFAULT_SUBJECT, textBody: DEFAULT_BODY, htmlBody: DEFAULT_HTML_BODY };

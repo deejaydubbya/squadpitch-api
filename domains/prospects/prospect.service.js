@@ -907,7 +907,7 @@ export async function claimWorkspace({ claimToken, prospectId, user, auth0Sub, v
     await tx.client.update({ where: { id: row.clientId }, data: { lifecycle: "CUSTOMER", status: "ACTIVE", createdBy: auth0Sub } });
     await tx.contentPreferences.upsert({ where: { clientId: row.clientId }, create: { clientId: row.clientId, preferredChannels: normalizeProspectChannels(row.selectedChannels) }, update: { preferredChannels: normalizeProspectChannels(row.selectedChannels) } });
     const outreach = await tx.agentOutreachProspect.findUnique({ where: { prospectWorkspaceId: row.id }, select: { id: true } });
-    if (outreach) await tx.agentOutreachProspect.update({ where: { id: outreach.id }, data: { status: "CLAIMED", claimedAt, events: { create: { type: "claimed" } } } });
+    if (outreach) await tx.agentOutreachProspect.update({ where: { id: outreach.id }, data: { status: "CLAIMED", claimedAt, events: { create: { type: "CLAIMED", workspaceId: row.id, idempotencyKey: `outreach-claimed:${row.id}` } } } });
     return { clientId: row.clientId, businessName: row.client.name };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   if (outcome.claimError === "CLAIM_EXPIRED") throw Object.assign(new Error("This claim link has expired"), { status: 410, code: "CLAIM_EXPIRED" });

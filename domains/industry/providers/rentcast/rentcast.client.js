@@ -58,6 +58,9 @@ function trackRequest() {
  * @throws {Error} On non-retryable failure or exhausted retries
  */
 export async function rentcastRequest(path, params = {}) {
+  if (!env.RENTCAST_ENABLED) {
+    throw new Error("[RentCast] disabled by RENTCAST_ENABLED");
+  }
   if (!env.RENTCAST_API_KEY) {
     throw new Error("[RentCast] RENTCAST_API_KEY not configured");
   }

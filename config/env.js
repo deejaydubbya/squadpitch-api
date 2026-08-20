@@ -383,7 +383,12 @@ export const env = {
     "true",
 
   // RentCast
+  // Operational kill switch. Keep disabled by default so a configured key
+  // cannot incur requests until RentCast is deliberately enabled.
+  RENTCAST_ENABLED:
+    String(process.env.RENTCAST_ENABLED ?? "false").toLowerCase() === "true",
   RENTCAST_API_KEY: process.env.RENTCAST_API_KEY,
+  OUTREACH_DELIVERY_WEBHOOK_SECRET: process.env.OUTREACH_DELIVERY_WEBHOOK_SECRET,
   RENTCAST_API_BASE:
     process.env.RENTCAST_API_BASE ?? "https://api.rentcast.io/v1",
 

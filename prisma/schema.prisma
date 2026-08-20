@@ -495,6 +495,8 @@ model AgentOutreachProspect {
   previewUrlEncrypted  String?        @db.Text
   claimUrlEncrypted    String?        @db.Text
   unsubscribeTokenHash String?        @unique
+  openTrackingTokenHash String?       @unique
+  clickTrackingTokenHash String?      @unique
   previewGeneratedAt   DateTime?
   emailSubject         String?
   emailBody            String?        @db.Text
@@ -502,7 +504,20 @@ model AgentOutreachProspect {
   sendingAccountId     String?
   emailProviderId      String?
   emailSentAt          DateTime?
+  emailDeliveredAt DateTime?
+  emailFirstOpenedAt DateTime?
+  emailLastOpenedAt DateTime?
+  emailOpenCount Int @default(0)
+  claimLinkFirstClickedAt DateTime?
+  claimLinkLastClickedAt DateTime?
+  claimLinkClickCount Int @default(0)
+  previewFirstViewedAt DateTime?
+  previewLastViewedAt DateTime?
+  previewViewCount Int @default(0)
+  claimStartedAt DateTime?
   claimedAt            DateTime?
+  bouncedAt DateTime?
+  unsubscribedAt DateTime?
   lastError            String?        @db.Text
   discoveredAt         DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
@@ -535,6 +550,10 @@ model AgentOutreachEvent {
   type       String
   message    String?
   metadata   Json?
+  idempotencyKey String? @unique
+  providerMessageId String?
+  workspaceId String?
+  sendingAccountId String?
   createdAt  DateTime @default(now())
 
   prospect AgentOutreachProspect @relation(fields: [prospectId], references: [id], onDelete: Cascade)

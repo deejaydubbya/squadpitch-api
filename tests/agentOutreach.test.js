@@ -13,6 +13,7 @@ const prismaMock = {
   outreachSuppression: { findFirst: vi.fn(), upsert: vi.fn() },
   outreachSendingAccount: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), delete: vi.fn() },
   outreachEmailTemplate: { upsert: vi.fn() },
+  prospectWorkspace: { findUnique: vi.fn() },
   $transaction: vi.fn(),
 };
 
@@ -66,6 +67,21 @@ describe("agent outreach safety", () => {
     expect(service.outreachTemplate.textBody).toContain("{{unsubscribe_url}}");
     expect(service.outreachTemplate.htmlBody).toContain("View &amp; Claim Your Workspace");
     expect(service.outreachTemplate.htmlBody).toContain('href="{{preview_url}}"');
+  });
+
+  it("counts repeat opens without exposing the prospect in the token", async () => {
+    prismaMock.agentOutreachProspect.findUnique.mockResolvedValue({ id: "p1", emailFirstOpenedAt: null });
+    prismaMock.agentOutreachProspect.update.mockResolvedValue({});
+    await expect(service.trackOpen("opaque-token", "Mozilla/5.0")).resolves.toBe(true);
+    expect(prismaMock.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ emailOpenCount: { increment: 1 } }) }));
+  });
+
+  it("attributes a preview only when both opaque tokens resolve to the same workspace", async () => {
+    prismaMock.prospectWorkspace.findUnique.mockResolvedValue({ id: "w1" });
+    prismaMock.agentOutreachProspect.findUnique.mockResolvedValue({ id: "p1", prospectWorkspaceId: "w1", previewFirstViewedAt: null });
+    prismaMock.agentOutreachProspect.update.mockResolvedValue({});
+    await expect(service.trackPreviewView("click-token", "preview-token", "Mozilla/5.0")).resolves.toBe(true);
+    expect(prismaMock.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ previewViewCount: { increment: 1 } }) }));
   });
 
   it("never generates a preview for a zero-listing rejection", async () => {
@@ -235,15 +251,16 @@ describe("agent outreach safety", () => {
     const drafted = await service.prepareEmail("o1", { sendingAccountId: "a1" });
     expect(drafted.emailSubject).toBe("I created a free Squadpitch workspace for you");
     expect(drafted.emailBody).toContain("Hi Test,");
-    expect(drafted.emailBody).toContain("https://app.squadpitch.test/preview/preview-token#claim=claim-token");
+    expect(drafted.emailBody).toContain("https://app.squadpitch.test/api/public/outreach/track/click/");
     expect(drafted.emailBody).toContain("/api/public/outreach/unsubscribe?token=");
-    expect(drafted.emailBody.match(/https:\/\/app\.squadpitch\.test\/preview\/preview-token#claim=claim-token/g)).toHaveLength(1);
+    expect(drafted.emailBody.match(/\/api\/public\/outreach\/track\/click\//g)).toHaveLength(1);
     expect(drafted.emailBody).toContain("Important: when you create your Squadpitch account");
     expect(drafted.emailBody).toContain("14-day trial of Squadpitch Pro with no credit card required");
     expect(drafted.emailBody).toContain("Daniel Wardlow\nFounder, Squadpitch");
     expect(drafted.emailBody).not.toMatch(/{{\s*(first_name|preview_url|unsubscribe_url)\s*}}/);
     expect(drafted.emailHtmlBody).toContain("Hi Test");
-    expect(drafted.emailHtmlBody).toContain('href="https://app.squadpitch.test/preview/preview-token#claim=claim-token"');
+    expect(drafted.emailHtmlBody).toContain('href="https://app.squadpitch.test/api/public/outreach/track/click/');
+    expect(drafted.emailHtmlBody).toContain('/api/public/outreach/track/open/');
     expect(drafted.emailHtmlBody).toContain("View &amp; Claim Your Workspace");
     expect(drafted.emailHtmlBody).toContain("/api/public/outreach/unsubscribe?token=");
     expect(drafted.emailHtmlBody).not.toMatch(/{{\s*(first_name|preview_url|unsubscribe_url)\s*}}/);

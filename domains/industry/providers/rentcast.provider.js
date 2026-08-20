@@ -6,6 +6,7 @@
 
 import { rentcastRequest } from "./rentcast/rentcast.client.js";
 import { normalizePropertyType } from "./rentcast/rentcast.mappers.js";
+import { env } from "../../../config/env.js";
 
 const PROVIDER_NAME = "rentcast";
 
@@ -13,7 +14,7 @@ export const rentcastProvider = {
   name: PROVIDER_NAME,
 
   isAvailable() {
-    return Boolean(process.env.RENTCAST_API_KEY);
+    return env.RENTCAST_ENABLED && Boolean(env.RENTCAST_API_KEY);
   },
 
   /**

@@ -22,20 +22,20 @@ const original = {
   PROPERTY_API_PROVIDER: env.PROPERTY_API_PROVIDER,
   PROPERTY_ENRICHMENT_ENABLED: env.PROPERTY_ENRICHMENT_ENABLED,
   PROPERTY_SYNTHETIC_DEMO_MODE: env.PROPERTY_SYNTHETIC_DEMO_MODE,
-  RENTCAST_API_KEY: process.env.RENTCAST_API_KEY,
+  RENTCAST_ENABLED: env.RENTCAST_ENABLED,
+  RENTCAST_API_KEY: env.RENTCAST_API_KEY,
 };
 
 beforeEach(() => {
   update.mockReset();
   env.PROPERTY_ENRICHMENT_ENABLED = true;
   env.PROPERTY_SYNTHETIC_DEMO_MODE = false;
-  delete process.env.RENTCAST_API_KEY;
+  env.RENTCAST_ENABLED = false;
+  env.RENTCAST_API_KEY = undefined;
 });
 
 afterEach(() => {
   Object.assign(env, original);
-  if (original.RENTCAST_API_KEY === undefined) delete process.env.RENTCAST_API_KEY;
-  else process.env.RENTCAST_API_KEY = original.RENTCAST_API_KEY;
   vi.unstubAllGlobals();
 });
 
@@ -97,6 +97,7 @@ describe("property enrichment production safety", () => {
     expect(enrichment.getPropertyEnrichmentStatus().ready).toBe(false);
 
     env.PROPERTY_API_PROVIDER = "rentcast";
+    env.RENTCAST_ENABLED = true;
     expect(enrichment.getPropertyEnrichmentStatus()).toMatchObject({
       ready: false,
       provider: "rentcast",
@@ -106,7 +107,8 @@ describe("property enrichment production safety", () => {
   it("does not fall back to mock when a real provider request fails", async () => {
     env.NODE_ENV = "production";
     env.PROPERTY_API_PROVIDER = "rentcast";
-    process.env.RENTCAST_API_KEY = "synthetic-test-key";
+    env.RENTCAST_ENABLED = true;
+    env.RENTCAST_API_KEY = "synthetic-test-key";
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("provider down")));
 
     const result = await enrichment.enrichListing({
@@ -127,6 +129,19 @@ describe("property enrichment production safety", () => {
       enabled: false,
       ready: true,
       provider: "disabled",
+    });
+  });
+
+  it("treats the RentCast kill switch as an intentionally disabled optional dependency", () => {
+    env.NODE_ENV = "production";
+    env.PROPERTY_ENRICHMENT_ENABLED = true;
+    env.PROPERTY_API_PROVIDER = "rentcast";
+    env.RENTCAST_ENABLED = false;
+
+    expect(enrichment.getPropertyEnrichmentStatus()).toEqual({
+      enabled: false,
+      ready: true,
+      provider: "rentcast-disabled",
     });
   });
 });

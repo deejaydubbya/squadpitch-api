@@ -39,6 +39,7 @@ primary_region = "ord"
     path = "/health"
 
 [env]
+  RENTCAST_ENABLED = "false"
   NODE_ENV = "production"
   PROCESS_ROLE = "api"
   AUTH0_MANAGEMENT_DOMAIN = "dev-lydwxmh7hokvbp8b.us.auth0.com"
