@@ -255,12 +255,15 @@ describe("agent outreach safety", () => {
     expect(startProspectPreparation).toHaveBeenCalledWith("p1", expect.objectContaining({ selectedListings: [qualified.listings[0], qualified.listings[0], qualified.listings[0]] }), "admin");
     expect(prismaMock.agentOutreachProspect.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ prospectWorkspaceId: "p1", status: "PREVIEW_PENDING", claimUrlEncrypted: expect.stringContaining("#claim=claim-token") }) }));
 
-    const ready = { ...qualified, status: "READY_TO_EMAIL", claimUrlEncrypted: "encrypted:https://app.squadpitch.test/preview/preview-token#claim=claim-token", prospectWorkspace: { claimStatus: "CLAIMABLE" }, sendingAccount: { id: "a1", displayName: "Test Sender" }, activeListingCount: 1 };
+    const unusedListing = { listingUrl: "https://broker.example/listing/unused", address: "999 Unused Ave" };
+    const ready = { ...qualified, listings: [...qualified.listings, unusedListing], status: "READY_TO_EMAIL", claimUrlEncrypted: "encrypted:https://app.squadpitch.test/preview/preview-token#claim=claim-token", prospectWorkspace: { claimStatus: "CLAIMABLE", preparationRuns: [{ selectedListings: qualified.listings }] }, sendingAccount: { id: "a1", displayName: "Test Sender" }, activeListingCount: 2 };
     prismaMock.agentOutreachProspect.findUnique.mockResolvedValueOnce(ready);
     prismaMock.agentOutreachProspect.update.mockImplementationOnce(({ data }) => Promise.resolve({ ...ready, ...data, events: [], sendingAccount: ready.sendingAccount }));
     const drafted = await service.prepareEmail("o1", { sendingAccountId: "a1" });
     expect(drafted.emailSubject).toBe("I created a free Squadpitch workspace for you");
     expect(drafted.emailBody).toContain("Hi Test,");
+    expect(drafted.emailBody).toContain("123 Test St");
+    expect(drafted.emailBody).not.toContain("999 Unused Ave");
     expect(drafted.emailBody).toContain("https://app.squadpitch.test/api/public/outreach/track/click/");
     expect(drafted.emailBody).toContain("/api/public/outreach/unsubscribe?token=");
     expect(drafted.emailBody.match(/\/api\/public\/outreach\/track\/click\//g)).toHaveLength(1);

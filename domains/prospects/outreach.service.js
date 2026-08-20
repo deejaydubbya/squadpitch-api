@@ -367,12 +367,13 @@ export function renderMultipartTemplate(template, values) {
   return { subject: render(template.subject, values), textBody: render(template.textBody, values), htmlBody: sanitizeEmailHtml(render(template.htmlBody, safeValues)) };
 }
 export async function prepareEmail(id, input = {}) {
-  const row = await prisma.agentOutreachProspect.findUnique({ where: { id }, include: { sendingAccount: true, prospectWorkspace: { select: { claimStatus: true } } } });
+  const row = await prisma.agentOutreachProspect.findUnique({ where: { id }, include: { sendingAccount: true, prospectWorkspace: { select: { claimStatus: true, preparationRuns: { orderBy: { createdAt: "desc" }, take: 1, select: { selectedListings: true } } } } } });
   if (!row?.claimUrlEncrypted || row.prospectWorkspace?.claimStatus !== "CLAIMABLE" || !["READY_TO_EMAIL", "EMAIL_FAILED"].includes(row.status)) throw Object.assign(new Error("A ready, claimable preview is required"), { status: 409, code: "PREVIEW_REQUIRED" });
   const selectedAccount = input.sendingAccountId ? await prisma.outreachSendingAccount.findUnique({ where: { id: input.sendingAccountId } }) : row.sendingAccount;
   const token = crypto.randomBytes(24).toString("base64url");
   const openToken = crypto.randomBytes(32).toString("base64url"), clickToken = crypto.randomBytes(32).toString("base64url");
-  const addresses = listingAddresses(row.listings);
+  const selectedListings = row.prospectWorkspace?.preparationRuns?.[0]?.selectedListings;
+  const addresses = listingAddresses(Array.isArray(selectedListings) && selectedListings.length ? selectedListings : row.listings);
   const values = { first_name: row.firstName || row.fullName, agent_name: row.fullName, brokerage: row.brokerage || "", listing_address: addresses[0] || "", listing_addresses: addresses.join("\n"), listing_count: String(addresses.length || row.activeListingCount), preview_url: `${publicAppOrigin()}/api/public/outreach/track/click/${clickToken}`, sender_name: selectedAccount?.displayName || "Squadpitch", unsubscribe_url: `${publicAppOrigin()}/api/public/outreach/unsubscribe?token=${token}` };
   const storedTemplate = await canonicalTemplate();
   const rendered = renderMultipartTemplate({ subject: input.subject || storedTemplate.subject, textBody: input.textBody || input.body || storedTemplate.textBody, htmlBody: `${input.htmlBody || storedTemplate.htmlBody}<img src="${publicAppOrigin()}/api/public/outreach/track/open/${openToken}.gif" width="1" height="1" alt="" style="display:none" />` }, values);
