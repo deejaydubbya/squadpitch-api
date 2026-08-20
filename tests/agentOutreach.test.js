@@ -58,6 +58,9 @@ describe("agent outreach safety", () => {
     expect(service.outreachTemplate.textBody).toContain("I’m Daniel, the founder of Squadpitch");
     expect(service.outreachTemplate.textBody).toContain("ready-to-claim workspaces");
     expect(service.outreachTemplate.textBody).toContain("same email address I sent this message to");
+    expect(service.outreachTemplate.textBody).toContain("{{listing_address}}");
+    expect(service.outreachTemplate.textBody).toContain("{{listing_count}}");
+    expect(service.outreachTemplate.htmlBody).toContain("<strong>{{listing_address}}</strong>");
     expect(service.outreachTemplate.textBody).toContain("14-day trial of Squadpitch Pro with no credit card required");
     expect(service.outreachTemplate.textBody).toContain("https://real-estate.squadpitch.com");
     expect(service.outreachTemplate.textBody).toContain("https://www.linkedin.com/company/115992427");

@@ -18,6 +18,8 @@ I’m Daniel, the founder of Squadpitch. I’m reaching out to a small group of 
 
 Squadpitch helps real estate agents turn listings, open houses, sold properties, and other business updates into ready-to-post social media content using AI.
 
+I used your listing at {{listing_address}} as a starting point. I found {{listing_count}} active listing(s) for your workspace.
+
 I’ve already created a free workspace for you here:
 
 {{preview_url}}
@@ -44,6 +46,7 @@ const DEFAULT_HTML_BODY = `<div style="max-width:600px;margin:0;padding:0;font-f
   <p>Hi {{first_name}},</p>
   <p>I'm Daniel, the founder of Squadpitch. I'm reaching out to a small group of real estate agents and creating ready-to-claim workspaces for them so they can get started without having to build everything from scratch.</p>
   <p>Squadpitch helps real estate agents turn listings, open houses, sold properties, and other business updates into ready-to-post social media content using AI.</p>
+  <p>I used your listing at <strong>{{listing_address}}</strong> as a starting point. I found {{listing_count}} active listing(s) for your workspace.</p>
   <p>I've already created a free workspace for you here:</p>
   <p><a href="{{preview_url}}" style="display:inline-block;padding:10px 16px;border-radius:6px;background:#166534;color:#ffffff;text-decoration:none;font-weight:600;">View &amp; Claim Your Workspace</a></p>
   <p style="font-size:13px;color:#5f6368;">If the button doesn't work, use this link: <a href="{{preview_url}}" style="color:#166534;word-break:break-all;">{{preview_url}}</a></p>
