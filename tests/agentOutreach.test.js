@@ -58,9 +58,8 @@ describe("agent outreach safety", () => {
     expect(service.outreachTemplate.textBody).toContain("I’m Daniel, the founder of Squadpitch");
     expect(service.outreachTemplate.textBody).toContain("ready-to-claim workspaces");
     expect(service.outreachTemplate.textBody).toContain("same email address I sent this message to");
-    expect(service.outreachTemplate.textBody).toContain("{{listing_address}}");
-    expect(service.outreachTemplate.textBody).toContain("{{listing_count}}");
-    expect(service.outreachTemplate.htmlBody).toContain("<strong>{{listing_address}}</strong>");
+    expect(service.outreachTemplate.textBody).toContain("{{listing_addresses}}");
+    expect(service.outreachTemplate.htmlBody).toContain("{{listing_addresses}}");
     expect(service.outreachTemplate.textBody).toContain("14-day trial of Squadpitch Pro with no credit card required");
     expect(service.outreachTemplate.textBody).toContain("https://real-estate.squadpitch.com");
     expect(service.outreachTemplate.textBody).toContain("https://www.linkedin.com/company/115992427");
@@ -70,6 +69,14 @@ describe("agent outreach safety", () => {
     expect(service.outreachTemplate.textBody).toContain("{{unsubscribe_url}}");
     expect(service.outreachTemplate.htmlBody).toContain("View &amp; Claim Your Workspace");
     expect(service.outreachTemplate.htmlBody).toContain('href="{{preview_url}}"');
+  });
+
+  it("formats all listing addresses and falls back to readable listing URL slugs", () => {
+    expect(service.listingAddresses([
+      { address: "123 Main St, Columbus, OH" },
+      { listingUrl: "https://www.coldwellbankerhomes.com/oh/dublin/5341-aryshire-dr/pid_72517648" },
+      { listingUrl: "https://www.coldwellbankerhomes.com/oh/thornville/0-dahlia-dr-ne/pid_72966254" },
+    ])).toEqual(["123 Main St, Columbus, OH", "5341 Aryshire Dr", "0 Dahlia Dr NE"]);
   });
 
   it("counts repeat opens without exposing the prospect in the token", async () => {

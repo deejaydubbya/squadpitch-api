@@ -18,7 +18,9 @@ I’m Daniel, the founder of Squadpitch. I’m reaching out to a small group of 
 
 Squadpitch helps real estate agents turn listings, open houses, sold properties, and other business updates into ready-to-post social media content using AI.
 
-I used your listing at {{listing_address}} as a starting point. I found {{listing_count}} active listing(s) for your workspace.
+I created sample social content using these active listings:
+
+{{listing_addresses}}
 
 I’ve already created a free workspace for you here:
 
@@ -46,7 +48,8 @@ const DEFAULT_HTML_BODY = `<div style="max-width:600px;margin:0;padding:0;font-f
   <p>Hi {{first_name}},</p>
   <p>I'm Daniel, the founder of Squadpitch. I'm reaching out to a small group of real estate agents and creating ready-to-claim workspaces for them so they can get started without having to build everything from scratch.</p>
   <p>Squadpitch helps real estate agents turn listings, open houses, sold properties, and other business updates into ready-to-post social media content using AI.</p>
-  <p>I used your listing at <strong>{{listing_address}}</strong> as a starting point. I found {{listing_count}} active listing(s) for your workspace.</p>
+  <p>I created sample social content using these active listings:</p>
+  <p style="white-space:pre-line;">{{listing_addresses}}</p>
   <p>I've already created a free workspace for you here:</p>
   <p><a href="{{preview_url}}" style="display:inline-block;padding:10px 16px;border-radius:6px;background:#166534;color:#ffffff;text-decoration:none;font-weight:600;">View &amp; Claim Your Workspace</a></p>
   <p style="font-size:13px;color:#5f6368;">If the button doesn't work, use this link: <a href="{{preview_url}}" style="color:#166534;word-break:break-all;">{{preview_url}}</a></p>
@@ -346,6 +349,19 @@ export async function generatePreview(id, adminSub) {
 }
 
 function render(template, values) { return template.replace(/{{\s*([a-z_]+)\s*}}/g, (_m, key) => values[key] ?? ""); }
+function addressFromListingUrl(value) {
+  try {
+    const parts = new URL(value).pathname.split("/").filter(Boolean);
+    const pidIndex = parts.findIndex((part) => /^pid_/i.test(part));
+    const slug = pidIndex > 0 ? parts[pidIndex - 1] : null;
+    if (!slug) return null;
+    const upper = new Set(["ne", "nw", "se", "sw", "n", "s", "e", "w", "us"]);
+    return slug.split("-").filter(Boolean).map((part) => upper.has(part.toLowerCase()) ? part.toUpperCase() : `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" ");
+  } catch { return null; }
+}
+export function listingAddresses(listings) {
+  return [...new Set((Array.isArray(listings) ? listings : []).map((listing) => listing?.address || listing?.fullAddress || listing?.formattedAddress || listing?.streetAddress || listing?.street || addressFromListingUrl(listing?.listingUrl || listing?.sourceUrl)).filter(Boolean))];
+}
 export function renderMultipartTemplate(template, values) {
   const safeValues = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, ["preview_url", "unsubscribe_url"].includes(key) ? escapeHtml(safeEmailUrl(value)) : escapeHtml(value)]));
   return { subject: render(template.subject, values), textBody: render(template.textBody, values), htmlBody: sanitizeEmailHtml(render(template.htmlBody, safeValues)) };
@@ -356,8 +372,8 @@ export async function prepareEmail(id, input = {}) {
   const selectedAccount = input.sendingAccountId ? await prisma.outreachSendingAccount.findUnique({ where: { id: input.sendingAccountId } }) : row.sendingAccount;
   const token = crypto.randomBytes(24).toString("base64url");
   const openToken = crypto.randomBytes(32).toString("base64url"), clickToken = crypto.randomBytes(32).toString("base64url");
-  const listing = row.listings?.[0] || {};
-  const values = { first_name: row.firstName || row.fullName, agent_name: row.fullName, brokerage: row.brokerage || "", listing_address: listing.address || "", listing_count: String(row.activeListingCount), preview_url: `${publicAppOrigin()}/api/public/outreach/track/click/${clickToken}`, sender_name: selectedAccount?.displayName || "Squadpitch", unsubscribe_url: `${publicAppOrigin()}/api/public/outreach/unsubscribe?token=${token}` };
+  const addresses = listingAddresses(row.listings);
+  const values = { first_name: row.firstName || row.fullName, agent_name: row.fullName, brokerage: row.brokerage || "", listing_address: addresses[0] || "", listing_addresses: addresses.join("\n"), listing_count: String(addresses.length || row.activeListingCount), preview_url: `${publicAppOrigin()}/api/public/outreach/track/click/${clickToken}`, sender_name: selectedAccount?.displayName || "Squadpitch", unsubscribe_url: `${publicAppOrigin()}/api/public/outreach/unsubscribe?token=${token}` };
   const storedTemplate = await canonicalTemplate();
   const rendered = renderMultipartTemplate({ subject: input.subject || storedTemplate.subject, textBody: input.textBody || input.body || storedTemplate.textBody, htmlBody: `${input.htmlBody || storedTemplate.htmlBody}<img src="${publicAppOrigin()}/api/public/outreach/track/open/${openToken}.gif" width="1" height="1" alt="" style="display:none" />` }, values);
   return publicProspect(await prisma.agentOutreachProspect.update({ where: { id }, data: { emailSubject: rendered.subject, emailBody: rendered.textBody, emailHtmlBody: rendered.htmlBody, unsubscribeTokenHash: digestSecret(token), openTrackingTokenHash: digestSecret(openToken), clickTrackingTokenHash: digestSecret(clickToken), ...(input.sendingAccountId ? { sendingAccountId: input.sendingAccountId } : {}) }, include: { events: true, sendingAccount: { select: { id: true, displayName: true, fromEmail: true, provider: true } } } }));
