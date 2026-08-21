@@ -484,6 +484,20 @@ export function listingPhotoKey(url) {
   } catch { return String(url); }
 }
 
+export function propertyAssetIdentity(asset) {
+  const providerId = asset?.providerImageId || asset?.sourceImageId || asset?.externalId || asset?.metadata?.providerImageId || asset?.metadata?.photoId;
+  if (providerId) return `provider:${String(providerId).trim().toLowerCase()}`;
+  const url = asset?.sourceUrl || asset?.url;
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      const pathname = parsed.pathname.toLowerCase().replace(/(?:_|-)(?:thumb|small|medium|large|\d+x\d+)(?=\.|_|-)/g, "");
+      return `url:${parsed.hostname.toLowerCase()}${pathname}`;
+    } catch { return `url:${String(url).toLowerCase()}`; }
+  }
+  return asset?.id ? `asset:${asset.id}` : null;
+}
+
 const PROPERTY_SCENES = ["main_front_exterior", "alternate_exterior", "side_rear_exterior", "yard_land", "garage_outbuilding", "kitchen", "living_interior", "bedroom", "bathroom", "porch_patio_deck", "other_detail", "unusable"];
 
 function propertyScene(asset) {
@@ -518,6 +532,42 @@ export function buildPropertyMediaPlan(assets) {
   const facebookHero = heroFor(1);
   const linkedinHero = heroFor(2);
   return { featured: instagramHero, INSTAGRAM: galleryFor(instagramHero, 3, 0), FACEBOOK: galleryFor(facebookHero, 3, 1), LINKEDIN: galleryFor(linkedinHero, 1, 2) };
+}
+
+const FEATURE_SCENES = Object.freeze([
+  { pattern: /\bkitchens?\b/i, scenes: ["kitchen"] },
+  { pattern: /\b(?:primary |master )?bedrooms?\b/i, scenes: ["bedroom"] },
+  { pattern: /\bbath(?:room)?s?\b/i, scenes: ["bathroom"] },
+  { pattern: /\b(?:back\s?yards?|yards?|land)\b/i, scenes: ["backyard", "yard_land"] },
+  { pattern: /\bpool(?:s|side)?\b/i, scenes: ["pool"] },
+  { pattern: /\bfireplaces?\b/i, scenes: ["fireplace", "living_interior"] },
+  { pattern: /\bgarages?\b/i, scenes: ["garage_outbuilding"] },
+  { pattern: /\bbasements?\b/i, scenes: ["basement", "other_interior"] },
+  { pattern: /\bliving (?:room|area)s?\b/i, scenes: ["living_interior"] },
+  { pattern: /\b(?:views?|aerial)\b/i, scenes: ["aerial", "yard_land", "alternate_exterior"] },
+  { pattern: /\b(?:patios?|porches?|decks?)\b/i, scenes: ["porch_patio_deck", "patio", "porch"] },
+]);
+
+function requestedFeatureScenes(body) {
+  return FEATURE_SCENES.find(({ pattern }) => pattern.test(body || ""))?.scenes || [];
+}
+
+export function allocateProspectPreviewMedia(drafts, contextForDraft) {
+  const used = new Set();
+  return drafts.map((draft) => {
+    const assets = contextForDraft(draft)?.propertyAssets || [];
+    const featureScenes = requestedFeatureScenes(draft.body);
+    const ranked = rankPropertyAssets(assets)
+      .filter(({ scene }) => scene !== "unusable")
+      .map((candidate) => ({ ...candidate, identity: propertyAssetIdentity(candidate.asset), relevance: featureScenes.includes(candidate.scene) ? 1000 : 0 }))
+      .filter(({ identity }, index, all) => identity && all.findIndex((item) => item.identity === identity) === index)
+      .sort((a, b) => b.relevance - a.relevance || Number(used.has(a.identity)) - Number(used.has(b.identity)) || b.score - a.score || a.sourceIndex - b.sourceIndex);
+    const selected = ranked.slice(0, draft.channel === "LINKEDIN" ? 1 : 3).map(({ asset }) => asset);
+    const primaryIdentity = propertyAssetIdentity(selected[0]);
+    const reuseUnavoidable = Boolean(primaryIdentity) && used.has(primaryIdentity);
+    if (primaryIdentity) used.add(primaryIdentity);
+    return { draft, assets: selected, reuseUnavoidable };
+  });
 }
 
 async function classifyPropertyAsset(asset, actor) {
@@ -744,11 +794,11 @@ export async function executeProspectPreparation(runId) {
     await updatePreparationRun(runId, { readyCount: drafts.length });
   }
   await updatePreparationRun(runId, { stage: "SELECTING" });
-  for (const draft of drafts) {
-    const context = draftContexts.get(draft.id);
-    const mediaPlan = buildPropertyMediaPlan(context?.propertyAssets || []);
-    const selectedAssets = mediaPlan[draft.channel] || [];
-    const uniqueAssets = [...new Map(selectedAssets.map((asset) => [asset.id, asset])).values()];
+  const allocations = allocateProspectPreviewMedia(drafts, (draft) => draftContexts.get(draft.id));
+  const distinctSelected = new Set(allocations.map(({ assets }) => propertyAssetIdentity(assets[0])).filter(Boolean));
+  logEvent("prospect.images.allocated", { postCount: drafts.length, distinctListingCount: new Set([...draftContexts.values()].map((context) => context?.item?.id).filter(Boolean)).size, availableImagesByListing: Object.fromEntries([...new Set([...draftContexts.values()])].map((context) => [context?.item?.id, context?.propertyAssets?.length || 0]).filter(([itemId]) => itemId)), distinctImagesSelected: distinctSelected.size, reuseUnavoidable: allocations.some(({ reuseUnavoidable }) => reuseUnavoidable) });
+  for (const { draft, assets: uniqueAssets, reuseUnavoidable } of allocations) {
+    if (reuseUnavoidable) logEvent("prospect.images.reuse_unavoidable", { draftId: draft.id, channel: draft.channel, availableImageCount: draftContexts.get(draft.id)?.propertyAssets?.length || 0 });
     await prisma.draft.update({ where: { id: draft.id }, data: { mediaUrl: uniqueAssets[0]?.url || null, mediaType: uniqueAssets.length ? "image" : null } });
     await prisma.draftAsset.deleteMany({ where: { draftId: draft.id } });
     if (uniqueAssets.length) await prisma.draftAsset.createMany({ data: uniqueAssets.map((asset, orderIndex) => ({ draftId: draft.id, assetId: asset.id, role: orderIndex === 0 ? "primary" : "gallery", orderIndex })) });
