@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allocateProspectPreviewMedia, buildPropertyMediaPlan, buildVerifiedPropertyFallback, isUsableProspectListing, listingPhotoKey, propertyAssetIdentity, rankPropertyAssets, validateGeneratedPropertyBody, validateProspectComposition } from "../domains/prospects/prospect.service.js";
+import { allocateProspectPreviewMedia, buildPropertyMediaPlan, buildVerifiedPropertyFallback, isUsableProspectListing, listingPhotoKey, preferDiscoveredListingGallery, propertyAssetIdentity, rankPropertyAssets, validateGeneratedPropertyBody, validateProspectComposition } from "../domains/prospects/prospect.service.js";
 import { propertyImageSourceKey } from "../domains/studio/propertyMedia.service.js";
 
 const item = { title: "10 Main St", dataJson: { street: "10 Main St", city: "Town", state: "OH", zip: "45000", price: 300000, bedrooms: 3, bathrooms: 2, sqft: 1800, yearBuilt: 1990 } };
@@ -57,6 +57,13 @@ describe("prospect campaign quality", () => {
     expect(propertyAssetIdentity({ url: "https://images-listings.coldwellbanker.com/listing-a/P00_800x600.jpg" })).not.toBe(propertyAssetIdentity({ url: "https://images-listings.coldwellbanker.com/listing-b/P00_800x600.jpg" }));
     expect(propertyImageSourceKey("https://m.cbhomes.com/p/888/226030574/photo-a/pds23tp.webp")).toBe(propertyImageSourceKey("https://m1.cbhomes.com/p/888/226030574/photo-a/pdl23tp.webp"));
     expect(propertyImageSourceKey("https://m.cbhomes.com/p/888/226030574/photo-a/pds23tp.webp")).not.toBe(propertyImageSourceKey("https://m.cbhomes.com/p/888/226030574/photo-b/pds23tp.webp"));
+  });
+
+  it("keeps the provider-curated listing gallery instead of generic page chrome", () => {
+    const generic = { title: "3262 Brookview Way", images: ["https://cdn.test/agent-profile.webp", "https://s.cbhomes.com/p/i/listing/cta/thumb/1.gif"] };
+    const provider = { images: ["https://m.cbhomes.com/p/888/226030574/photo-a/pdl23tp.webp", "https://m1.cbhomes.com/p/888/226030574/photo-b/pdl23tp.webp"] };
+    expect(preferDiscoveredListingGallery(generic, provider)).toMatchObject({ title: generic.title, images: provider.images, imageUrl: provider.images[0], originalImageUrl: provider.images[0] });
+    expect(preferDiscoveredListingGallery(generic, { images: [] })).toBe(generic);
   });
 
   it("allocates distinct canonical images across same-listing posts when inventory permits", () => {

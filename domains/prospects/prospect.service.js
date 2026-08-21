@@ -267,6 +267,11 @@ export function coldwellListingFallback(selection) {
   } catch { return null; }
 }
 
+export function preferDiscoveredListingGallery(listing, providerListing) {
+  const providerImages = (providerListing?.images || []).filter((url) => typeof url === "string" && /^https?:\/\//i.test(url));
+  return providerImages.length ? { ...listing, images: providerImages, imageUrl: providerImages[0], originalImageUrl: providerImages[0] } : listing;
+}
+
 const UNSUPPORTED_PROPERTY_COPY = [
   /\b(?:beautiful|charming|desirable|peaceful|stunning)\b/i,
   /\b(?:welcoming|lovely|serene|tranquil|cozy)\b/i,
@@ -716,7 +721,7 @@ export async function executeProspectPreparation(runId) {
     if ((!candidate?.normalized || !isUsableProspectListing(candidate.normalized, analysis.confidence) || candidate.validation?.valid === false) && !fallback) {
       throw importFailure("We couldn't import this listing automatically.", { actions: ["RETRY_IMPORT", "ENTER_PROPERTY_ADDRESS", "ADD_PROPERTY_MANUALLY"], reason: analysis.reason || analysis.detectedType });
     }
-    const selectedListing = { ...fillAddressFromTitle(candidate?.normalized && isUsableProspectListing(candidate.normalized, analysis.confidence) && candidate.validation?.valid !== false ? candidate.normalized : fallback), sourceUrl: selection.sourceUrl };
+    const selectedListing = { ...preferDiscoveredListingGallery(fillAddressFromTitle(candidate?.normalized && isUsableProspectListing(candidate.normalized, analysis.confidence) && candidate.validation?.valid !== false ? candidate.normalized : fallback), fallback), sourceUrl: selection.sourceUrl };
     const confirmed = await confirmUrl(prospect.clientId, { url: selection.sourceUrl, selectedListing });
     await updatePreparationRun(runId, { stage: "ENRICHING" });
     await enrichListingById(prospect.clientId, confirmed.dataItemId).catch(() => null);

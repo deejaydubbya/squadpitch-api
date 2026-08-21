@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { extractListingFromScrapedData } from "../domains/studio/listingIngestion.service.js";
+import { filterPropertyImages } from "../domains/studio/scrapeUrl.js";
 
 describe("listing address normalization", () => {
+  it("filters Coldwell interface assets while retaining listing media", () => {
+    expect(filterPropertyImages([
+      "https://s.cbhomes.com/p/i/listing/cta/thumb/1.gif",
+      "https://s.cbhomes.com/p/i/logo/cbr/web/10.svg",
+      "https://m.cbhomes.com/p/888/226030574/photo-a/pdl23tp.webp",
+    ])).toEqual(["https://m.cbhomes.com/p/888/226030574/photo-a/pdl23tp.webp"]);
+  });
   it.each([
     ["130 E Walnut St, Westerville, OH 43082 - Coldwell Banker", "130 E Walnut St", "Westerville", "43082"],
     ["183 Rugg Ave, Newark, OH 43055 - MLS 226030536 - Coldwell Banker", "183 Rugg Ave", "Newark", "43055"],

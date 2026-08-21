@@ -528,6 +528,7 @@ const SMALL_WIDTH_PARAM = /[?&](?:w|width)=(\d+)/i;
 
 // Domains that never contain property photos
 const JUNK_DOMAINS = /(?:maps\.googleapis\.com|maps\.gstatic\.com|facebook\.com|instagram\.com|youtube\.com|linkedin\.com|twitter\.com|x\.com)/i;
+const COLDWELL_UI_MEDIA = /^https?:\/\/s\.cbhomes\.com\/p\/i\//i;
 
 // Image file extensions we actually want to download
 const REAL_IMAGE_EXT = /\.(jpe?g|png|webp|avif|gif|bmp|tiff?)(\?[^\s)]*)?$/i;
@@ -549,6 +550,10 @@ export function filterPropertyImages(urls) {
 
     // Exclude known junk domains (maps, social media)
     if (JUNK_DOMAINS.test(url)) return false;
+
+    // Coldwell's static /p/i/ tree contains logos, controls, CTA thumbnails,
+    // placeholders, and other interface chrome rather than listing photos.
+    if (COLDWELL_UI_MEDIA.test(url)) return false;
 
     // Exclude SVGs — always icons/illustrations, never photos
     if (/\.svg(\?|$)/i.test(url)) return false;
