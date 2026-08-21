@@ -12,10 +12,12 @@ import { env } from "../../config/env.js";
 
 const FAILURE_THRESHOLD_DEGRADED = 3;
 const FAILURE_THRESHOLD_DOWN = 10;
+const FAILURE_WINDOW_SECONDS = 5 * 60;
 const REDIS_HEALTH_CACHE_MS = 10_000;
 
 // In-memory fallback counters (survive Redis outages).
 const failureCounts = { openai: 0, fal: 0, replicate: 0 };
+const lastFailureAt = { openai: 0, fal: 0, replicate: 0 };
 
 let _redisHealthCache = { value: null, ts: 0 };
 
@@ -25,8 +27,12 @@ let _redisHealthCache = { value: null, ts: 0 };
  */
 export async function recordServiceSuccess(service) {
   failureCounts[service] = 0;
+  lastFailureAt[service] = 0;
   try {
-    await redisSet(`sp:health:failures:${service}`, "0");
+    await Promise.all([
+      redisSet(`sp:health:failures:${service}`, "0", FAILURE_WINDOW_SECONDS),
+      redisDel(`sp:health:last_failure:${service}`),
+    ]);
   } catch { /* Redis down — in-memory is still accurate */ }
 }
 
@@ -36,10 +42,14 @@ export async function recordServiceSuccess(service) {
  */
 export async function recordServiceFailure(service) {
   failureCounts[service] = (failureCounts[service] ?? 0) + 1;
+  lastFailureAt[service] = Date.now();
   try {
     const key = `sp:health:failures:${service}`;
     const current = parseInt(await redisGet(key), 10) || 0;
-    await redisSet(key, String(current + 1));
+    await Promise.all([
+      redisSet(key, String(current + 1), FAILURE_WINDOW_SECONDS),
+      redisSet(`sp:health:last_failure:${service}`, String(Date.now()), FAILURE_WINDOW_SECONDS),
+    ]);
   } catch { /* Redis down — in-memory is still accurate */ }
 }
 
@@ -61,10 +71,23 @@ export async function getServiceStatus(service) {
   }
 
   // Try Redis first, fall back to in-memory.
+  const now = Date.now();
+  if (lastFailureAt[service] && now - lastFailureAt[service] > FAILURE_WINDOW_SECONDS * 1000) {
+    failureCounts[service] = 0;
+    lastFailureAt[service] = 0;
+  }
   let count = failureCounts[service] ?? 0;
   try {
-    const val = await redisGet(`sp:health:failures:${service}`);
-    if (val != null) count = Math.max(count, parseInt(val, 10) || 0);
+    const failureKey = `sp:health:failures:${service}`;
+    const timestampKey = `sp:health:last_failure:${service}`;
+    const [val, timestamp] = await Promise.all([redisGet(failureKey), redisGet(timestampKey)]);
+    const redisCount = parseInt(val, 10) || 0;
+    const redisLastFailure = parseInt(timestamp, 10) || 0;
+    if (redisCount && (!redisLastFailure || now - redisLastFailure > FAILURE_WINDOW_SECONDS * 1000)) {
+      await Promise.all([redisDel(failureKey), redisDel(timestampKey)]);
+    } else {
+      count = Math.max(count, redisCount);
+    }
   } catch { /* use in-memory */ }
 
   if (count >= FAILURE_THRESHOLD_DOWN) return "down";

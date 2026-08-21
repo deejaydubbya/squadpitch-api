@@ -24,6 +24,11 @@ export class OpenAIProviderError extends Error {
 
 let _client = null;
 
+export function isServiceHealthFailure(error) {
+  const status = Number(error?.status);
+  return !Number.isFinite(status) || status === 401 || status === 403 || status === 408 || status === 429 || status >= 500;
+}
+
 /**
  * Lazy singleton OpenAI client. Throws a structured error if
  * OPENAI_API_KEY is not configured.
@@ -93,7 +98,7 @@ export async function generateStructuredContent({
       );
     }
     if (err instanceof OpenAIProviderError) throw err;
-    recordServiceFailure("openai").catch(() => {});
+    if (isServiceHealthFailure(err)) recordServiceFailure("openai").catch(() => {});
     throw new OpenAIProviderError(
       `OpenAI request failed: ${err?.message ?? String(err)}`,
       { code: "OPENAI_REQUEST_FAILED", status: err?.status, cause: err }
@@ -181,7 +186,7 @@ export async function extractFromImage({
       );
     }
     if (err instanceof OpenAIProviderError) throw err;
-    recordServiceFailure("openai").catch(() => {});
+    if (isServiceHealthFailure(err)) recordServiceFailure("openai").catch(() => {});
     throw new OpenAIProviderError(
       `OpenAI Vision request failed: ${err?.message ?? String(err)}`,
       { code: "OPENAI_REQUEST_FAILED", status: err?.status, cause: err }
