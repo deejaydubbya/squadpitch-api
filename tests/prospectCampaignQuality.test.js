@@ -70,6 +70,19 @@ describe("prospect campaign quality", () => {
     expect(allocations.every(({ assets: selected }) => new Set(selected.map(propertyAssetIdentity)).size === selected.length)).toBe(true);
   });
 
+  it("does not repeat the same three-image gallery across posts", () => {
+    const scenes = ["main_front_exterior", "alternate_exterior", "yard_land", "kitchen", "living_interior", "bedroom"];
+    const assets = scenes.map((scene, index) => ({ id: `image-${index}`, url: `https://cdn.test/listing/image-${index}.jpg`, tags: [`prospect-scene:${scene}`] }));
+    const drafts = ["INSTAGRAM", "FACEBOOK", "LINKEDIN"].map((channel, index) => ({ id: `draft-${index}`, channel, body: "Now available." }));
+    const allocations = allocateProspectPreviewMedia(drafts, () => ({ propertyAssets: assets }));
+    const instagram = allocations[0].assets.map(propertyAssetIdentity);
+    const facebook = allocations[1].assets.map(propertyAssetIdentity);
+    expect(instagram).toHaveLength(3);
+    expect(facebook).toHaveLength(3);
+    expect(new Set(instagram)).not.toEqual(new Set(facebook));
+    expect(new Set([...instagram, ...facebook]).size).toBeGreaterThan(3);
+  });
+
   it("allows controlled reuse when a listing has only one logical image", () => {
     const assets = [{ id: "only", url: "https://cdn.test/only.jpg", tags: ["prospect-scene:main_front_exterior"] }];
     const drafts = ["INSTAGRAM", "FACEBOOK", "LINKEDIN"].map((channel, index) => ({ id: `draft-${index}`, channel, body: "Now available." }));

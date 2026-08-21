@@ -553,20 +553,28 @@ function requestedFeatureScenes(body) {
 }
 
 export function allocateProspectPreviewMedia(drafts, contextForDraft) {
-  const used = new Set();
-  return drafts.map((draft) => {
+  const usedPrimary = new Set();
+  const allocations = drafts.map((draft) => {
     const assets = contextForDraft(draft)?.propertyAssets || [];
     const featureScenes = requestedFeatureScenes(draft.body);
     const ranked = rankPropertyAssets(assets)
       .filter(({ scene }) => scene !== "unusable")
       .map((candidate) => ({ ...candidate, identity: propertyAssetIdentity(candidate.asset), relevance: featureScenes.includes(candidate.scene) ? 1000 : 0 }))
       .filter(({ identity }, index, all) => identity && all.findIndex((item) => item.identity === identity) === index)
-      .sort((a, b) => b.relevance - a.relevance || Number(used.has(a.identity)) - Number(used.has(b.identity)) || b.score - a.score || a.sourceIndex - b.sourceIndex);
-    const selected = ranked.slice(0, draft.channel === "LINKEDIN" ? 1 : 3).map(({ asset }) => asset);
-    const primaryIdentity = propertyAssetIdentity(selected[0]);
-    const reuseUnavoidable = Boolean(primaryIdentity) && used.has(primaryIdentity);
-    if (primaryIdentity) used.add(primaryIdentity);
-    return { draft, assets: selected, reuseUnavoidable };
+      .sort((a, b) => b.relevance - a.relevance || Number(usedPrimary.has(a.identity)) - Number(usedPrimary.has(b.identity)) || b.score - a.score || a.sourceIndex - b.sourceIndex);
+    const primary = ranked[0] || null;
+    const reuseUnavoidable = Boolean(primary) && usedPrimary.has(primary.identity);
+    if (primary) usedPrimary.add(primary.identity);
+    return { draft, ranked, primary, reuseUnavoidable };
+  });
+  const usedGallery = new Set(allocations.map(({ primary }) => primary?.identity).filter(Boolean));
+  return allocations.map(({ draft, ranked, primary, reuseUnavoidable }) => {
+    const count = draft.channel === "LINKEDIN" ? 1 : 3;
+    const remaining = ranked.filter(({ identity }) => identity !== primary?.identity)
+      .sort((a, b) => Number(usedGallery.has(a.identity)) - Number(usedGallery.has(b.identity)) || b.relevance - a.relevance || b.score - a.score || a.sourceIndex - b.sourceIndex);
+    const selected = [primary, ...remaining].filter(Boolean).slice(0, count);
+    selected.forEach(({ identity }) => usedGallery.add(identity));
+    return { draft, assets: selected.map(({ asset }) => asset), reuseUnavoidable };
   });
 }
 
