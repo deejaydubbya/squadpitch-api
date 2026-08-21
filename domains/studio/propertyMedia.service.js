@@ -20,8 +20,10 @@ export function propertyImageSourceKey(url) {
   try {
     const parsed = new URL(url);
     const photo = parsed.pathname.match(/(?:^|[_/-])(P\d{2,})(?:[_./-]|$)/i)?.[1];
-    const path = photo ? photo.toUpperCase() : parsed.pathname.toLowerCase().replace(/(?:_|-)(?:thumb|small|medium|large|\d+x\d+)(?=\.|_|-)/g, "");
-    return crypto.createHash("sha256").update(`${parsed.hostname.toLowerCase()}|${path}`).digest("hex");
+    const coldwellPhoto = parsed.hostname.match(/(?:^|\.)m\d*\.cbhomes\.com$/i) && parsed.pathname.match(/^(\/p\/[^/]+\/[^/]+\/[^/]+)/i)?.[1];
+    const path = coldwellPhoto?.toLowerCase() || (photo ? photo.toUpperCase() : parsed.pathname.toLowerCase().replace(/(?:_|-)(?:thumb|small|medium|large|\d+x\d+)(?=\.|_|-)/g, ""));
+    const host = coldwellPhoto ? "media.cbhomes.com" : parsed.hostname.toLowerCase();
+    return crypto.createHash("sha256").update(`${host}|${path}`).digest("hex");
   } catch { return crypto.createHash("sha256").update(String(url)).digest("hex"); }
 }
 export function scenePresentation(scene) { const [tag, title] = SCENE_PRESENTATION[scene] || SCENE_PRESENTATION.other_detail; return { tags: [tag], title }; }

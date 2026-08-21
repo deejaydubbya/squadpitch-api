@@ -56,6 +56,40 @@ function structuredAddress($) {
     postalCode: $("[itemprop='postalCode']").first().attr("content") || $("[itemprop='postalCode']").first().text(),
   };
 }
+
+function coldwellGalleryImages($, pageUrl) {
+  const candidates = [];
+  const add = (raw, descriptor = 0) => {
+    if (!raw) return;
+    try {
+      const url = new URL(raw, pageUrl);
+      const match = url.pathname.match(/^(\/p\/[^/]+\/[^/]+)\/([^/]+)\/[^/]+$/i);
+      if (!/(?:^|\.)m\d*\.cbhomes\.com$/i.test(url.hostname) || !match) return;
+      candidates.push({ url: url.toString(), gallery: match[1].toLowerCase(), photo: `${match[1]}/${match[2]}`.toLowerCase(), descriptor });
+    } catch {}
+  };
+  $("img,source").each((_i, node) => {
+    for (const attribute of ["data-srcset", "srcset"]) {
+      const srcset = $(node).attr(attribute);
+      if (!srcset) continue;
+      for (const part of srcset.split(",")) {
+        const [url, size = "0"] = part.trim().split(/\s+/);
+        add(url, Number(size.replace(/\D/g, "")) || 0);
+      }
+    }
+    add($(node).attr("data-src") || $(node).attr("data-lazy-src") || $(node).attr("data-original") || $(node).attr("src"));
+  });
+  const galleryCounts = new Map();
+  for (const candidate of candidates) galleryCounts.set(candidate.gallery, (galleryCounts.get(candidate.gallery) || 0) + 1);
+  const dominantGallery = [...galleryCounts].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (!dominantGallery) return [];
+  const bestByPhoto = new Map();
+  for (const candidate of candidates.filter(({ gallery }) => gallery === dominantGallery)) {
+    const existing = bestByPhoto.get(candidate.photo);
+    if (!existing || candidate.descriptor > existing.descriptor) bestByPhoto.set(candidate.photo, candidate);
+  }
+  return [...bestByPhoto.values()].map(({ url }) => url);
+}
 function nameFromProfileUrl(value) {
   try {
     const slug = new URL(value).pathname.match(/\/agent\/([^/]+)\/aid_\d+/i)?.[1];
@@ -140,7 +174,8 @@ export const coldwellBankerHomesProvider = {
     const heading = clean($("h1").first().text() || $("meta[property='og:title']").attr("content") || $("title").text());
     const parsedHeading = addressFromFullText(heading);
     const normalized = normalizeColdwellListingAddress({ streetAddress: structured.streetAddress || parsedHeading.streetAddress || streetFromCardText(heading), city: structured.city || parsedHeading.city, state: structured.state || parsedHeading.state, postalCode: structured.postalCode || parsedHeading.postalCode }, normalizePublicUrl(url));
-    return { listingUrl: normalizePublicUrl(url), sourceUrl: normalizePublicUrl(url), address: normalized.fullAddress || normalized.streetAddress, ...normalized };
+    const photoUrls = coldwellGalleryImages($, url);
+    return { listingUrl: normalizePublicUrl(url), sourceUrl: normalizePublicUrl(url), address: normalized.fullAddress || normalized.streetAddress, ...normalized, photoUrls };
   },
   discoverListingPages(url, html, profileUrl) {
     const $ = cheerio.load(html), currentPath = new URL(url).pathname, currentPage = Number(currentPath.match(/\/p_(\d+)\/?$/i)?.[1] || 1);

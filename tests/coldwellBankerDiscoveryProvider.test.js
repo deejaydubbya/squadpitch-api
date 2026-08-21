@@ -97,6 +97,21 @@ describe("Coldwell Banker Homes discovery provider", () => {
     expect(result.streetAddress).not.toContain(postalCode);
   });
 
+  it("extracts the dominant individual-listing gallery at the largest resolution", () => {
+    const listingUrl = "https://www.coldwellbankerhomes.com/oh/columbus/3262-brookview-way-11/pid_73031855/";
+    const html = `
+      <img src="https://m.cbhomes.com/p/888/226030574/photo-a/pds23tp.webp"
+           srcset="https://m.cbhomes.com/p/888/226030574/photo-a/pdl23tp.webp 951w, https://m.cbhomes.com/p/888/226030574/photo-a/pds23tp.webp 402w">
+      <img data-src="https://m1.cbhomes.com/p/888/226030574/photo-b/pds23tp.webp"
+           data-srcset="https://m1.cbhomes.com/p/888/226030574/photo-b/pdl23tp.webp 951w, https://m1.cbhomes.com/p/888/226030574/photo-b/pds23tp.webp 402w">
+      <img src="https://m.cbhomes.com/p/888/other-listing/related/pdl23tp.webp">`;
+    const detail = provider.parseListingDetail(listingUrl, html);
+    expect(detail.photoUrls).toEqual([
+      "https://m.cbhomes.com/p/888/226030574/photo-a/pdl23tp.webp",
+      "https://m1.cbhomes.com/p/888/226030574/photo-b/pdl23tp.webp",
+    ]);
+  });
+
   it("rejects ZIP-glued collection text and recovers from detail structured data", () => {
     const url = "https://www.coldwellbankerhomes.com/oh/newark/183-rugg-ave/pid_73026102/";
     const [collection] = provider.parseListings("https://www.coldwellbankerhomes.com/agent/listings/", `<article><address><span>43055</span><span>183 Rugg Ave</span></address><a href="${url}">Details</a></article>`);

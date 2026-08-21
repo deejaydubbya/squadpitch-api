@@ -240,11 +240,12 @@ async function executeDiscoveryRun(run, provider, url, options = {}) {
             for (let listing of provider.parseListings(listingPage, listingHtml)) {
               const key = listing.listingId || listing.listingUrl;
               if (!key || listingKeys.has(key)) continue;
-              if (listing.addressParsingStatus === "SUSPICIOUS" && provider.parseListingDetail && listing.listingUrl) {
+              if (provider.parseListingDetail && listing.listingUrl) {
                 try {
                   if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
                   const detail = provider.parseListingDetail(listing.listingUrl, await fetchDiscoveryPage(listing.listingUrl));
-                  if (detail.streetAddress && detail.addressParsingStatus !== "SUSPICIOUS") listing = { ...listing, ...detail, address: detail.fullAddress || detail.streetAddress };
+                  const usableAddress = detail.streetAddress && detail.addressParsingStatus !== "SUSPICIOUS";
+                  listing = { ...listing, ...(usableAddress ? detail : { photoUrls: detail.photoUrls?.length ? detail.photoUrls : listing.photoUrls }) };
                 } catch {}
               }
               listingKeys.add(key);

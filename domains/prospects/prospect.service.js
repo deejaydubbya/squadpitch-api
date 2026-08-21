@@ -485,6 +485,7 @@ export function listingPhotoKey(url) {
 }
 
 export function propertyAssetIdentity(asset) {
+  if (asset?.sourceKey) return `source:${asset.sourceKey}`;
   const providerId = asset?.providerImageId || asset?.sourceImageId || asset?.externalId || asset?.metadata?.providerImageId || asset?.metadata?.photoId;
   if (providerId) return `provider:${String(providerId).trim().toLowerCase()}`;
   const url = asset?.sourceUrl || asset?.url;
